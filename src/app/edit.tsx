@@ -22,6 +22,7 @@ export default function EditScreen() {
   const styles       = useMemo(() => createStyles(theme), [theme]);
   const tabNotes       = useAppStore(selectTabNotes);
   const harmonicaKey   = useAppStore(selectKey);
+  const harmonicaType  = useAppStore(selectHarmonicaType);
   const reorderNotes = useAppStore((s) => s.reorderNotes);
   const deleteNote   = useAppStore((s) => s.deleteNote);
   const updateNote   = useAppStore((s) => s.updateNote);
@@ -50,6 +51,7 @@ export default function EditScreen() {
           note={item}
           index={getIndex() ?? 0}
           harmonicaKey={harmonicaKey ?? undefined}
+          harmonicaType={harmonicaType}
           isSelected={selectedId === item.id}
           onSelect={handleSelect}
           onDelete={deleteNote}

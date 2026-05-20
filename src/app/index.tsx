@@ -75,7 +75,7 @@ export default function KeySelectionScreen() {
                   accessibilityState={{ checked: active }}
                 >
                   <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
-                    {type.charAt(0).toUpperCase() + type.slice(1)}
+                    {type === 'chromatic' ? '12-Chromatic' : 'Diatonic'}
                   </Text>
                 </Pressable>
               );

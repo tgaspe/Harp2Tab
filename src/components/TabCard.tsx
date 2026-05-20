@@ -3,19 +3,23 @@ import { Poppins } from '@/constants/fonts';
 import { useTheme } from '@/hooks/useTheme';
 import { tabToNote, noteToTab } from '@/audio/HarmonicaMapper';
 import type { Theme } from '@/theme';
-import type { HarmonicaKey, TabNote } from '@/types';
+import type { HarmonicaKey, HarmonicaType, TabNote } from '@/types';
 import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleProp, StyleSheet, Text, TextInput, TextStyle, View } from 'react-native';
 
 type EditableField = 'tab' | 'note' | 'start_time' | 'duration';
 
-const TAB_RE  = /^(?:-\d{1,2}'{0,3}|\d{1,2}(?:'{1,3}|o)?)$/;
-const NOTE_RE = /^[A-G]#?\d$/;
+const TAB_RE_DIATONIC  = /^(?:-\d{1,2}'{0,3}|\d{1,2}(?:'{1,3}|o)?)$/;
+const TAB_RE_CHROMATIC = /^-?\d{1,2}\+?$/;
+const NOTE_RE          = /^[A-G]#?\d$/;
 
-function validateField(field: EditableField, value: string): boolean {
+function validateField(field: EditableField, value: string, harmonicaType?: HarmonicaType): boolean {
   switch (field) {
-    case 'tab':        return TAB_RE.test(value.trim());
+    case 'tab': {
+      const re = harmonicaType === 'chromatic' ? TAB_RE_CHROMATIC : TAB_RE_DIATONIC;
+      return re.test(value.trim());
+    }
     case 'note':       return NOTE_RE.test(value.trim());
     case 'start_time': { const n = parseInt(value, 10); return !isNaN(n) && n >= 0; }
     case 'duration':   { const n = parseInt(value, 10); return !isNaN(n) && n >= 1; }
@@ -23,10 +27,11 @@ function validateField(field: EditableField, value: string): boolean {
 }
 
 interface TabCardProps {
-  note:           TabNote;
-  index:          number;
-  harmonicaKey?:  HarmonicaKey;
-  isSelected?:    boolean;
+  note:            TabNote;
+  index:           number;
+  harmonicaKey?:   HarmonicaKey;
+  harmonicaType?:  HarmonicaType;
+  isSelected?:     boolean;
   onSelect?:      (id: string) => void;
   onDelete?:      (id: string) => void;
   onUpdate?:      (id: string, changes: Partial<Pick<TabNote, 'tab' | 'note' | 'start_time' | 'duration'>>) => void;
@@ -39,7 +44,7 @@ function fmtStartTime(ms: number): string { return `${(ms / 1000).toFixed(1)}s`;
 function fmtDuration(ms: number): string  { return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`; }
 
 export function TabCard({
-  note, index, harmonicaKey, isSelected, onSelect, onDelete, onUpdate, draggable, drag, isActive,
+  note, index, harmonicaKey, harmonicaType, isSelected, onSelect, onDelete, onUpdate, draggable, drag, isActive,
 }: TabCardProps) {
   const theme  = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
@@ -66,7 +71,7 @@ export function TabCard({
 
   function handleChangeText(v: string) {
     setEditValue(v);
-    if (editingField) setEditValid(validateField(editingField, v));
+    if (editingField) setEditValid(validateField(editingField, v, harmonicaType));
   }
 
   function commitEdit() {
@@ -75,11 +80,13 @@ export function TabCard({
         onUpdate(note.id, { [editingField]: parseInt(editValue, 10) });
       } else if (editingField === 'tab') {
         const trimmed = editValue.trim();
-        const linked  = harmonicaKey ? tabToNote(trimmed, harmonicaKey) : null;
+        const type    = harmonicaType ?? 'diatonic';
+        const linked  = harmonicaKey ? tabToNote(trimmed, harmonicaKey, type) : null;
         onUpdate(note.id, linked ? { tab: trimmed, note: linked } : { tab: trimmed });
       } else if (editingField === 'note') {
         const trimmed = editValue.trim();
-        const linked  = harmonicaKey ? noteToTab(trimmed, harmonicaKey) : null;
+        const type    = harmonicaType ?? 'diatonic';
+        const linked  = harmonicaKey ? noteToTab(trimmed, harmonicaKey, type) : null;
         onUpdate(note.id, linked ? { note: trimmed, tab: linked } : { note: trimmed });
       }
     }

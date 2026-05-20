@@ -1,4 +1,4 @@
-import type { HarmonicaKey } from '@/types';
+import type { HarmonicaKey, HarmonicaType } from '@/types';
 
 // C-diatonic layout: maps C-space MIDI note → { tab, note name without octave }
 // Multiple-option notes use best mapping: non-bend first, then lower hole.
@@ -36,6 +36,68 @@ const C_DIATONIC: Record<number, string> = {
   96: '10',    // C7  hole 10 blow
 };
 
+// 12-hole chromatic layout (Hohner Chromonica 270, C-space).
+// Tab: blow=`1`–`12`, draw=`-1`–`-12`, blow+slide=`1+`, draw+slide=`-1+` etc.
+// Duplicate pitches (e.g. hole 4 draw = hole 5 blow = C5) resolved: prefer blow of
+// upper group (more natural playing position) and non-slide over slide.
+const C_CHROMATIC: Record<number, string> = {
+  60: '1',    // C4   hole 1 blow
+  61: '1+',   // C#4  hole 1 blow+slide
+  62: '-1',   // D4   hole 1 draw
+  63: '-1+',  // D#4  hole 1 draw+slide
+  64: '2',    // E4   hole 2 blow
+  65: '-2',   // F4   hole 2 draw  (preferred over 2+)
+  66: '-2+',  // F#4  hole 2 draw+slide
+  67: '3',    // G4   hole 3 blow
+  68: '3+',   // G#4  hole 3 blow+slide
+  69: '-3',   // A4   hole 3 draw
+  70: '-3+',  // A#4  hole 3 draw+slide
+  71: '4',    // B4   hole 4 blow
+  72: '5',    // C5   hole 5 blow  (preferred over -4 draw and 4+)
+  73: '5+',   // C#5  hole 5 blow+slide (preferred over -4+)
+  74: '-5',   // D5   hole 5 draw
+  75: '-5+',  // D#5  hole 5 draw+slide
+  76: '6',    // E5   hole 6 blow
+  77: '-6',   // F5   hole 6 draw  (preferred over 6+)
+  78: '-6+',  // F#5  hole 6 draw+slide
+  79: '7',    // G5   hole 7 blow
+  80: '7+',   // G#5  hole 7 blow+slide
+  81: '-7',   // A5   hole 7 draw
+  82: '-7+',  // A#5  hole 7 draw+slide
+  83: '8',    // B5   hole 8 blow
+  84: '9',    // C6   hole 9 blow  (preferred over -8 draw and 8+)
+  85: '9+',   // C#6  hole 9 blow+slide (preferred over -8+)
+  86: '-9',   // D6   hole 9 draw
+  87: '-9+',  // D#6  hole 9 draw+slide
+  88: '10',   // E6   hole 10 blow
+  89: '-10',  // F6   hole 10 draw (preferred over 10+)
+  90: '-10+', // F#6  hole 10 draw+slide
+  91: '11',   // G6   hole 11 blow
+  92: '11+',  // G#6  hole 11 blow+slide
+  93: '-11',  // A6   hole 11 draw
+  94: '-11+', // A#6  hole 11 draw+slide
+  95: '12',   // B6   hole 12 blow
+  96: '-12',  // C7   hole 12 draw (preferred over 12+)
+  97: '-12+', // C#7  hole 12 draw+slide
+};
+
+// All 48 chromatic positions for reverse lookup (tab → C-space MIDI).
+// Includes alternates not in the forward map (4+, -4, -8, 8+, 6+, 10+, 12+).
+const TAB_TO_C_MIDI_CHROMATIC: Record<string, number> = {
+  '1': 60,  '1+': 61,  '-1': 62,  '-1+': 63,
+  '2': 64,  '2+': 65,  '-2': 65,  '-2+': 66,
+  '3': 67,  '3+': 68,  '-3': 69,  '-3+': 70,
+  '4': 71,  '4+': 72,  '-4': 72,  '-4+': 73,
+  '5': 72,  '5+': 73,  '-5': 74,  '-5+': 75,
+  '6': 76,  '6+': 77,  '-6': 77,  '-6+': 78,
+  '7': 79,  '7+': 80,  '-7': 81,  '-7+': 82,
+  '8': 83,  '8+': 84,  '-8': 84,  '-8+': 85,
+  '9': 84,  '9+': 85,  '-9': 86,  '-9+': 87,
+  '10': 88, '10+': 89, '-10': 89, '-10+': 90,
+  '11': 91, '11+': 92, '-11': 93, '-11+': 94,
+  '12': 95, '12+': 96, '-12': 96, '-12+': 97,
+};
+
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 
 const NOTE_SEMITONES: Record<string, number> = {
@@ -62,34 +124,38 @@ function getTranspose(key: HarmonicaKey): number {
 export function frequencyToTab(
   frequency: number,
   key: HarmonicaKey,
+  harmonicaType: HarmonicaType,
 ): { tab: string; note: string } | null {
   if (!isFinite(frequency) || frequency <= 0) return null;
 
-  const midi = Math.round(69 + 12 * Math.log2(frequency / 440));
-  const cMidi = midi - getTranspose(key);
-  const tab = C_DIATONIC[cMidi];
+  const layout = harmonicaType === 'chromatic' ? C_CHROMATIC : C_DIATONIC;
+  const midi   = Math.round(69 + 12 * Math.log2(frequency / 440));
+  const cMidi  = midi - getTranspose(key);
+  const tab    = layout[cMidi];
   if (!tab) return null;
 
   const octave = Math.floor(midi / 12) - 1;
-  const note = NOTE_NAMES[midi % 12] + octave;
+  const note   = NOTE_NAMES[midi % 12] + octave;
 
   return { tab, note };
 }
 
-export function tabToNote(tab: string, key: HarmonicaKey): string | null {
-  const cMidi = TAB_TO_C_MIDI[tab];
-  if (cMidi === undefined) return null; // overblow or unknown tab
+export function tabToNote(tab: string, key: HarmonicaKey, harmonicaType: HarmonicaType): string | null {
+  const reverseMap = harmonicaType === 'chromatic' ? TAB_TO_C_MIDI_CHROMATIC : TAB_TO_C_MIDI;
+  const cMidi = reverseMap[tab];
+  if (cMidi === undefined) return null;
   const midi   = cMidi + getTranspose(key);
   const octave = Math.floor(midi / 12) - 1;
   return NOTE_NAMES[midi % 12] + octave;
 }
 
-export function noteToTab(note: string, key: HarmonicaKey): string | null {
+export function noteToTab(note: string, key: HarmonicaKey, harmonicaType: HarmonicaType): string | null {
   const m = note.match(/^([A-G]#?)(\d+)$/);
   if (!m) return null;
   const semitone = NOTE_SEMITONES[m[1]];
   if (semitone === undefined) return null;
-  const midi  = (parseInt(m[2]) + 1) * 12 + semitone;
-  const cMidi = midi - getTranspose(key);
-  return C_DIATONIC[cMidi] ?? null;
+  const layout = harmonicaType === 'chromatic' ? C_CHROMATIC : C_DIATONIC;
+  const midi   = (parseInt(m[2]) + 1) * 12 + semitone;
+  const cMidi  = midi - getTranspose(key);
+  return layout[cMidi] ?? null;
 }
