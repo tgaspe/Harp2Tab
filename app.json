@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "harp2tab",
+    "name": "Harp2Tab",
     "slug": "harp2tab",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -11,10 +11,11 @@
       "icon": "./assets/expo.icon"
     },
     "android": {
+      "package": "com.chewpacastudios.harp2tab",
+      "permissions": ["android.permission.RECORD_AUDIO"],
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#ffffff",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false
@@ -36,6 +37,7 @@
         }
       ]
     ],
+    "newArchEnabled": false,
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true

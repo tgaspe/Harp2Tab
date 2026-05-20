@@ -40,4 +40,4 @@ app-example
 
 # generated native folders
 /ios
-/android
+# /android — bare workflow with custom native code, must be tracked

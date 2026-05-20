@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(harp2tab-audio)
+find_package(oboe REQUIRED CONFIG)
+add_library(harp2tab-audio SHARED AudioEngine.cpp)
+target_link_libraries(harp2tab-audio oboe::oboe log android)
