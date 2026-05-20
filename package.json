@@ -14,6 +14,8 @@
     "@expo-google-fonts/poppins": "^0.4.1",
     "@expo-google-fonts/space-grotesk": "^0.4.1",
     "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-native-firebase/app": "^24.0.0",
+    "@react-native-firebase/crashlytics": "^24.0.0",
     "@react-navigation/bottom-tabs": "^7.15.5",
     "@react-navigation/elements": "^2.9.10",
     "@react-navigation/native": "^7.1.33",

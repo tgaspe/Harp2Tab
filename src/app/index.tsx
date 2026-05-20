@@ -153,8 +153,8 @@ function createStyles(t: Theme) {
       gap:           8,
     },
     titleIcon: {
-      width:  38,
-      height: 38,
+      width:  36,
+      height: 36,
     },
     appTitle: {
       fontSize:      FONT['2xl'],

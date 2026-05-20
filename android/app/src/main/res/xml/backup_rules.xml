@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android < 12 (API < 31) backup rules.
+  Explicitly includes AsyncStorage (SQLite databases) and shared preferences
+  so the free-recording count and purchase state survive uninstall/reinstall.
+-->
+<full-backup-content>
+    <include domain="database" path="." />
+    <include domain="sharedpref" path="." />
+    <include domain="file" path="." />
+</full-backup-content>

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "108964739905",
+    "project_id": "harp2tab",
+    "storage_bucket": "harp2tab.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:108964739905:android:c7547fbbc2ee917f203fc0",
+        "android_client_info": {
+          "package_name": "com.chewpacastudios.harp2tab"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAz7sXRiwToA8C8Dn47FTMqdGfX53guUIE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
