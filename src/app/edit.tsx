@@ -77,7 +77,7 @@ export default function EditScreen() {
 
   function handleNewRecording() {
     reset();
-    router.replace('/');
+    router.dismissAll();
   }
 
   return (

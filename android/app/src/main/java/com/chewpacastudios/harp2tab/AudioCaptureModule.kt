@@ -24,8 +24,10 @@ class AudioCaptureModule(private val reactApplicationContext: ReactApplicationCo
     }
 
     private val handler = Handler(Looper.getMainLooper())
+    private val isPolling = java.util.concurrent.atomic.AtomicBoolean(false)
     private val pollRunnable = object : Runnable {
         override fun run() {
+            if (!isPolling.get()) return
             val params = Arguments.createMap().apply {
                 putDouble("frequency", nativeGetFrequency().toDouble())
                 putDouble("rms", nativeGetRms().toDouble())
@@ -33,7 +35,7 @@ class AudioCaptureModule(private val reactApplicationContext: ReactApplicationCo
             reactApplicationContext
                 .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                 .emit("onAudioFrame", params)
-            handler.postDelayed(this, 20L)
+            if (isPolling.get()) handler.postDelayed(this, 20L)
         }
     }
 
@@ -46,11 +48,14 @@ class AudioCaptureModule(private val reactApplicationContext: ReactApplicationCo
         val fpb = am.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER)?.toIntOrNull() ?: 256
         nativeSetDefaultStreamValues(sr, fpb)
         nativeStart()
-        handler.post(pollRunnable)
+        if (isPolling.compareAndSet(false, true)) {
+            handler.post(pollRunnable)
+        }
     }
 
     @ReactMethod
     fun stopCapture() {
+        isPolling.set(false)
         handler.removeCallbacks(pollRunnable)
         nativeStop()
     }
