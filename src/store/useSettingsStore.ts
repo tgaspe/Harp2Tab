@@ -20,7 +20,7 @@ interface SettingsState {
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
-      micSensitivity:        75,
+      micSensitivity:        0,
       themeOverride:         'light' as ThemeOverride,
       totalRecordingsUsed:   0,
       isPurchased:           false,

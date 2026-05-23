@@ -6,6 +6,7 @@ const C_DIATONIC: Record<number, string> = {
   60: '1',     // C4  hole 1 blow
   61: "-1'",   // C#4 hole 1 draw bend
   62: '-1',    // D4  hole 1 draw
+  63: '1o',    // D#4 hole 1 overblow
   64: '2',     // E4  hole 2 blow
   65: "-2''",  // F4  hole 2 draw double bend
   66: "-2'",   // F#4 hole 2 draw bend
@@ -17,11 +18,14 @@ const C_DIATONIC: Record<number, string> = {
   72: '4',     // C5  hole 4 blow
   73: "-4'",   // C#5 hole 4 draw bend
   74: '-4',    // D5  hole 4 draw
+  75: '4o',    // D#5 hole 4 overblow
   76: '5',     // E5  hole 5 blow (preferred over draw bend)
   77: '-5',    // F5  hole 5 draw
+  78: '5o',    // F#5 hole 5 overblow
   79: '6',     // G5  hole 6 blow
   80: "-6'",   // G#5 hole 6 draw bend
   81: '-6',    // A5  hole 6 draw
+  82: '6o',    // A#5 hole 6 overblow
   83: '-7',    // B5  hole 7 draw
   84: '7',     // C6  hole 7 blow
   86: '-8',    // D6  hole 8 draw
@@ -105,10 +109,15 @@ const NOTE_SEMITONES: Record<string, number> = {
   'F#': 6, G: 7, 'G#': 8, A: 9, 'A#': 10, B: 11,
 };
 
-// Reverse map: tab string → C-space MIDI (excludes overblows — no note mapping for those)
-const TAB_TO_C_MIDI: Record<string, number> = Object.fromEntries(
-  Object.entries(C_DIATONIC).map(([midi, tab]) => [tab, Number(midi)]),
-);
+// Reverse map: tab string → C-space MIDI (auto-includes overblows via C_DIATONIC entries)
+// '3' (hole 3 blow = G4) is added manually because C_DIATONIC maps G4 to '-2' (preferred),
+// so the auto-reversal omits this valid alternate position.
+const TAB_TO_C_MIDI: Record<string, number> = {
+  ...Object.fromEntries(
+    Object.entries(C_DIATONIC).map(([midi, tab]) => [tab, Number(midi)]),
+  ),
+  '3': 67,
+};
 
 // Keys G–B have raw offset >= 7 and are shifted down an octave to stay in C-layout range.
 const KEY_OFFSETS: Record<HarmonicaKey, number> = {
