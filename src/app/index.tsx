@@ -1,14 +1,15 @@
 import { KeyGrid } from '@/components/KeyGrid';
+import { RatingModal } from '@/components/RatingModal';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { FONT } from '@/constants/keys';
 import { useTheme } from '@/hooks/useTheme';
 import { selectHarmonicaType, selectKey, useAppStore } from '@/store/useAppStore';
-import { useSettingsStore } from '@/store/useSettingsStore';
+import { RATING_BONUS, RECORDING_LIMIT, useSettingsStore } from '@/store/useSettingsStore';
 import type { Theme } from '@/theme';
 import type { HarmonicaKey, HarmonicaType } from '@/types';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -23,20 +24,32 @@ export default function KeySelectionScreen() {
   const startRecording       = useAppStore((s) => s.startRecording);
   const totalRecordingsUsed  = useSettingsStore((s) => s.totalRecordingsUsed);
   const isPurchased          = useSettingsStore((s) => s.isPurchased);
+  const ratingStatus         = useSettingsStore((s) => s.ratingStatus);
+  const [showRatingModal, setShowRatingModal] = useState(false);
+
+  const effectiveLimit = RECORDING_LIMIT + (ratingStatus === 'rated' ? RATING_BONUS : 0);
 
   function handleStart() {
     if (!selectedKey) return;
-    // FREE TRIAL LIMIT — commented out for closed testing (unlimited access)
-    // if (!isPurchased && totalRecordingsUsed >= RECORDING_LIMIT) {
-    //   router.push('/paywall');
-    //   return;
-    // }
+    if (!isPurchased && totalRecordingsUsed >= effectiveLimit) {
+      if (ratingStatus === 'notShown') {
+        setShowRatingModal(true);
+      } else {
+        router.push('/paywall');
+      }
+      return;
+    }
     startRecording();
     router.push('/recording');
   }
 
   return (
     <SafeAreaView style={styles.safe}>
+      <RatingModal
+        visible={showRatingModal}
+        onClose={() => setShowRatingModal(false)}
+        onUpgrade={() => router.push('/paywall')}
+      />
       <View style={styles.container}>
 
         {/* Header */}
@@ -118,15 +131,13 @@ export default function KeySelectionScreen() {
           <Text style={[styles.startBtnText, !selectedKey && styles.startBtnTextDisabled]}>
             Start Recording
           </Text>
-          {/* FREE TRIAL COUNTER — commented out for closed testing (unlimited access)
           {!isPurchased && (
             <View style={styles.btnCounter}>
               <Text style={[styles.btnCounterText, !selectedKey && styles.btnCounterTextDisabled]}>
-                {Math.min(totalRecordingsUsed, RECORDING_LIMIT)} / {RECORDING_LIMIT} free recordings used
+                {Math.min(totalRecordingsUsed, effectiveLimit)} / {effectiveLimit} free recordings used
               </Text>
             </View>
           )}
-          */}
         </Pressable>
 
       </View>
