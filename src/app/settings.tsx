@@ -118,38 +118,6 @@ export default function SettingsScreen() {
             </Pressable>
           </View>
 
-          {/* COMING SOON */}
-          <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>COMING SOON</Text>
-          <View style={styles.card}>
-            <View style={styles.cardRow}>
-              <Ionicons name="musical-note-outline" size={20} color={theme.textMuted} style={styles.rowIcon} />
-              <View style={styles.rowBody}>
-                <View style={styles.comingLabelRow}>
-                  <Text style={styles.rowLabelMuted}>Auto-detect Notes</Text>
-                  <View style={styles.soonBadge}>
-                    <Text style={styles.soonBadgeText}>SOON</Text>
-                  </View>
-                </View>
-                <Text style={styles.rowDesc}>Detects notes from microphone automatically</Text>
-              </View>
-            </View>
-
-            <View style={styles.separator} />
-
-            <View style={styles.cardRow}>
-              <Ionicons name="timer-outline" size={20} color={theme.textMuted} style={styles.rowIcon} />
-              <View style={styles.rowBody}>
-                <View style={styles.comingLabelRow}>
-                  <Text style={styles.rowLabelMuted}>Metronome BPM</Text>
-                  <View style={styles.soonBadge}>
-                    <Text style={styles.soonBadgeText}>SOON</Text>
-                  </View>
-                </View>
-                <Text style={styles.rowDesc}>Click track during recording</Text>
-              </View>
-            </View>
-          </View>
-
         </ScrollView>
       </View>
     </SafeAreaView>
@@ -240,26 +208,9 @@ function createStyles(t: Theme) {
     segmentTextActive: { color: '#fff' },
 
     separator: {
-      height:     1,
+      height:          1,
       backgroundColor: t.separator,
-      marginLeft: 48,
-    },
-    comingLabelRow: {
-      flexDirection: 'row',
-      alignItems:    'center',
-      gap:           8,
-    },
-    soonBadge: {
-      backgroundColor: t.surfaceAlt,
-      borderRadius:    4,
-      paddingHorizontal: 6,
-      paddingVertical:   2,
-    },
-    soonBadgeText: {
-      fontSize:      9,
-      fontFamily:    Poppins.bold,
-      color:         t.textMuted,
-      letterSpacing: 0.8,
+      marginLeft:      48,
     },
   });
 }

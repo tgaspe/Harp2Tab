@@ -146,7 +146,7 @@ function createStyles(t: Theme) {
     },
     tagline: {
       fontSize:   FONT.md,
-      fontFamily: Poppins.bold,
+      fontFamily: SpaceGrotesk.bold,
       color:      t.textPrimary,
       textAlign:  'center',
     },

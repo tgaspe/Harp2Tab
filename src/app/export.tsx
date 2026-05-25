@@ -91,6 +91,15 @@ export default function ExportScreen() {
             <Ionicons name="arrow-back" size={28} color={theme.accent} />
           </Pressable>
           <Pressable
+            onPress={handleNewRecording}
+            style={({ pressed }) => [styles.newPill, pressed && { opacity: 0.6 }]}
+            accessibilityRole="button"
+            accessibilityLabel="New Recording"
+          >
+            <Ionicons name="mic-outline" size={14} color={theme.textSub} />
+            <Text style={styles.newPillText}>New Recording</Text>
+          </Pressable>
+          <Pressable
             onPress={() => router.push('/settings')}
             style={({ pressed }) => [styles.gearBtn, pressed && { opacity: 0.6 }]}
             accessibilityRole="button"
@@ -173,15 +182,6 @@ export default function ExportScreen() {
             </Text>
           </Pressable>
 
-          <Pressable
-            onPress={handleNewRecording}
-            style={({ pressed }) => [styles.newBtn, pressed && { opacity: 0.6 }]}
-            accessibilityRole="button"
-            accessibilityLabel="New Recording"
-          >
-            <Ionicons name="mic-outline" size={16} color={theme.textSub} />
-            <Text style={styles.newBtnText}>New Recording</Text>
-          </Pressable>
         </View>
 
       </View>
@@ -202,7 +202,7 @@ function createStyles(t: Theme) {
     navRow:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
     backBtn: { padding: 4 },
     gearBtn: { padding: 4 },
-    header: { gap: 10 },
+    header: { gap: 10, marginTop: -8 },
     title: {
       fontSize:      FONT.xl,
       fontFamily:    SpaceGrotesk.bold,
@@ -268,17 +268,17 @@ function createStyles(t: Theme) {
     shareBtnText:     { fontSize: FONT.md, fontFamily: Poppins.bold, color: '#fff' },
     btnDisabled:      { backgroundColor: t.surface, borderColor: t.border },
     btnTextDisabled:  { color: t.textMuted },
-    newBtn: {
-      flexDirection:   'row',
-      alignItems:      'center',
-      justifyContent:  'center',
-      gap:             6,
-      backgroundColor: t.surface,
-      borderRadius:    14,
-      paddingVertical: 16,
-      borderWidth:     1,
-      borderColor:     t.border,
+    newPill: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      gap:               5,
+      backgroundColor:   t.surface,
+      borderRadius:      20,
+      paddingVertical:   7,
+      paddingHorizontal: 14,
+      borderWidth:       1,
+      borderColor:       t.border,
     },
-    newBtnText: { fontSize: FONT.base, fontFamily: Poppins.semiBold, color: t.textSub },
+    newPillText: { fontSize: FONT.xs, fontFamily: Poppins.semiBold, color: t.textSub },
   });
 }

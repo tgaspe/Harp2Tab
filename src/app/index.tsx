@@ -3,7 +3,7 @@ import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { FONT } from '@/constants/keys';
 import { useTheme } from '@/hooks/useTheme';
 import { selectHarmonicaType, selectKey, useAppStore } from '@/store/useAppStore';
-import { RECORDING_LIMIT, useSettingsStore } from '@/store/useSettingsStore';
+import { useSettingsStore } from '@/store/useSettingsStore';
 import type { Theme } from '@/theme';
 import type { HarmonicaKey, HarmonicaType } from '@/types';
 import { Ionicons } from '@expo/vector-icons';
@@ -26,10 +26,11 @@ export default function KeySelectionScreen() {
 
   function handleStart() {
     if (!selectedKey) return;
-    if (!isPurchased && totalRecordingsUsed >= RECORDING_LIMIT) {
-      router.push('/paywall');
-      return;
-    }
+    // FREE TRIAL LIMIT — commented out for closed testing (unlimited access)
+    // if (!isPurchased && totalRecordingsUsed >= RECORDING_LIMIT) {
+    //   router.push('/paywall');
+    //   return;
+    // }
     startRecording();
     router.push('/recording');
   }
@@ -117,6 +118,7 @@ export default function KeySelectionScreen() {
           <Text style={[styles.startBtnText, !selectedKey && styles.startBtnTextDisabled]}>
             Start Recording
           </Text>
+          {/* FREE TRIAL COUNTER — commented out for closed testing (unlimited access)
           {!isPurchased && (
             <View style={styles.btnCounter}>
               <Text style={[styles.btnCounterText, !selectedKey && styles.btnCounterTextDisabled]}>
@@ -124,6 +126,7 @@ export default function KeySelectionScreen() {
               </Text>
             </View>
           )}
+          */}
         </Pressable>
 
       </View>
@@ -153,8 +156,8 @@ function createStyles(t: Theme) {
       gap:           8,
     },
     titleIcon: {
-      width:  36,
-      height: 36,
+      width:  50,
+      height: 50,
     },
     appTitle: {
       fontSize:      FONT['2xl'],
