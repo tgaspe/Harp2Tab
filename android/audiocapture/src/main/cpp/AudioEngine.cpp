@@ -67,7 +67,7 @@ private:
 
 class MPMPitchDetector {
 public:
-    static constexpr int   WINDOW_SIZE = 1024;
+    static constexpr int   WINDOW_SIZE = 2048;
     static constexpr int   W           = WINDOW_SIZE / 2;
     static constexpr int   MAX_MAXIMA  = 32;
     static constexpr float FREQ_MIN    = 180.0f;
@@ -245,7 +245,7 @@ private:
 
     void processingLoop() {
         float window[MPMPitchDetector::WINDOW_SIZE];
-        static constexpr int DIAG_INTERVAL = 94; // log every ~2 seconds at 48kHz
+        static constexpr int DIAG_INTERVAL = 47; // log every ~2 seconds at 48kHz
         int diagCount = 0;
 
         while (mProcessingActive.load(std::memory_order_relaxed)) {

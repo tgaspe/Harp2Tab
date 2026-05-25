@@ -35,7 +35,7 @@ class AudioCaptureModule(private val reactApplicationContext: ReactApplicationCo
             reactApplicationContext
                 .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                 .emit("onAudioFrame", params)
-            if (isPolling.get()) handler.postDelayed(this, 20L)
+            if (isPolling.get()) handler.postDelayed(this, 43L)
         }
     }
 
