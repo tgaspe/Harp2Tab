@@ -31,14 +31,15 @@ export default function KeySelectionScreen() {
 
   function handleStart() {
     if (!selectedKey) return;
-    if (!isPurchased && totalRecordingsUsed >= effectiveLimit) {
-      if (ratingStatus === 'notShown') {
-        setShowRatingModal(true);
-      } else {
-        router.push('/paywall');
-      }
-      return;
-    }
+    // CLOSED TESTING — unlimited access, uncomment for production:
+    // if (!isPurchased && totalRecordingsUsed >= effectiveLimit) {
+    //   if (ratingStatus === 'notShown') {
+    //     setShowRatingModal(true);
+    //   } else {
+    //     router.push('/paywall');
+    //   }
+    //   return;
+    // }
     startRecording();
     router.push('/recording');
   }
@@ -131,6 +132,7 @@ export default function KeySelectionScreen() {
           <Text style={[styles.startBtnText, !selectedKey && styles.startBtnTextDisabled]}>
             Start Recording
           </Text>
+          {/* CLOSED TESTING — uncomment for production:
           {!isPurchased && (
             <View style={styles.btnCounter}>
               <Text style={[styles.btnCounterText, !selectedKey && styles.btnCounterTextDisabled]}>
@@ -138,6 +140,7 @@ export default function KeySelectionScreen() {
               </Text>
             </View>
           )}
+          */}
         </Pressable>
 
       </View>
