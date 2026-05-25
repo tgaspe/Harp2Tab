@@ -8,6 +8,7 @@ import { selectIsRecording, selectKey, selectTabNotes, useAppStore } from '@/sto
 import { useSettingsStore } from '@/store/useSettingsStore';
 import type { Theme } from '@/theme';
 import { Ionicons } from '@expo/vector-icons';
+import { useKeepAwake } from 'expo-keep-awake';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, FlatList, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -30,6 +31,8 @@ export default function RecordingScreen() {
 
   const [isPaused,   setIsPaused]   = useState(false);
   const [elapsedStr, setElapsedStr] = useState('0:00');
+
+  useKeepAwake();
 
   const { permissionDenied } = useAudioCapture();
 
