@@ -7,7 +7,7 @@ import { useTheme } from '@/hooks/useTheme';
 import { useIAP } from '@/hooks/useIAP';
 import { FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
-import { RECORDING_LIMIT, useSettingsStore } from '@/store/useSettingsStore';
+import { RATING_BONUS, RECORDING_LIMIT, useSettingsStore } from '@/store/useSettingsStore';
 import type { Theme } from '@/theme';
 
 const PERKS = [
@@ -20,7 +20,9 @@ export default function PaywallScreen() {
   const router       = useRouter();
   const theme        = useTheme();
   const styles       = useMemo(() => createStyles(theme), [theme]);
-  const setPurchased = useSettingsStore((s) => s.setPurchased);
+  const setPurchased  = useSettingsStore((s) => s.setPurchased);
+  const ratingStatus  = useSettingsStore((s) => s.ratingStatus);
+  const effectiveLimit = RECORDING_LIMIT + (ratingStatus === 'rated' ? RATING_BONUS : 0);
 
   const { product, purchasing, restoring, error, purchased, buy, restore } = useIAP();
 
@@ -45,7 +47,7 @@ export default function PaywallScreen() {
           />
           <Text style={styles.title}>Harp2Tab</Text>
           <Text style={styles.tagline}>
-            You've used your {RECORDING_LIMIT} free recordings.
+            You've used your {effectiveLimit} free recordings.
           </Text>
           <Text style={styles.sub}>
             Unlock the full app to keep recording and exporting your tabs.

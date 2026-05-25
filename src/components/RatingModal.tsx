@@ -15,8 +15,8 @@ interface Props {
 }
 
 export function RatingModal({ visible, onClose, onUpgrade }: Props) {
-  const theme          = useTheme();
-  const styles         = useMemo(() => createStyles(theme), [theme]);
+  const theme           = useTheme();
+  const styles          = useMemo(() => createStyles(theme), [theme]);
   const setRatingStatus = useSettingsStore((s) => s.setRatingStatus);
 
   async function handleRate() {
@@ -45,23 +45,22 @@ export function RatingModal({ visible, onClose, onUpgrade }: Props) {
       <View style={styles.backdrop}>
         <View style={styles.card}>
 
-          {/* Stars */}
           <View style={styles.stars}>
             {[1, 2, 3, 4, 5].map((i) => (
-              <Ionicons key={i} name="star" size={26} color={theme.accent} />
+              <Ionicons key={i} name="star" size={28} color={theme.accent} />
             ))}
           </View>
 
-          <Text style={styles.title}>Enjoying Harp2Tab?</Text>
+          <Text style={styles.title} numberOfLines={1} adjustsFontSizeToFit>
+            Enjoying Harp2Tab?
+          </Text>
 
           <Text style={styles.body}>
-            You've used all 5 free recordings.{'\n'}
-            Rate us on the Play Store and we'll unlock{' '}
+            Rate us on the Play Store and unlock{'\n'}
             <Text style={styles.highlight}>5 more free recordings</Text>
             {' '}— on us.
           </Text>
 
-          {/* Rate button */}
           <Pressable
             onPress={handleRate}
             style={({ pressed }) => [styles.rateBtn, pressed && { opacity: 0.85 }]}
@@ -72,7 +71,6 @@ export function RatingModal({ visible, onClose, onUpgrade }: Props) {
             <Text style={styles.rateBtnText}>Rate &amp; Get 5 More</Text>
           </Pressable>
 
-          {/* Upgrade button */}
           <Pressable
             onPress={handleUpgrade}
             style={({ pressed }) => [styles.upgradeBtn, pressed && { opacity: 0.7 }]}
@@ -91,26 +89,26 @@ export function RatingModal({ visible, onClose, onUpgrade }: Props) {
 function createStyles(t: Theme) {
   return StyleSheet.create({
     backdrop: {
-      flex:            1,
-      backgroundColor: 'rgba(0,0,0,0.65)',
-      alignItems:      'center',
-      justifyContent:  'center',
-      paddingHorizontal: 28,
+      flex:              1,
+      backgroundColor:   'rgba(0,0,0,0.65)',
+      alignItems:        'center',
+      justifyContent:    'center',
+      paddingHorizontal: 32,
     },
     card: {
-      backgroundColor: t.bg,
-      borderRadius:    20,
+      backgroundColor:   t.bg,
+      borderRadius:      24,
       paddingHorizontal: 28,
-      paddingVertical:   32,
-      alignItems:      'center',
-      gap:             12,
-      width:           '100%',
-      borderWidth:     1,
-      borderColor:     t.border,
+      paddingVertical:   36,
+      alignItems:        'center',
+      gap:               14,
+      width:             '100%',
+      borderWidth:       1,
+      borderColor:       t.border,
     },
     stars: {
       flexDirection: 'row',
-      gap:           4,
+      gap:           6,
       marginBottom:  4,
     },
     title: {
@@ -119,18 +117,20 @@ function createStyles(t: Theme) {
       color:         t.textPrimary,
       textAlign:     'center',
       letterSpacing: -0.4,
+      marginTop:     4,
     },
     body: {
-      fontSize:   FONT.sm,
-      fontFamily: Poppins.regular,
-      color:      t.textSub,
-      textAlign:  'center',
-      lineHeight: 22,
-      marginBottom: 8,
+      fontSize:     FONT.sm,
+      fontFamily:   Poppins.regular,
+      color:        t.textSub,
+      textAlign:    'center',
+      lineHeight:   22,
+      marginBottom: 4,
     },
     highlight: {
-      fontFamily: Poppins.bold,
-      color:      t.accent,
+      fontFamily:         Poppins.bold,
+      color:              t.accent,
+      textDecorationLine: 'underline',
     },
     rateBtn: {
       flexDirection:   'row',
@@ -143,9 +143,10 @@ function createStyles(t: Theme) {
       alignSelf:       'stretch',
     },
     rateBtnText: {
-      fontSize:   FONT.md,
-      fontFamily: Poppins.bold,
-      color:      '#fff',
+      fontSize:          FONT.md,
+      fontFamily:        Poppins.bold,
+      color:             '#fff',
+      includeFontPadding: false,
     },
     upgradeBtn: {
       alignSelf:       'stretch',

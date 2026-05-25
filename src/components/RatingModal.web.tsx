@@ -41,15 +41,14 @@ export function RatingModal({ visible, onClose, onUpgrade }: Props) {
 
           <View style={styles.stars}>
             {[1, 2, 3, 4, 5].map((i) => (
-              <Ionicons key={i} name="star" size={26} color={theme.accent} />
+              <Ionicons key={i} name="star" size={28} color={theme.accent} />
             ))}
           </View>
 
           <Text style={styles.title}>Enjoying Harp2Tab?</Text>
 
           <Text style={styles.body}>
-            You've used all 5 free recordings.{'\n'}
-            Rate us on the Play Store and we'll unlock{' '}
+            Rate us on the Play Store and unlock{' '}
             <Text style={styles.highlight}>5 more free recordings</Text>
             {' '}— on us.
           </Text>
@@ -84,26 +83,27 @@ function createStyles(t: Theme) {
       backgroundColor:   'rgba(0,0,0,0.65)',
       alignItems:        'center',
       justifyContent:    'center',
-      paddingHorizontal: 28,
+      paddingHorizontal: 32,
     },
     card: {
       backgroundColor:   t.bg,
-      borderRadius:      20,
+      borderRadius:      24,
       paddingHorizontal: 28,
-      paddingVertical:   32,
+      paddingVertical:   36,
       alignItems:        'center',
-      gap:               12,
+      gap:               14,
       width:             '100%',
       borderWidth:       1,
       borderColor:       t.border,
     },
     stars: {
       flexDirection: 'row',
-      gap:           4,
+      gap:           6,
       marginBottom:  4,
     },
     title: {
-      fontSize:      FONT['2xl'],
+      fontSize:      FONT.xl,
+      marginTop:     4,
       fontFamily:    SpaceGrotesk.bold,
       color:         t.textPrimary,
       textAlign:     'center',
@@ -115,11 +115,12 @@ function createStyles(t: Theme) {
       color:        t.textSub,
       textAlign:    'center',
       lineHeight:   22,
-      marginBottom: 8,
+      marginBottom: 4,
     },
     highlight: {
       fontFamily: Poppins.bold,
       color:      t.accent,
+      fontSize:   FONT.md,
     },
     rateBtn: {
       flexDirection:   'row',
