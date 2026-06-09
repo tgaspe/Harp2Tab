@@ -9,7 +9,7 @@ import type { Theme } from '@/theme';
 import type { HarmonicaKey, HarmonicaType } from '@/types';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -17,6 +17,12 @@ export default function KeySelectionScreen() {
   const router         = useRouter();
   const theme          = useTheme();
   const styles         = useMemo(() => createStyles(theme), [theme]);
+  const hasCompletedOnboarding = useSettingsStore((s) => s.hasCompletedOnboarding);
+
+  useEffect(() => {
+    if (!hasCompletedOnboarding) router.replace('/onboarding');
+  }, [hasCompletedOnboarding]);
+
   const harmonicaType        = useAppStore(selectHarmonicaType);
   const setHarmonicaType     = useAppStore((s) => s.setHarmonicaType);
   const selectedKey          = useAppStore(selectKey);
@@ -43,6 +49,8 @@ export default function KeySelectionScreen() {
     startRecording();
     router.push('/recording');
   }
+
+  if (!hasCompletedOnboarding) return null;
 
   return (
     <SafeAreaView style={styles.safe}>

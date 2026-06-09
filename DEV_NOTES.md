@@ -65,7 +65,7 @@ cd android && ./gradlew app:bundleRelease \
   -PreactNativeArchitectures=arm64-v8a \
   --no-configure-on-demand
 ```
-Output: `app/build/outputs/bundle/release/app-release.aab`
+Output: `android/app/build/outputs/bundle/release/app-release.aab`
 
 ### Step 2 — Extract debug symbols
 ```bash

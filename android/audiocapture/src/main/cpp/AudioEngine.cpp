@@ -63,19 +63,34 @@ private:
     std::atomic<int> mReadPos{0};
 };
 
-// ── MPM Pitch Detector ────────────────────────────────────────────────────────
+// ── pMPM (Probabilistic MPM) Pitch Detector ──────────────────────────────────
+// Sweeps PMPM_N_CUTOFFS clarity thresholds and accumulates probability weight
+// to whichever key-maximum wins at each threshold. The candidate with the
+// highest accumulated probability is returned. This suppresses octave errors
+// naturally (no half-period correction needed).
+//
+// Based on sevagh/pitch-detection probabilistic_pitch(), minus the mlpack HMM
+// cross-frame smoother (single-frame use case doesn't need it).
 
 class MPMPitchDetector {
 public:
-    static constexpr int   WINDOW_SIZE = 2048;
-    static constexpr int   W           = WINDOW_SIZE / 2;
-    static constexpr int   MAX_MAXIMA  = 32;
-    static constexpr float FREQ_MIN    = 180.0f;
-    static constexpr float FREQ_MAX    = 3200.0f;
+    static constexpr int   WINDOW_SIZE       = 2048;
+    static constexpr int   W                 = WINDOW_SIZE / 2;
+    static constexpr int   MAX_MAXIMA        = 32;
+    static constexpr float FREQ_MIN          = 180.0f;
+    static constexpr float FREQ_MAX          = 3200.0f;
+
+    static constexpr int   PMPM_N_CUTOFFS    = 10;
+    static constexpr float PMPM_CUTOFF_BEGIN = 0.80f;
+    static constexpr float PMPM_CUTOFF_STEP  = 0.02f;  // 0.80, 0.82, ..., 0.98
+    static constexpr float PMPM_PROB_DIST    = 0.10f;  // weight per winning cutoff
+    static constexpr float PMPM_PA           = 0.01f;  // silence-bucket fallback
+    static constexpr float SMALL_CUTOFF      = 0.50f;  // pre-filter weak candidates
 
     float lastGlobalNsdfMax = 0.0f;
+    float lastBestProb      = 0.0f;
 
-    float estimate(float* samples, int sampleRate, float clarity, float nsdfFloor) {
+    float estimate(float* samples, int sampleRate, float nsdfFloor) {
         for (int i = 0; i < WINDOW_SIZE; i++) _buf[i] = samples[i];
 
         // Pass 1: NSDF n'(τ) for τ = 0..W
@@ -134,20 +149,41 @@ public:
         if (kmCount == 0 || globalMax <= 0.0f) return NAN;
         if (globalMax < nsdfFloor) return NAN;
 
-        // Select best key maximum (first ≥ clarity × globalMax)
-        float threshold = clarity * globalMax;
-        int bestTau = -1;
+        // Pass 3: Pre-filter — discard candidates below SMALL_CUTOFF
+        int candCount = 0;
         for (int k = 0; k < kmCount; k++) {
-            if (_kmVal[k] >= threshold) { bestTau = _kmTau[k]; break; }
+            if (_kmVal[k] > SMALL_CUTOFF) {
+                _candTau[candCount] = _kmTau[k];
+                _candVal[candCount] = _kmVal[k];
+                candCount++;
+            }
         }
-        if (bestTau < 0) return NAN;
+        if (candCount == 0) return NAN;
 
-        // Half-period correction (octave-down guard)
-        int halfTau = (int)std::round(bestTau / 2.0f);
-        if (halfTau >= tauMin && halfTau <= tauMax && _nsdf[halfTau] > nsdfFloor)
-            bestTau = halfTau;
+        // Pass 4: Sweep cutoffs, accumulate probability to winning candidate
+        float prob[MAX_MAXIMA] = {};
+        float cutoff = PMPM_CUTOFF_BEGIN;
+        for (int i = 0; i < PMPM_N_CUTOFFS; i++) {
+            float thresh = cutoff * globalMax;
+            int winner = -1;
+            for (int k = 0; k < candCount; k++) {
+                if (_candVal[k] >= thresh) { winner = k; break; }
+            }
+            if (winner >= 0) prob[winner] += PMPM_PROB_DIST;
+            cutoff += PMPM_CUTOFF_STEP;
+        }
 
-        // Parabolic interpolation
+        // Pass 5: Pick highest-probability candidate
+        int   bestIdx  = -1;
+        float bestProb = 0.0f;
+        for (int k = 0; k < candCount; k++) {
+            if (prob[k] > bestProb) { bestProb = prob[k]; bestIdx = k; }
+        }
+        lastBestProb = bestProb;
+        if (bestIdx < 0) return NAN;
+        int bestTau = _candTau[bestIdx];
+
+        // Pass 6: Parabolic interpolation
         float tInterp = (float)bestTau;
         if (bestTau > 0 && bestTau < W) {
             float s0    = _nsdf[bestTau - 1];
@@ -165,10 +201,12 @@ public:
     }
 
 private:
-    float _buf[WINDOW_SIZE]  = {};
-    float _nsdf[W + 1]       = {};
-    int   _kmTau[MAX_MAXIMA] = {};
-    float _kmVal[MAX_MAXIMA] = {};
+    float _buf[WINDOW_SIZE]    = {};
+    float _nsdf[W + 1]         = {};
+    int   _kmTau[MAX_MAXIMA]   = {};
+    float _kmVal[MAX_MAXIMA]   = {};
+    int   _candTau[MAX_MAXIMA] = {};
+    float _candVal[MAX_MAXIMA] = {};
 };
 
 // ── Audio engine ──────────────────────────────────────────────────────────────
@@ -208,7 +246,7 @@ public:
     float getCurrentRms()       const { return mCurrentRms.load(std::memory_order_relaxed); }
 
     void setDetectionThreshold(float v) { mDetectionThreshold.store(v, std::memory_order_relaxed); }
-    void setClarity(float v)            { mClarity.store(v, std::memory_order_relaxed); }
+    void setClarity(float)              {} // pMPM manages its own internal cutoff sweep
 
     oboe::DataCallbackResult onAudioReady(
             oboe::AudioStream* /*stream*/,
@@ -240,7 +278,6 @@ private:
     std::atomic<float> mCurrentRms{0.0f};
 
     std::atomic<float> mDetectionThreshold{0.0f};
-    std::atomic<float> mClarity{0.93f};
     std::atomic<float> mNsdfFloor{0.75f};
 
     void processingLoop() {
@@ -268,9 +305,8 @@ private:
                 continue;
             }
 
-            float clarity   = mClarity.load(std::memory_order_relaxed);
             float nsdfFloor = mNsdfFloor.load(std::memory_order_relaxed);
-            float freq      = mMpm.estimate(window, mSampleRate, clarity, nsdfFloor);
+            float freq      = mMpm.estimate(window, mSampleRate, nsdfFloor);
 
             mCurrentFrequency.store(freq, std::memory_order_relaxed);
             mCurrentNsdf.store(mMpm.lastGlobalNsdfMax, std::memory_order_relaxed);
@@ -278,8 +314,8 @@ private:
             if (++diagCount >= DIAG_INTERVAL) {
                 diagCount = 0;
                 float dBFS = (rms > 0.0f) ? (20.0f * std::log10(rms)) : -999.0f;
-                LOGI("[Diag] freq=%.2f rms=%.5f (%.1f dBFS) nsdf=%.3f",
-                     freq, rms, dBFS, mMpm.lastGlobalNsdfMax);
+                LOGI("[Diag] freq=%.2f rms=%.5f (%.1f dBFS) nsdf=%.3f prob=%.2f",
+                     freq, rms, dBFS, mMpm.lastGlobalNsdfMax, mMpm.lastBestProb);
             }
         }
     }

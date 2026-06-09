@@ -9,32 +9,36 @@ export const RECORDING_LIMIT = 5;
 export const RATING_BONUS    = 5;
 
 interface SettingsState {
-  micSensitivity:        number;
-  themeOverride:         ThemeOverride;
-  totalRecordingsUsed:   number;
-  isPurchased:           boolean;
-  ratingStatus:          RatingStatus;
-  setMicSensitivity:     (v: number) => void;
-  setThemeOverride:      (v: ThemeOverride) => void;
-  incrementRecordingCount: () => void;
-  setPurchased:          () => void;
-  setRatingStatus:       (s: RatingStatus) => void;
+  micSensitivity:           number;
+  themeOverride:            ThemeOverride;
+  totalRecordingsUsed:      number;
+  isPurchased:              boolean;
+  ratingStatus:             RatingStatus;
+  hasCompletedOnboarding:   boolean;
+  setMicSensitivity:        (v: number) => void;
+  setThemeOverride:         (v: ThemeOverride) => void;
+  incrementRecordingCount:  () => void;
+  setPurchased:             () => void;
+  setRatingStatus:          (s: RatingStatus) => void;
+  setHasCompletedOnboarding: (v: boolean) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
-      micSensitivity:        0,
-      themeOverride:         'light' as ThemeOverride,
-      totalRecordingsUsed:   0,
-      isPurchased:           false,
-      ratingStatus:          'notShown' as RatingStatus,
-      setMicSensitivity:     (v) => set({ micSensitivity: v }),
-      setThemeOverride:      (v) => set({ themeOverride: v }),
-      incrementRecordingCount: () =>
+      micSensitivity:           0,
+      themeOverride:            'light' as ThemeOverride,
+      totalRecordingsUsed:      0,
+      isPurchased:              false,
+      ratingStatus:             'notShown' as RatingStatus,
+      hasCompletedOnboarding:   false,
+      setMicSensitivity:        (v) => set({ micSensitivity: v }),
+      setThemeOverride:         (v) => set({ themeOverride: v }),
+      incrementRecordingCount:  () =>
         set((s) => ({ totalRecordingsUsed: s.totalRecordingsUsed + 1 })),
-      setPurchased:          () => set({ isPurchased: true }),
-      setRatingStatus:       (s) => set({ ratingStatus: s }),
+      setPurchased:             () => set({ isPurchased: true }),
+      setRatingStatus:          (s) => set({ ratingStatus: s }),
+      setHasCompletedOnboarding: (v) => set({ hasCompletedOnboarding: v }),
     }),
     {
       name:    'harp2tab-settings',
