@@ -213,7 +213,7 @@ export default function OnboardingScreen() {
 
   // ── Meter color ───────────────────────────────────────────────────────────
   const goodThresholdFill = Math.min(
-    (noiseFloorRef.current * THRESHOLD_FLOOR_MULT) / CLIPPING_RMS,
+    (noiseFloorRef.current * NOISE_GATE_MULT) / CLIPPING_RMS,
     0.85,
   );
 

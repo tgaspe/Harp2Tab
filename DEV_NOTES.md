@@ -86,8 +86,8 @@ Output: `app/build/outputs/native-debug-symbols/release/native-debug-symbols.zip
 ### What to upload to Google Play
 | File | Purpose |
 |------|---------|
-| `app/build/outputs/bundle/release/app-release.aab` | The app itself |
-| `app/build/outputs/native-debug-symbols/release/native-debug-symbols.zip` | Crashlytics readable stack traces |
+| `android/app/build/outputs/bundle/release/app-release.aab` | The app itself |
+| `android/app/build/outputs/native-debug-symbols/release/native-debug-symbols.zip` | Crashlytics readable stack traces |
 
 ---
 
