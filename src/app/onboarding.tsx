@@ -22,9 +22,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 const SILENCE_DURATION_MS  = 3000;
 const BLOW_WINDOW_MS       = 5000;
 const NOISE_GATE_MULT      = 2.0;
-const THRESHOLD_BLOW_MULT  = 0.50;
-const THRESHOLD_FLOOR_MULT = 3.0;
-const NOISE_FLOOR_MIN      = 0.005;
+const NOISE_FLOOR_MIN      = 0;
 const MAX_NATIVE_THRESHOLD = 0.05;
 const CLIPPING_RMS         = 0.04;
 
@@ -172,17 +170,17 @@ export default function OnboardingScreen() {
       ? samples.reduce((a, b) => a + b, 0) / samples.length
       : 0;
 
+    const noiseFloor = noiseFloorRef.current;
+    // Set threshold at the midpoint between noise floor and blow level so the
+    // result scales with actual blow strength. Floor at 2× noise floor (same
+    // gate used to collect active samples) to avoid ambient false-triggers.
+    const threshold = Math.max(
+      noiseFloor + (activeAvg - noiseFloor) * 0.5,
+      noiseFloor * NOISE_GATE_MULT,
+    );
     const sensitivity = samples.length === 0
       ? 0
-      : Math.min(
-          Math.round(
-            (Math.max(
-              activeAvg * THRESHOLD_BLOW_MULT,
-              noiseFloorRef.current * THRESHOLD_FLOOR_MULT,
-            ) / MAX_NATIVE_THRESHOLD) * 100,
-          ),
-          100,
-        );
+      : Math.min(Math.round((threshold / MAX_NATIVE_THRESHOLD) * 100), 100);
 
     setCalibratedValue(sensitivity);
     setStep('result');
