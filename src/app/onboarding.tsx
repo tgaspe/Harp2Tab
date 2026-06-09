@@ -36,6 +36,7 @@ export default function OnboardingScreen() {
   const styles  = useMemo(() => createStyles(theme), [theme]);
   const { skipPermission } = useLocalSearchParams<{ skipPermission?: string }>();
 
+  const hasCompletedOnboarding    = useSettingsStore((s) => s.hasCompletedOnboarding);
   const setMicSensitivity        = useSettingsStore((s) => s.setMicSensitivity);
   const setHasCompletedOnboarding = useSettingsStore((s) => s.setHasCompletedOnboarding);
 
@@ -52,9 +53,13 @@ export default function OnboardingScreen() {
   const listenerRef      = useRef<ReturnType<typeof addAudioFrameListener> | null>(null);
   const intervalRef      = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // ── Skip permission step when launched from Settings ─────────────────────
+  // ── Guard: returning users can only reach this via Settings ──────────────
   useEffect(() => {
-    if (skipPermission === 'true') beginSilenceMeasurement();
+    if (hasCompletedOnboarding && skipPermission !== 'true') {
+      router.replace('/');
+    } else if (skipPermission === 'true') {
+      beginSilenceMeasurement();
+    }
   }, []);
 
   // ── Cleanup on unmount ────────────────────────────────────────────────────
@@ -167,18 +172,32 @@ export default function OnboardingScreen() {
       ? samples.reduce((a, b) => a + b, 0) / samples.length
       : 0;
 
-    const rawThreshold = Math.max(
-      activeAvg * THRESHOLD_BLOW_MULT,
-      noiseFloorRef.current * THRESHOLD_FLOOR_MULT,
-    );
-
-    const sensitivity = Math.min(
-      Math.round((rawThreshold / MAX_NATIVE_THRESHOLD) * 100),
-      100,
-    );
+    const sensitivity = samples.length === 0
+      ? 0
+      : Math.min(
+          Math.round(
+            (Math.max(
+              activeAvg * THRESHOLD_BLOW_MULT,
+              noiseFloorRef.current * THRESHOLD_FLOOR_MULT,
+            ) / MAX_NATIVE_THRESHOLD) * 100,
+          ),
+          100,
+        );
 
     setCalibratedValue(sensitivity);
     setStep('result');
+  }
+
+  // ── Step: result — retry calibration ─────────────────────────────────────
+  function retry() {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+    listenerRef.current?.remove();
+    listenerRef.current = null;
+    noiseFloorRef.current = 0;
+    beginSilenceMeasurement();
   }
 
   // ── Step: result — commit and proceed ────────────────────────────────────
@@ -320,7 +339,7 @@ export default function OnboardingScreen() {
             body={
               blowDetected
                 ? `Mic sensitivity set to ${calibratedValue}%.\n\nYou can always adjust this later in Settings.`
-                : 'We couldn\'t detect a blow. A default sensitivity has been applied.\n\nYou can adjust it in Settings at any time.'
+                : 'We couldn\'t detect a blow. Mic sensitivity has been set to 0%.\n\nYou can retry or adjust it manually in Settings.'
             }
             theme={theme}
             styles={styles}
@@ -330,6 +349,12 @@ export default function OnboardingScreen() {
               onPress={finish}
             >
               <Text style={styles.btnText}>Start Using Harp2Tab</Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.btnGhost, pressed && { opacity: 0.5 }]}
+              onPress={retry}
+            >
+              <Text style={styles.btnGhostText}>Try Again</Text>
             </Pressable>
           </StepCard>
         )}
