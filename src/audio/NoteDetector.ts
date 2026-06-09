@@ -1,9 +1,9 @@
 import { frequencyToTab } from './HarmonicaMapper';
 import type { HarmonicaKey, HarmonicaType, TabNote } from '@/types';
 
-const HISTORY_SIZE = 3;
+const HISTORY_SIZE = 7;
 const GRACE_MS     = 150;
-const MIN_DURATION = 80;
+const MIN_DURATION = 170;
 
 interface ActiveNote {
   tab: string;
