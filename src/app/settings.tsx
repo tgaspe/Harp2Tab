@@ -67,6 +67,20 @@ export default function SettingsScreen() {
                 </View>
               </View>
             </View>
+            <View style={styles.separator} />
+            <Pressable
+              onPress={() => router.push('/onboarding?skipPermission=true')}
+              style={({ pressed }) => [styles.cardRow, pressed && { opacity: 0.6 }]}
+              accessibilityRole="button"
+              accessibilityLabel="Recalibrate microphone"
+            >
+              <Ionicons name="options-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
+              <View style={styles.rowBody}>
+                <Text style={styles.rowLabel}>Recalibrate Mic</Text>
+                <Text style={styles.rowDesc}>Redo the microphone setup to match your current environment.</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={theme.textMuted} />
+            </Pressable>
           </View>
 
           {/* APPEARANCE */}

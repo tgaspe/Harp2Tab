@@ -5,7 +5,7 @@ import { addAudioFrameListener, startCapture, stopCapture, setThreshold } from '
 import { useSettingsStore } from '@/store/useSettingsStore';
 import type { Theme } from '@/theme';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -34,6 +34,7 @@ export default function OnboardingScreen() {
   const router  = useRouter();
   const theme   = useTheme();
   const styles  = useMemo(() => createStyles(theme), [theme]);
+  const { skipPermission } = useLocalSearchParams<{ skipPermission?: string }>();
 
   const setMicSensitivity        = useSettingsStore((s) => s.setMicSensitivity);
   const setHasCompletedOnboarding = useSettingsStore((s) => s.setHasCompletedOnboarding);
@@ -42,6 +43,7 @@ export default function OnboardingScreen() {
   const [countdownSec,    setCountdownSec]    = useState(0);
   const [calibratedValue, setCalibratedValue] = useState(0);
   const [blowDetected,    setBlowDetected]    = useState(false);
+  const [blowStarted,     setBlowStarted]     = useState(false);
 
   const noiseFloorRef    = useRef(0);
   const rmsBuffer        = useRef<number[]>([]);
@@ -49,6 +51,11 @@ export default function OnboardingScreen() {
   const meterAnim        = useRef(new Animated.Value(0)).current;
   const listenerRef      = useRef<ReturnType<typeof addAudioFrameListener> | null>(null);
   const intervalRef      = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ── Skip permission step when launched from Settings ─────────────────────
+  useEffect(() => {
+    if (skipPermission === 'true') beginSilenceMeasurement();
+  }, []);
 
   // ── Cleanup on unmount ────────────────────────────────────────────────────
   useEffect(() => {
@@ -108,16 +115,21 @@ export default function OnboardingScreen() {
     beginBlowWindow();
   }
 
-  // ── Step: blow (5 s) ──────────────────────────────────────────────────────
+  // ── Step: blow — show instructions, wait for user to tap Ready ───────────
   function beginBlowWindow() {
     activeSamples.current = [];
+    setBlowStarted(false);
+    setBlowDetected(false);
     setCountdownSec(Math.ceil(BLOW_WINDOW_MS / 1000));
     setStep('blow');
+  }
+
+  function startBlowCountdown() {
+    setBlowStarted(true);
 
     const gate = noiseFloorRef.current * NOISE_GATE_MULT;
 
     listenerRef.current = addAudioFrameListener((frame) => {
-      // Animate the RMS meter
       const fill = Math.min(frame.rms / CLIPPING_RMS, 1);
       Animated.spring(meterAnim, {
         toValue: fill,
@@ -258,34 +270,45 @@ export default function OnboardingScreen() {
             theme={theme}
             styles={styles}
           >
-            {/* Live RMS meter */}
-            <View style={styles.meterTrack}>
-              <Animated.View
-                style={[
-                  styles.meterFill,
-                  {
-                    width: meterAnim.interpolate({
-                      inputRange:  [0, 1],
-                      outputRange: ['0%', '100%'],
-                    }),
-                    backgroundColor: meterColor,
-                  },
-                ]}
-              />
-              {/* Good-zone marker */}
-              <View style={[styles.meterMarker, { left: `${goodThresholdFill * 100}%` as any }]} />
-            </View>
-            <View style={styles.meterLabels}>
-              <Text style={styles.meterLabelLeft}>Too quiet</Text>
-              <Text style={styles.meterLabelRight}>Good</Text>
-            </View>
+            {!blowStarted ? (
+              <Pressable
+                style={({ pressed }) => [styles.btn, pressed && styles.btnPressed]}
+                onPress={startBlowCountdown}
+              >
+                <Text style={styles.btnText}>I'm Ready</Text>
+              </Pressable>
+            ) : (
+              <>
+                {/* Live RMS meter */}
+                <View style={styles.meterTrack}>
+                  <Animated.View
+                    style={[
+                      styles.meterFill,
+                      {
+                        width: meterAnim.interpolate({
+                          inputRange:  [0, 1],
+                          outputRange: ['0%', '100%'],
+                        }),
+                        backgroundColor: meterColor,
+                      },
+                    ]}
+                  />
+                  {/* Good-zone marker */}
+                  <View style={[styles.meterMarker, { left: `${goodThresholdFill * 100}%` as any }]} />
+                </View>
+                <View style={styles.meterLabels}>
+                  <Text style={styles.meterLabelLeft}>Too quiet</Text>
+                  <Text style={styles.meterLabelRight}>Good</Text>
+                </View>
 
-            <View style={[styles.countdown, { marginTop: 24 }]}>
-              <Text style={styles.countdownNumber}>{countdownSec}</Text>
-              <Text style={styles.countdownLabel}>
-                {blowDetected ? 'seconds — keep going!' : 'seconds remaining'}
-              </Text>
-            </View>
+                <View style={[styles.countdown, { marginTop: 24 }]}>
+                  <Text style={styles.countdownNumber}>{countdownSec}</Text>
+                  <Text style={styles.countdownLabel}>
+                    {blowDetected ? 'seconds — keep going!' : 'seconds remaining'}
+                  </Text>
+                </View>
+              </>
+            )}
           </StepCard>
         )}
 
