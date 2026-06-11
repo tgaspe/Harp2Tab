@@ -5,8 +5,8 @@ import { settingsStorage } from './storage';
 export type ThemeOverride = 'light' | 'dark';
 export type RatingStatus = 'notShown' | 'rated' | 'declined';
 
-export const RECORDING_LIMIT = 5;
-export const RATING_BONUS    = 5;
+export const RECORDING_LIMIT = 3;
+export const RATING_BONUS    = 3;
 
 interface SettingsState {
   micSensitivity:           number;

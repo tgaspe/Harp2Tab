@@ -57,7 +57,7 @@ export function RatingModal({ visible, onClose, onUpgrade }: Props) {
 
           <Text style={styles.body}>
             Rate us on the Play Store and unlock{'\n'}
-            <Text style={styles.highlight}>5 more free recordings</Text>
+            <Text style={styles.highlight}>3 more free recordings</Text>
             {' '}— on us.
           </Text>
 
@@ -65,10 +65,10 @@ export function RatingModal({ visible, onClose, onUpgrade }: Props) {
             onPress={handleRate}
             style={({ pressed }) => [styles.rateBtn, pressed && { opacity: 0.85 }]}
             accessibilityRole="button"
-            accessibilityLabel="Rate the app and get 5 more free recordings"
+            accessibilityLabel="Rate the app and get 3 more free recordings"
           >
             <Ionicons name="star" size={18} color="#fff" />
-            <Text style={styles.rateBtnText}>Rate &amp; Get 5 More</Text>
+            <Text style={styles.rateBtnText}>Rate &amp; Get 3 More</Text>
           </Pressable>
 
           <Pressable
