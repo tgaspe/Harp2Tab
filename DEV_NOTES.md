@@ -23,7 +23,7 @@ adb logcat | grep -i harp2tab   # filter logs to your app only
 ## Development Build (USB testing)
 
 ```bash
-npx expo run:android
+npx expo run:android --device
 ```
 
 Builds a debug APK and installs it directly on the connected device via USB. Use this for day-to-day development.

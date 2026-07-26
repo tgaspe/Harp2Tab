@@ -69,7 +69,7 @@ export default function EditScreen() {
     const existing = useAppStore.getState().tabNotes;
     const prev     = existing[existing.length - 1];
     const start    = prev ? prev.start_time + prev.duration : 0;
-    addTabNote({ tab: '-1', note: 'D4', start_time: start, duration: 300 });
+    addTabNote({ tab: '-1', note: 'D4', start_time: start, duration: 300, confidence: 100 });
     const updated = useAppStore.getState().tabNotes;
     const last    = updated[updated.length - 1];
     if (last) setSelectedId(last.id);

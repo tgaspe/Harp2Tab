@@ -4,7 +4,7 @@ import { FONT } from '@/constants/keys';
 import { Poppins } from '@/constants/fonts';
 import { useTheme } from '@/hooks/useTheme';
 import { useAudioCapture } from '@/hooks/useAudioCapture';
-import { selectIsRecording, selectKey, selectTabNotes, useAppStore } from '@/store/useAppStore';
+import { selectIsPaused, selectIsRecording, selectKey, selectTabNotes, useAppStore } from '@/store/useAppStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import type { Theme } from '@/theme';
 import { Ionicons } from '@expo/vector-icons';
@@ -20,8 +20,11 @@ export default function RecordingScreen() {
   const styles        = useMemo(() => createStyles(theme), [theme]);
   const selectedKey   = useAppStore(selectKey);
   const isRecording   = useAppStore(selectIsRecording);
+  const isPaused      = useAppStore(selectIsPaused);
   const tabNotes      = useAppStore(selectTabNotes);
   const stopRecording          = useAppStore((s) => s.stopRecording);
+  const pauseRecording         = useAppStore((s) => s.pauseRecording);
+  const resumeRecording        = useAppStore((s) => s.resumeRecording);
   const incrementRecordingCount = useSettingsStore((s) => s.incrementRecordingCount);
 
   const listRef       = useRef<FlatList>(null);
@@ -29,7 +32,6 @@ export default function RecordingScreen() {
   const pauseStartRef = useRef<number | null>(null);
   const pausedMsRef   = useRef(0);
 
-  const [isPaused,   setIsPaused]   = useState(false);
   const [elapsedStr, setElapsedStr] = useState('0:00');
 
   useKeepAwake();
@@ -54,7 +56,6 @@ export default function RecordingScreen() {
       startMsRef.current    = Date.now();
       pausedMsRef.current   = 0;
       pauseStartRef.current = null;
-      setIsPaused(false);
       setElapsedStr('0:00');
     }
   }, [isRecording]);
@@ -78,7 +79,7 @@ export default function RecordingScreen() {
 
   function handlePause() {
     pauseStartRef.current = Date.now();
-    setIsPaused(true);
+    pauseRecording();
   }
 
   function handleResume() {
@@ -86,7 +87,7 @@ export default function RecordingScreen() {
       pausedMsRef.current  += Date.now() - pauseStartRef.current;
       pauseStartRef.current = null;
     }
-    setIsPaused(false);
+    resumeRecording();
   }
 
   function handleStop() {

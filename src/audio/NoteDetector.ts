@@ -9,6 +9,7 @@ interface ActiveNote {
   tab: string;
   note: string;
   absStartMs: number;
+  confidence: number;
 }
 
 export function createNoteDetector(
@@ -28,11 +29,18 @@ export function createNoteDetector(
         note:       note.note,
         duration,
         start_time: note.absStartMs - recordingStartMs,
+        confidence: note.confidence,
       });
     }
   }
 
   return {
+    reset() {
+      history.length = 0;
+      active = null;
+      silentSince = null;
+    },
+
     process(frame: { frequency: number; rms: number }, recordingStartMs: number) {
       const absNow = Date.now();
 
@@ -48,9 +56,10 @@ export function createNoteDetector(
         if (t !== null) counts.set(t, (counts.get(t) ?? 0) + 1);
       }
       let votedTab: string | null = null;
+      let votedCount = 0;
       let votedNote: string | null = result?.note ?? null;
       for (const [tab, count] of counts) {
-        if (count > HISTORY_SIZE / 2) { votedTab = tab; break; }
+        if (count > HISTORY_SIZE / 2) { votedTab = tab; votedCount = count; break; }
       }
 
       if (votedTab === null) {
@@ -63,9 +72,12 @@ export function createNoteDetector(
         }
       } else {
         silentSince = null;
+        const confidence = Math.round((votedCount / HISTORY_SIZE) * 100);
         if (active?.tab !== votedTab) {
           if (active) commit(active, absNow, recordingStartMs);
-          active = { tab: votedTab, note: votedNote ?? '', absStartMs: absNow };
+          active = { tab: votedTab, note: votedNote ?? '', absStartMs: absNow, confidence };
+        } else {
+          active.confidence = confidence;
         }
       }
     },
