@@ -1,15 +1,30 @@
 import { frequencyToTab } from './HarmonicaMapper';
 import type { HarmonicaKey, HarmonicaType, TabNote } from '@/types';
 
-const HISTORY_SIZE = 7;
-const GRACE_MS     = 150;
-const MIN_DURATION = 170;
+const GRACE_MS     = 150; // silence must persist this long to end a run
+const CONFIRM_MS   = 40;  // a new tab must persist this long to start a run
+const MIN_DURATION = 170; // committed runs shorter than this are discarded
 
-interface ActiveNote {
-  tab: string;
-  note: string;
-  absStartMs: number;
-  confidence: number;
+type Tab = string | null;
+
+interface RunState {
+  tab: Tab;
+  note: Tab;
+  runStartMs: number;
+  lastMatchMs: number;
+  matchCount: number;
+  totalCount: number;
+}
+
+interface PendingCandidate {
+  tab: Tab;
+  note: Tab;
+  startMs: number;
+  count: number;
+}
+
+function emptyRun(): RunState {
+  return { tab: null, note: null, runStartMs: 0, lastMatchMs: 0, matchCount: 0, totalCount: 0 };
 }
 
 export function createNoteDetector(
@@ -17,68 +32,68 @@ export function createNoteDetector(
   key: HarmonicaKey,
   harmonicaType: HarmonicaType,
 ) {
-  const history: (string | null)[] = [];
-  let active: ActiveNote | null = null;
-  let silentSince: number | null = null;
+  let current: RunState = emptyRun();
+  let pending: PendingCandidate | null = null;
 
-  function commit(note: ActiveNote, absNow: number, recordingStartMs: number) {
-    const duration = absNow - note.absStartMs;
-    if (duration >= MIN_DURATION) {
-      onNote({
-        tab:        note.tab,
-        note:       note.note,
-        duration,
-        start_time: note.absStartMs - recordingStartMs,
-        confidence: note.confidence,
-      });
-    }
+  function commit(run: RunState, recordingStartMs: number) {
+    const duration = run.lastMatchMs - run.runStartMs;
+    if (duration < MIN_DURATION) return;
+    const confidence = Math.round((run.matchCount / run.totalCount) * 100);
+    onNote({
+      tab:        run.tab ?? '',
+      note:       run.note ?? '',
+      duration,
+      start_time: run.runStartMs - recordingStartMs,
+      confidence,
+    });
   }
 
   return {
     reset() {
-      history.length = 0;
-      active = null;
-      silentSince = null;
+      current = emptyRun();
+      pending = null;
+    },
+
+    flush(recordingStartMs: number) {
+      if (current.tab !== null) commit(current, recordingStartMs);
+      current = emptyRun();
+      pending = null;
     },
 
     process(frame: { frequency: number; rms: number }, recordingStartMs: number) {
-      const absNow = Date.now();
-
+      const now = Date.now();
       const result = frequencyToTab(frame.frequency, key, harmonicaType);
-      const currentTab = result?.tab ?? null;
+      const tab: Tab = result?.tab ?? null;
+      const note: Tab = result?.note ?? null;
 
-      history.push(currentTab);
-      if (history.length > HISTORY_SIZE) history.shift();
-
-      // Majority vote — needs more than half the window
-      const counts = new Map<string, number>();
-      for (const t of history) {
-        if (t !== null) counts.set(t, (counts.get(t) ?? 0) + 1);
-      }
-      let votedTab: string | null = null;
-      let votedCount = 0;
-      let votedNote: string | null = result?.note ?? null;
-      for (const [tab, count] of counts) {
-        if (count > HISTORY_SIZE / 2) { votedTab = tab; votedCount = count; break; }
+      if (tab === current.tab) {
+        current.lastMatchMs = now;
+        current.matchCount += 1;
+        current.totalCount += 1;
+        pending = null;
+        return;
       }
 
-      if (votedTab === null) {
-        // Silent frame
-        if (silentSince === null) silentSince = absNow;
-        if (active && absNow - silentSince >= GRACE_MS) {
-          commit(active, absNow, recordingStartMs);
-          active = null;
-          silentSince = null;
-        }
+      current.totalCount += 1;
+
+      if (pending !== null && pending.tab === tab) {
+        pending.count += 1;
       } else {
-        silentSince = null;
-        const confidence = Math.round((votedCount / HISTORY_SIZE) * 100);
-        if (active?.tab !== votedTab) {
-          if (active) commit(active, absNow, recordingStartMs);
-          active = { tab: votedTab, note: votedNote ?? '', absStartMs: absNow, confidence };
-        } else {
-          active.confidence = confidence;
-        }
+        pending = { tab, note, startMs: now, count: 1 };
+      }
+
+      const requiredMs = tab === null ? GRACE_MS : CONFIRM_MS;
+      if (now - pending.startMs >= requiredMs) {
+        if (current.tab !== null) commit(current, recordingStartMs);
+        current = {
+          tab:         pending.tab,
+          note:        pending.note,
+          runStartMs:  pending.startMs,
+          lastMatchMs: now,
+          matchCount:  pending.count,
+          totalCount:  pending.count,
+        };
+        pending = null;
       }
     },
   };

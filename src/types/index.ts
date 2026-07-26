@@ -16,6 +16,6 @@ export interface TabNote {
   duration: number;
   /** Time from recording start in milliseconds */
   start_time: number;
-  /** Detection confidence 0–100 (60 = 3/5 frames, 80 = 4/5, 100 = 5/5) */
+  /** Detection confidence 0–100 (% of frames in the note's run that matched its tab) */
   confidence: number;
 }

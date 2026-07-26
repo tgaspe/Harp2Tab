@@ -18,6 +18,7 @@ export function useAudioCapture(): { permissionDenied: boolean } {
 
   const isPausedRef  = useRef(isPaused);
   const detectorRef  = useRef<ReturnType<typeof createNoteDetector> | null>(null);
+  const startMsRef   = useRef(0);
 
   useEffect(() => {
     if (!isRecording || !selectedKey) {
@@ -50,6 +51,7 @@ export function useAudioCapture(): { permissionDenied: boolean } {
       );
       detectorRef.current = detector;
       const startMs = recordingStartTime ?? Date.now();
+      startMsRef.current = startMs;
 
       sub = addAudioFrameListener((frame) => {
         // Keep the native stream alive while paused — just stop feeding it
@@ -63,6 +65,14 @@ export function useAudioCapture(): { permissionDenied: boolean } {
       cancelled = true;
       sub?.remove();
       stopCapture();
+      // Commit whatever note was still in flight when recording stopped —
+      // otherwise the last note played before hitting Stop is silently lost,
+      // since nothing else triggers its silence-grace commit.
+      // Must run (and null the ref) before the [isPaused] effect below fires
+      // its reset() on the same stopRecording() commit — do not reorder
+      // these two effects, this ordering is what makes flush-before-discard
+      // work when isRecording and isPaused flip together on Stop.
+      detectorRef.current?.flush(startMsRef.current);
       detectorRef.current = null;
     };
   }, [isRecording]);
