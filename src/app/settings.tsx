@@ -21,8 +21,18 @@ export default function SettingsScreen() {
   const styles             = useMemo(() => createStyles(theme), [theme]);
   const micSensitivity     = useSettingsStore((s) => s.micSensitivity);
   const themeOverride      = useSettingsStore((s) => s.themeOverride);
+  const isPurchased        = useSettingsStore((s) => s.isPurchased);
   const setMicSensitivity  = useSettingsStore((s) => s.setMicSensitivity);
   const setThemeOverride   = useSettingsStore((s) => s.setThemeOverride);
+
+  async function handleRate() {
+    const pkg = 'com.chewpacastudios.harp2tab';
+    try {
+      await Linking.openURL(`market://details?id=${pkg}`);
+    } catch {
+      await Linking.openURL(`https://play.google.com/store/apps/details?id=${pkg}`);
+    }
+  }
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -46,6 +56,22 @@ export default function SettingsScreen() {
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
         >
+
+          {!isPurchased && (
+            <Pressable
+              onPress={() => router.push('/paywall')}
+              style={({ pressed }) => [styles.premiumBanner, pressed && { opacity: 0.85 }]}
+              accessibilityRole="button"
+              accessibilityLabel="Upgrade to Premium"
+            >
+              <Ionicons name="flash" size={24} color="#fff" />
+              <View style={styles.premiumBody}>
+                <Text style={styles.premiumTitle}>Upgrade to Premium</Text>
+                <Text style={styles.premiumDesc}>Unlock unlimited recordings and every export format</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color="#fff" />
+            </Pressable>
+          )}
 
           {/* AUDIO */}
           <Text style={styles.sectionLabel}>AUDIO</Text>
@@ -114,6 +140,24 @@ export default function SettingsScreen() {
             </View>
           </View>
 
+          {/* SUPPORT */}
+          <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>SUPPORT</Text>
+          <View style={styles.card}>
+            <Pressable
+              onPress={handleRate}
+              style={({ pressed }) => [styles.cardRow, pressed && { opacity: 0.6 }]}
+              accessibilityRole="link"
+              accessibilityLabel="Rate the app on the Play Store"
+            >
+              <Ionicons name="star-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
+              <View style={styles.rowBody}>
+                <Text style={styles.rowLabel}>Rate the App</Text>
+                <Text style={styles.rowDesc}>Enjoying Harp2Tab? Leave us a review on the Play Store.</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={theme.textMuted} />
+            </Pressable>
+          </View>
+
           {/* LEGAL */}
           <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>LEGAL</Text>
           <View style={styles.card}>
@@ -165,6 +209,28 @@ function createStyles(t: Theme) {
       letterSpacing: 1.4,
     },
     sectionLabelSpaced: { marginTop: 12 },
+
+    premiumBanner: {
+      flexDirection:   'row',
+      alignItems:      'center',
+      gap:             14,
+      backgroundColor: t.accent,
+      borderRadius:    14,
+      paddingVertical: 18,
+      paddingHorizontal: 18,
+    },
+    premiumBody:  { flex: 1, gap: 2 },
+    premiumTitle: {
+      fontSize:   FONT.md,
+      fontFamily: Poppins.bold,
+      color:      '#fff',
+    },
+    premiumDesc: {
+      fontSize:   FONT.xs,
+      fontFamily: Poppins.regular,
+      color:      'rgba(255,255,255,0.85)',
+      lineHeight: 16,
+    },
 
     card: {
       backgroundColor: t.surface,

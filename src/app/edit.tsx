@@ -10,7 +10,7 @@ import DraggableFlatList, {
 } from 'react-native-draggable-flatlist';
 import { TabCard } from '@/components/TabCard';
 import { useTheme } from '@/hooks/useTheme';
-import { useAppStore, selectTabNotes, selectKey, selectHarmonicaType } from '@/store/useAppStore';
+import { useAppStore, selectTabNotes, selectKey, selectHarmonicaType, selectCanUndo } from '@/store/useAppStore';
 import { FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import type { Theme } from '@/theme';
@@ -28,6 +28,8 @@ export default function EditScreen() {
   const updateNote   = useAppStore((s) => s.updateNote);
   const addTabNote   = useAppStore((s) => s.addTabNote);
   const reset        = useAppStore((s) => s.reset);
+  const canUndo      = useAppStore(selectCanUndo);
+  const undo         = useAppStore((s) => s.undo);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const listRef      = useRef<FlatList<TabNote>>(null);
@@ -134,12 +136,28 @@ export default function EditScreen() {
         {/* Bottom actions */}
         <View style={styles.actions}>
           <Pressable
+            onPress={undo}
+            style={({ pressed }) => [
+              styles.btn,
+              styles.btnGhost,
+              !canUndo && styles.btnFilledDisabled,
+              pressed && styles.btnPressed,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Undo last action"
+            accessibilityState={{ disabled: !canUndo }}
+          >
+            <Ionicons name="arrow-undo" size={20} color={canUndo ? theme.textSub : theme.textMuted} />
+            <Text style={[styles.btnTextGhost, !canUndo && styles.btnTextDisabled]}>Undo</Text>
+          </Pressable>
+
+          <Pressable
             onPress={handleNewRecording}
             style={({ pressed }) => [styles.btn, styles.btnGhost, pressed && styles.btnPressed]}
             accessibilityRole="button"
             accessibilityLabel="New Recording"
           >
-            <Ionicons name="mic-outline" size={16} color={theme.textSub} />
+            <Ionicons name="mic-outline" size={20} color={theme.textSub} />
             <Text style={styles.btnTextGhost}>New</Text>
           </Pressable>
 
@@ -149,7 +167,7 @@ export default function EditScreen() {
             accessibilityRole="button"
             accessibilityLabel="Add Note"
           >
-            <Ionicons name="add" size={16} color={theme.accent} />
+            <Ionicons name="add" size={20} color={theme.accent} />
             <Text style={styles.btnTextOutlined}>Add</Text>
           </Pressable>
 
@@ -168,7 +186,7 @@ export default function EditScreen() {
           >
             <Ionicons
               name="share-outline"
-              size={16}
+              size={20}
               color={tabNotes.length === 0 ? theme.textMuted : '#fff'}
             />
             <Text style={[
@@ -214,7 +232,7 @@ function createStyles(t: Theme) {
 
     btn: {
       flex:            1,
-      flexDirection:   'row',
+      flexDirection:   'column',
       alignItems:      'center',
       justifyContent:  'center',
       paddingVertical: 16,

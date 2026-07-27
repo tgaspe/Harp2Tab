@@ -20,7 +20,7 @@ function validateField(field: EditableField, value: string, harmonicaType?: Harm
       const re = harmonicaType === 'chromatic' ? TAB_RE_CHROMATIC : TAB_RE_DIATONIC;
       return re.test(value.trim());
     }
-    case 'note':       return NOTE_RE.test(value.trim());
+    case 'note':       return NOTE_RE.test(value.trim().toUpperCase());
     case 'start_time': { const n = parseInt(value, 10); return !isNaN(n) && n >= 0; }
     case 'duration':   { const n = parseInt(value, 10); return !isNaN(n) && n >= 1; }
   }
@@ -84,7 +84,7 @@ export function TabCard({
         const linked  = harmonicaKey ? tabToNote(trimmed, harmonicaKey, type) : null;
         onUpdate(note.id, linked ? { tab: trimmed, note: linked } : { tab: trimmed });
       } else if (editingField === 'note') {
-        const trimmed = editValue.trim();
+        const trimmed = editValue.trim().toUpperCase();
         const type    = harmonicaType ?? 'diatonic';
         const linked  = harmonicaKey ? noteToTab(trimmed, harmonicaKey, type) : null;
         onUpdate(note.id, linked ? { note: trimmed, tab: linked } : { note: trimmed });

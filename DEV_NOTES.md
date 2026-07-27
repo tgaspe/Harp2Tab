@@ -19,6 +19,15 @@ adb logcat | grep -i harp2tab   # filter logs to your app only
 ```
 
 ---
+## Build on Your Browser
+
+```bash
+npx expo start --web
+```
+
+To test on your computer browser localhost.
+
+---
 
 ## Development Build (USB testing)
 
