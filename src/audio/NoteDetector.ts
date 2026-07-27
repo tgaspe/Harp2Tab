@@ -1,9 +1,9 @@
-import { frequencyToTab } from './HarmonicaMapper';
 import type { HarmonicaKey, HarmonicaType, TabNote } from '@/types';
+import { frequencyToTab } from './HarmonicaMapper';
 
 const GRACE_MS      = 150;   // silence must persist this long to end a run
 const CONFIRM_MS    = 40;    // a new tab must persist this long to start a run
-const MIN_DURATION  = 110;   // committed runs shorter than this are discarded
+const MIN_DURATION  = 110;    // committed runs shorter than this are discarded
 const MIN_GAP_MS    = 60;    // a same-tab re-attack must have a real RMS dip at least this long to split (filters single-frame glitches, below GRACE_MS so it beats the "resume before grace expires" merge)
 
 // Amplitude-envelope onset detector: catches re-attacks of the same tab (e.g. tongued
@@ -11,8 +11,15 @@ const MIN_GAP_MS    = 60;    // a same-tab re-attack must have a real RMS dip at
 // to 0 and often never gates `tab` to null between two fast identical notes.
 const DIP_RATIO     = 0.5;   // rms must fall to <= this fraction of the local peak to start a dip
 const RISE_RATIO    = 0.65;  // rms must recover to >= this fraction of the local peak to confirm a re-attack (hysteresis above DIP_RATIO)
-const MIN_DIP_MS    = 35;    // dip must last this long (~1 native window) to count as real, not frame noise
-const MIN_PEAK_RMS  = 0.003; // skip dip detection when the note is too quiet for ratio math to be meaningful
+const MIN_DIP_MS    = 50;    // dip must last this long (~1 native window) to count as real, not frame noise
+
+// Raw rms is an absolute value whose scale varies by device (mic gain, AGC, etc.), so a
+// fixed "quiet note" cutoff isn't portable. Instead, learn this device/environment's
+// ambient noise floor live from frames seen during confirmed silence, and require a note's
+// peak to clear a multiple of it before onset (dip) detection is trusted.
+const NOISE_FLOOR_ALPHA  = 0.02;  // EMA smoothing factor for the ambient floor (~2s time constant at ~43ms frames)
+const NOISE_FLOOR_MULT   = 2.5;   // envelope peak must exceed this multiple of the ambient floor for onset detection to run
+const MIN_PEAK_RMS_FLOOR = 0.001; // absolute fallback used only before any ambient noise has been sampled yet
 
 type Tab = string | null;
 
@@ -54,10 +61,12 @@ export function createNoteDetector(
   let current: RunState = emptyRun();
   let pending: PendingCandidate | null = null;
   let envelope: EnvelopeState = emptyEnvelope();
+  let ambientRms = 0;
 
   function detectOnset(rms: number, now: number): boolean {
     if (rms > envelope.peak) envelope.peak = rms;
-    if (envelope.peak < MIN_PEAK_RMS) return false;
+    const minPeak = Math.max(MIN_PEAK_RMS_FLOOR, ambientRms * NOISE_FLOOR_MULT);
+    if (envelope.peak < minPeak) return false;
 
     if (!envelope.dipping) {
       if (rms <= envelope.peak * DIP_RATIO) {
@@ -110,6 +119,12 @@ export function createNoteDetector(
       const result = frequencyToTab(frame.frequency, key, harmonicaType);
       const tab: Tab = result?.tab ?? null;
       const note: Tab = result?.note ?? null;
+
+      // No note open and this frame itself reads as silence — safe to treat as an ambient
+      // noise sample and fold it into the live per-device/per-room floor estimate.
+      if (current.tab === null && tab === null) {
+        ambientRms += NOISE_FLOOR_ALPHA * (frame.rms - ambientRms);
+      }
 
       const onset = current.tab !== null ? detectOnset(frame.rms, now) : false;
 
