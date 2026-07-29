@@ -54,3 +54,40 @@ Join our community of developers creating universal apps.
 
 - [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
 - [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+
+## Roadmap
+
+- [ ] Audio upload tab transcription feature
+- [ ] Redo editing feature
+- [ ] Better monetization model
+- [ ] Web version
+- [ ] iOS version
+- [ ] Developer tool for data visualization: frame-by-frame view of detected note, loudness, and note segmentation
+
+## Web Version Plan
+
+Decisions locked 2026-07-29 (discussion only — not yet implemented).
+
+### Architecture
+- Reuse Expo/react-native-web instead of a separate web app (`react-native-web` is already a dependency, and `app.json` already sets `web.output: "static"`).
+- Only `src/native/AudioCapture.ts` is Android-specific (bridge to the Oboe+MPM C++ module, emits `{frequency, rms, nsdf}` at 50Hz). Everything downstream (`src/audio/NoteDetector.ts`, harmonica mapping, UI) is already portable.
+- Pitch detection on web: reimplement MPM in JS running inside an AudioWorklet, matching the same frame shape so downstream code needs no changes.
+
+### Payments & entitlements
+- **RevenueCat + Stripe** (Stripe as the web billing backend behind RevenueCat), not raw Stripe — unifies entitlements across Google Play Billing, App Store (once iOS ships), and web under one customer identity.
+- Fees at time of decision: Stripe ~2.9% + $0.30 (+0.7% Billing add-on) per US card charge; RevenueCat free up to $2,500/mo tracked revenue, then 1% above that.
+
+### Pricing
+- Monthly: **$3.49**
+- Yearly: **$27.99** (~33% off monthly-equivalent, ≈$2.33/mo)
+- Lifetime: **$44.99** one-time
+- Existing Play Store one-time buyers are grandfathered in as lifetime automatically when this ships — the current paywall markets "one-time purchase · no subscription," so don't break that promise.
+
+### Hosting
+- **Firebase Hosting**, reusing the existing Firebase project (already used for Crashlytics).
+- No custom domain owned yet — plan is to buy one (e.g. a `.app` TLD) via Cloudflare Registrar or Porkbun, then connect via Firebase Hosting's custom domain flow.
+
+### Auth
+- **Firebase Auth**, reusing the existing Firebase project, so premium entitlement is portable across web/Android/iOS regardless of which platform the user paid on.
+- Planned sign-in methods: Google Sign-In + email link first; Sign in with Apple once iOS ships.
+- Entitlement flow: Stripe/RevenueCat webhook → Cloud Function → write premium status to Firestore keyed by Firebase UID → web and mobile both read that to gate premium features.
