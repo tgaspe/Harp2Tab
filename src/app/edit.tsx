@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { FlatList } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -101,7 +101,7 @@ export default function EditScreen() {
           </View>
           <Text style={styles.subtitle}>
             {tabNotes.length} note{tabNotes.length !== 1 ? 's' : ''}
-            {tabNotes.length > 0 ? ' · hold to reorder' : ''}
+            {tabNotes.length > 0 ? (Platform.OS === 'web' ? ' · drag to reorder' : ' · hold to reorder') : ''}
           </Text>
         </View>
 
@@ -130,6 +130,11 @@ export default function EditScreen() {
             showsVerticalScrollIndicator={false}
             autoscrollThreshold={50}
             autoscrollSpeed={100}
+            // Works around a currently-open upstream bug where drag never
+            // activates on web (react-native-draggable-flatlist#612) —
+            // the library defaults activationDistance to 0, which appears
+            // to be part of what's broken under React 19's web gesture path.
+            activationDistance={1}
           />
         )}
 

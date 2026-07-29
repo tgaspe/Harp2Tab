@@ -10,6 +10,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Linking,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -71,6 +72,18 @@ export default function OnboardingScreen() {
 
   // ── Step: permission ──────────────────────────────────────────────────────
   async function requestPermission() {
+    if (Platform.OS === 'web') {
+      // Requesting the mic stream *is* the permission prompt on web — do it
+      // for real here (not a throwaway probe) so beginSilenceMeasurement()
+      // doesn't need to open a second MediaStream.
+      try {
+        await startCapture();
+        beginSilenceMeasurement();
+      } catch {
+        setStep('denied');
+      }
+      return;
+    }
     const result = await PermissionsAndroid.request(
       PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
     );
@@ -88,7 +101,9 @@ export default function OnboardingScreen() {
     setStep('silence');
 
     setThreshold(0);
-    startCapture();
+    // On web, requestPermission() already opened the stream — startCapture()
+    // is idempotent there anyway, but skip the redundant call for clarity.
+    if (Platform.OS !== 'web') startCapture();
 
     listenerRef.current = addAudioFrameListener((frame) => {
       rmsBuffer.current.push(frame.rms);
@@ -363,17 +378,20 @@ export default function OnboardingScreen() {
             icon="mic-off-outline"
             title="Microphone Access Needed"
             body={
-              'Harp2Tab records audio to detect harmonica notes.\n\n' +
-              'Please allow microphone access in Settings, or skip calibration and adjust sensitivity manually later.'
+              Platform.OS === 'web'
+                ? 'Harp2Tab records audio to detect harmonica notes.\n\n' +
+                  'Please allow microphone access when your browser prompts you, or skip calibration and adjust sensitivity manually later.'
+                : 'Harp2Tab records audio to detect harmonica notes.\n\n' +
+                  'Please allow microphone access in Settings, or skip calibration and adjust sensitivity manually later.'
             }
             theme={theme}
             styles={styles}
           >
             <Pressable
               style={({ pressed }) => [styles.btn, pressed && styles.btnPressed]}
-              onPress={() => Linking.openSettings()}
+              onPress={() => (Platform.OS === 'web' ? requestPermission() : Linking.openSettings())}
             >
-              <Text style={styles.btnText}>Open Settings</Text>
+              <Text style={styles.btnText}>{Platform.OS === 'web' ? 'Try Again' : 'Open Settings'}</Text>
             </Pressable>
             <Pressable
               style={({ pressed }) => [styles.btnGhost, pressed && { opacity: 0.5 }]}

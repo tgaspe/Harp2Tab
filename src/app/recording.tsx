@@ -11,7 +11,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useKeepAwake } from 'expo-keep-awake';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, FlatList, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, FlatList, Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function RecordingScreen() {
@@ -40,6 +40,14 @@ export default function RecordingScreen() {
 
   useEffect(() => {
     if (!permissionDenied) return;
+    if (Platform.OS === 'web') {
+      Alert.alert(
+        'Microphone Access Required',
+        'Allow microphone access when your browser prompts you, then try again.',
+        [{ text: 'Go Back', style: 'cancel', onPress: () => router.back() }],
+      );
+      return;
+    }
     Alert.alert(
       'Microphone Access Required',
       'Harp2Tab needs microphone access to record. Please enable it in your device settings.',

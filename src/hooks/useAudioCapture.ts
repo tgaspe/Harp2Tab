@@ -3,7 +3,7 @@ import { createNoteDetector } from '@/audio/NoteDetector';
 import { selectHarmonicaType, selectIsPaused, selectIsRecording, selectKey, useAppStore } from '@/store/useAppStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { useEffect, useRef, useState } from 'react';
-import { PermissionsAndroid } from 'react-native';
+import { PermissionsAndroid, Platform } from 'react-native';
 
 export function useAudioCapture(): { permissionDenied: boolean } {
   const isRecording        = useAppStore(selectIsRecording);
@@ -31,15 +31,31 @@ export function useAudioCapture(): { permissionDenied: boolean } {
     let sub: ReturnType<typeof addAudioFrameListener> | null = null;
 
     (async () => {
-      const granted = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-      );
-      if (cancelled) return;
-      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-        stopRecording();
-        setPermissionDenied(true);
-        return;
+      if (Platform.OS === 'web') {
+        // On web, requesting the mic stream *is* the permission prompt —
+        // there's no separate pre-check API. startCapture() is idempotent,
+        // so calling it again below (once granted) is a harmless no-op.
+        try {
+          await startCapture();
+        } catch {
+          if (!cancelled) {
+            stopRecording();
+            setPermissionDenied(true);
+          }
+          return;
+        }
+      } else {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+        );
+        if (cancelled) return;
+        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+          stopRecording();
+          setPermissionDenied(true);
+          return;
+        }
       }
+      if (cancelled) return;
 
       setThreshold((micSensitivity / 100) * 0.05);
       startCapture();

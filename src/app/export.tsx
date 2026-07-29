@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -13,6 +13,21 @@ import { EXPORT_FORMATS, FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import type { Theme } from '@/theme';
 import type { ExportFormat } from '@/types';
+
+function contentToBlob(content: string, encoding: 'utf8' | 'base64', mimeType: string): Blob {
+  return encoding === 'base64'
+    ? new Blob([Uint8Array.from(atob(content), (c) => c.charCodeAt(0))], { type: mimeType })
+    : new Blob([content], { type: mimeType });
+}
+
+function triggerWebDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 export default function ExportScreen() {
   const router          = useRouter();
@@ -44,6 +59,24 @@ export default function ExportScreen() {
     if (!selectedKey || tabNotes.length === 0 || isExporting) return;
     setIsExporting(true);
     try {
+      if (Platform.OS === 'web') {
+        const { content, encoding, ext, mimeType } = generateForFormat(
+          tabNotes, selectedKey, harmonicaType, exportFormat,
+        );
+        const filename = `harp2tab_export.${ext}`;
+        const blob = contentToBlob(content, encoding, mimeType);
+        const canUseWebShare = typeof navigator.share === 'function'
+          && typeof navigator.canShare === 'function';
+        if (canUseWebShare) {
+          const file = new File([blob], filename, { type: mimeType });
+          if (navigator.canShare({ files: [file] })) {
+            await navigator.share({ files: [file], title: filename });
+            return;
+          }
+        }
+        triggerWebDownload(blob, filename);
+        return;
+      }
       const { uri, mimeType } = await buildFile();
       await Sharing.shareAsync(uri, { mimeType, dialogTitle: `Export as ${exportFormat}` });
     } finally {
@@ -58,6 +91,12 @@ export default function ExportScreen() {
       const { content, encoding, ext, mimeType } = generateForFormat(
         tabNotes, selectedKey, harmonicaType, exportFormat,
       );
+
+      if (Platform.OS === 'web') {
+        triggerWebDownload(contentToBlob(content, encoding, mimeType), `harp2tab_export.${ext}`);
+        return;
+      }
+
       // Pre-navigate the picker to the Downloads folder (user just taps "Use this folder")
       const DOWNLOADS_URI =
         'content://com.android.externalstorage.documents/tree/primary%3ADownload';

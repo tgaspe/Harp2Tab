@@ -4,8 +4,9 @@
 - **Package:** `com.chewpacastudios.harp2tab`
 - **Privacy policy:** https://tgaspe.github.io/harp2tab-privacy/
 - **Google Group (testers):** https://groups.google.com/u/4/g/chewpacastudios
-- **Closed Test Link (Android):** https://play.google.com/store/apps/details?id=com.chewpacastudios.harp2tab
-- **Closed Test Link (Web):** https://play.google.com/apps/testing/com.chewpacastudios.harp2tab
+- **Status:** LIVE on Google Play (production)
+- **Play Store listing:** https://play.google.com/store/apps/details?id=com.chewpacastudios.harp2tab
+- **Testing opt-in link (legacy, pre-launch):** https://play.google.com/apps/testing/com.chewpacastudios.harp2tab
 - **EAS Project ID:** `47dcbf95-955c-48a0-bb45-e1e6204f209f`
 
 ---
@@ -124,12 +125,9 @@ Builds on Expo's servers — multi-architecture (~76MB AAB vs ~35MB local arm64-
 
 ---
 
-## Paywall (Disabled for Closed Testing)
+## Paywall
 
-The recording limit is currently commented out. Search for `// re-enable for paywall` in:
-- `src/app/index.tsx` — import, state reads, and the limit check in `handleStart()`
-
-When ready to re-enable before public launch, uncomment all those sections and restore the paywall logic.
+Live: trial gate (3 base + 3 review-bonus recordings) and paywall are active in `src/app/index.tsx`, wired to `harp2tab_premium` (one-time IAP via `react-native-iap`).
 
 ---
 

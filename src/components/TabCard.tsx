@@ -6,7 +6,7 @@ import type { Theme } from '@/theme';
 import type { HarmonicaKey, HarmonicaType, TabNote } from '@/types';
 import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, StyleProp, StyleSheet, Text, TextInput, TextStyle, View } from 'react-native';
+import { Platform, Pressable, StyleProp, StyleSheet, Text, TextInput, TextStyle, View } from 'react-native';
 
 type EditableField = 'tab' | 'note' | 'start_time' | 'duration';
 
@@ -199,8 +199,13 @@ export function TabCard({
           )}
           {draggable && drag && (
             <Pressable
-              onLongPress={drag}
-              delayLongPress={0}
+              // On web, a long-press timer races the underlying
+              // GestureDetector's own pointer listener (a separate gesture
+              // system from Pressable) — the hand-off between the two can
+              // miss the pointer sequence. Starting on mousedown avoids the
+              // race entirely and matches how desktop drag handles usually
+              // behave anyway (grab-and-go, no hold delay).
+              {...(Platform.OS === 'web' ? { onPressIn: drag } : { onLongPress: drag, delayLongPress: 0 })}
               style={styles.iconBtn}
               hitSlop={12}
               accessibilityLabel="Drag to reorder"

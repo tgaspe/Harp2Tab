@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -140,23 +140,27 @@ export default function SettingsScreen() {
             </View>
           </View>
 
-          {/* SUPPORT */}
-          <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>SUPPORT</Text>
-          <View style={styles.card}>
-            <Pressable
-              onPress={handleRate}
-              style={({ pressed }) => [styles.cardRow, pressed && { opacity: 0.6 }]}
-              accessibilityRole="link"
-              accessibilityLabel="Rate the app on the Play Store"
-            >
-              <Ionicons name="star-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
-              <View style={styles.rowBody}>
-                <Text style={styles.rowLabel}>Rate the App</Text>
-                <Text style={styles.rowDesc}>Enjoying Harp2Tab? Leave us a review on the Play Store.</Text>
+          {/* SUPPORT — Play Store rating only makes sense on Android */}
+          {Platform.OS !== 'web' && (
+            <>
+              <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>SUPPORT</Text>
+              <View style={styles.card}>
+                <Pressable
+                  onPress={handleRate}
+                  style={({ pressed }) => [styles.cardRow, pressed && { opacity: 0.6 }]}
+                  accessibilityRole="link"
+                  accessibilityLabel="Rate the app on the Play Store"
+                >
+                  <Ionicons name="star-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
+                  <View style={styles.rowBody}>
+                    <Text style={styles.rowLabel}>Rate the App</Text>
+                    <Text style={styles.rowDesc}>Enjoying Harp2Tab? Leave us a review on the Play Store.</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color={theme.textMuted} />
+                </Pressable>
               </View>
-              <Ionicons name="chevron-forward" size={16} color={theme.textMuted} />
-            </Pressable>
-          </View>
+            </>
+          )}
 
           {/* LEGAL */}
           <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>LEGAL</Text>
