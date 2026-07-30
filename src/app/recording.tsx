@@ -6,12 +6,13 @@ import { useTheme } from '@/hooks/useTheme';
 import { useAudioCapture } from '@/hooks/useAudioCapture';
 import { selectIsPaused, selectIsRecording, selectKey, selectTabNotes, useAppStore } from '@/store/useAppStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
+import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_TOP, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
 import type { Theme } from '@/theme';
 import { Ionicons } from '@expo/vector-icons';
 import { useKeepAwake } from 'expo-keep-awake';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, FlatList, Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, FlatList, Linking, Platform, Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function RecordingScreen() {
@@ -116,14 +117,16 @@ export default function RecordingScreen() {
           </View>
           <View style={styles.topRight}>
             <Text style={styles.elapsed}>{elapsedStr}</Text>
-            <Pressable
-              onPress={() => router.push('/settings')}
-              style={({ pressed }) => [styles.gearBtn, pressed && { opacity: 0.6 }]}
-              accessibilityRole="button"
-              accessibilityLabel="Open settings"
-            >
-              <Ionicons name="settings-outline" size={28} color={theme.textSub} />
-            </Pressable>
+            {Platform.OS !== 'web' && (
+              <Pressable
+                onPress={() => router.push('/settings')}
+                style={({ pressed }) => [styles.gearBtn, pressed && { opacity: 0.6 }]}
+                accessibilityRole="button"
+                accessibilityLabel="Open settings"
+              >
+                <Ionicons name="settings-outline" size={28} color={theme.textSub} />
+              </Pressable>
+            )}
           </View>
         </View>
 
@@ -160,7 +163,10 @@ export default function RecordingScreen() {
         <View style={styles.actions}>
           <Pressable
             onPress={isPaused ? handleResume : handlePause}
-            style={({ pressed }) => [styles.pauseBtn, pressed && styles.pauseBtnPressed]}
+            style={({ pressed, hovered }: any) => [
+              styles.pauseBtn,
+              (pressed || (Platform.OS === 'web' && hovered)) && styles.pauseBtnPressed,
+            ]}
             accessibilityRole="button"
             accessibilityLabel={isPaused ? 'Resume Recording' : 'Pause Recording'}
           >
@@ -171,7 +177,10 @@ export default function RecordingScreen() {
           {isPaused && (
             <Pressable
               onPress={handleStop}
-              style={({ pressed }) => [styles.stopBtn, pressed && styles.stopBtnPressed]}
+              style={({ pressed, hovered }: any) => [
+                styles.stopBtn,
+                (pressed || (Platform.OS === 'web' && hovered)) && styles.stopBtnPressed,
+              ]}
               accessibilityRole="button"
               accessibilityLabel="Finish Recording"
             >
@@ -191,9 +200,10 @@ function createStyles(t: Theme) {
     safe:      { flex: 1, backgroundColor: t.bg },
     container: {
       flex: 1,
+      ...webMaxWidth(WEB_CONTENT_WIDTH.standard),
       paddingHorizontal: 24,
-      paddingTop: 16,
-      paddingBottom: 24,
+      paddingTop: Platform.OS === 'web' ? WEB_SCREEN_PADDING_TOP : 16,
+      paddingBottom: Platform.OS === 'web' ? WEB_SCREEN_PADDING_BOTTOM : 24,
       gap: 20,
     },
     topBar: {
@@ -283,7 +293,8 @@ function createStyles(t: Theme) {
       paddingVertical: 18,
       borderWidth:     1,
       borderColor:     t.border,
-    },
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
     pauseBtnPressed: { opacity: 0.7 },
     pauseBtnText: {
       fontSize:   FONT.md,
@@ -298,7 +309,8 @@ function createStyles(t: Theme) {
       alignItems:      'center',
       justifyContent:  'center',
       gap:             10,
-    },
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
     stopBtnPressed: { backgroundColor: t.recordDim },
     stopIcon: {
       width:           14,

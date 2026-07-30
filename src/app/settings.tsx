@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -8,6 +8,7 @@ import { useTheme } from '@/hooks/useTheme';
 import { useSettingsStore, type ThemeOverride } from '@/store/useSettingsStore';
 import { FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
+import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_TOP, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
 import type { Theme } from '@/theme';
 
 const THEME_SEGMENTS: Array<{ value: ThemeOverride; label: string }> = [
@@ -38,15 +39,17 @@ export default function SettingsScreen() {
     <SafeAreaView style={styles.safe}>
       <View style={styles.container}>
 
-        {/* Nav */}
-        <Pressable
-          onPress={() => router.back()}
-          style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.6 }]}
-          accessibilityRole="button"
-          accessibilityLabel="Go back"
-        >
-          <Ionicons name="arrow-back" size={28} color={theme.accent} />
-        </Pressable>
+        {/* Nav — TopBar's back chevron covers this on web */}
+        {Platform.OS !== 'web' && (
+          <Pressable
+            onPress={() => router.back()}
+            style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.6 }]}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+          >
+            <Ionicons name="arrow-back" size={28} color={theme.accent} />
+          </Pressable>
+        )}
 
         {/* Title */}
         <Text style={styles.title}>Settings</Text>
@@ -60,7 +63,10 @@ export default function SettingsScreen() {
           {!isPurchased && (
             <Pressable
               onPress={() => router.push('/paywall')}
-              style={({ pressed }) => [styles.premiumBanner, pressed && { opacity: 0.85 }]}
+              style={({ pressed, hovered }: any) => [
+                styles.premiumBanner,
+                (pressed || (Platform.OS === 'web' && hovered)) && { opacity: 0.85 },
+              ]}
               accessibilityRole="button"
               accessibilityLabel="Upgrade to Premium"
             >
@@ -73,111 +79,129 @@ export default function SettingsScreen() {
             </Pressable>
           )}
 
-          {/* AUDIO */}
-          <Text style={styles.sectionLabel}>AUDIO</Text>
-          <View style={styles.card}>
-            <View style={styles.cardRow}>
-              <Ionicons name="mic-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
-              <View style={styles.rowBody}>
-                <Text style={styles.rowLabel}>Mic Sensitivity</Text>
-                <Text style={styles.rowDesc}>Set how sensitive the mic is to your playing. Turn up to ignore ambient noise, turn down to catch quieter notes.</Text>
-                <View style={styles.sliderWrapper}>
-                  <SliderInput
-                    value={micSensitivity}
-                    min={0}
-                    max={100}
-                    step={1}
-                    onChange={setMicSensitivity}
-                    formatLabel={(v) => `${v}%`}
-                  />
-                </View>
-              </View>
-            </View>
-            <View style={styles.separator} />
-            <Pressable
-              onPress={() => router.push('/onboarding?skipPermission=true')}
-              style={({ pressed }) => [styles.cardRow, pressed && { opacity: 0.6 }]}
-              accessibilityRole="button"
-              accessibilityLabel="Recalibrate microphone"
-            >
-              <Ionicons name="options-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
-              <View style={styles.rowBody}>
-                <Text style={styles.rowLabel}>Recalibrate Mic</Text>
-                <Text style={styles.rowDesc}>Redo the microphone setup to match your current environment.</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={theme.textMuted} />
-            </Pressable>
-          </View>
+          <View style={styles.sectionsGrid}>
 
-          {/* APPEARANCE */}
-          <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>APPEARANCE</Text>
-          <View style={styles.card}>
-            <View style={styles.cardRow}>
-              <Ionicons name="contrast-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
-              <View style={styles.rowBody}>
-                <Text style={styles.rowLabel}>Theme</Text>
-                <Text style={styles.rowDesc}>Choose display mode or follow system</Text>
-                <View style={styles.segmented}>
-                  {THEME_SEGMENTS.map(({ value, label }) => {
-                    const active = themeOverride === value;
-                    return (
-                      <Pressable
-                        key={value}
-                        onPress={() => setThemeOverride(value)}
-                        style={[styles.segment, active && styles.segmentActive]}
-                        accessibilityRole="radio"
-                        accessibilityState={{ checked: active }}
-                        accessibilityLabel={`${label} theme`}
-                      >
-                        <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
-                          {label}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              </View>
-            </View>
-          </View>
-
-          {/* SUPPORT — Play Store rating only makes sense on Android */}
-          {Platform.OS !== 'web' && (
-            <>
-              <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>SUPPORT</Text>
+            {/* AUDIO */}
+            <View style={styles.sectionBlock}>
+              <Text style={styles.sectionLabel}>AUDIO</Text>
               <View style={styles.card}>
-                <Pressable
-                  onPress={handleRate}
-                  style={({ pressed }) => [styles.cardRow, pressed && { opacity: 0.6 }]}
-                  accessibilityRole="link"
-                  accessibilityLabel="Rate the app on the Play Store"
-                >
-                  <Ionicons name="star-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
+                <View style={styles.cardRow}>
+                  <Ionicons name="mic-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
                   <View style={styles.rowBody}>
-                    <Text style={styles.rowLabel}>Rate the App</Text>
-                    <Text style={styles.rowDesc}>Enjoying Harp2Tab? Leave us a review on the Play Store.</Text>
+                    <Text style={styles.rowLabel}>Mic Sensitivity</Text>
+                    <Text style={styles.rowDesc}>Set how sensitive the mic is to your playing. Turn up to ignore ambient noise, turn down to catch quieter notes.</Text>
+                    <View style={styles.sliderWrapper}>
+                      <SliderInput
+                        value={micSensitivity}
+                        min={0}
+                        max={100}
+                        step={1}
+                        onChange={setMicSensitivity}
+                        formatLabel={(v) => `${v}%`}
+                      />
+                    </View>
+                  </View>
+                </View>
+                <View style={styles.separator} />
+                <Pressable
+                  onPress={() => router.push('/onboarding?skipPermission=true')}
+                  style={({ pressed, hovered }: any) => [
+                    styles.cardRow,
+                    styles.cardRowCursor,
+                    (pressed || (Platform.OS === 'web' && hovered)) && { opacity: 0.6 },
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Recalibrate microphone"
+                >
+                  <Ionicons name="options-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
+                  <View style={styles.rowBody}>
+                    <Text style={styles.rowLabel}>Recalibrate Mic</Text>
+                    <Text style={styles.rowDesc}>Redo the microphone setup to match your current environment.</Text>
                   </View>
                   <Ionicons name="chevron-forward" size={16} color={theme.textMuted} />
                 </Pressable>
               </View>
-            </>
-          )}
+            </View>
 
-          {/* LEGAL */}
-          <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>LEGAL</Text>
-          <View style={styles.card}>
-            <Pressable
-              onPress={() => Linking.openURL('https://tgaspe.github.io/harp2tab-privacy/')}
-              style={({ pressed }) => [styles.cardRow, pressed && { opacity: 0.6 }]}
-              accessibilityRole="link"
-              accessibilityLabel="Privacy Policy"
-            >
-              <Ionicons name="shield-checkmark-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
-              <View style={styles.rowBody}>
-                <Text style={styles.rowLabel}>Privacy Policy</Text>
-                <Text style={styles.rowDesc}>How we handle your data</Text>
+            {/* APPEARANCE */}
+            <View style={styles.sectionBlock}>
+              <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>APPEARANCE</Text>
+              <View style={styles.card}>
+                <View style={styles.cardRow}>
+                  <Ionicons name="contrast-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
+                  <View style={styles.rowBody}>
+                    <Text style={styles.rowLabel}>Theme</Text>
+                    <Text style={styles.rowDesc}>Choose display mode or follow system</Text>
+                    <View style={styles.segmented}>
+                      {THEME_SEGMENTS.map(({ value, label }) => {
+                        const active = themeOverride === value;
+                        return (
+                          <Pressable
+                            key={value}
+                            onPress={() => setThemeOverride(value)}
+                            style={[styles.segment, active && styles.segmentActive]}
+                            accessibilityRole="radio"
+                            accessibilityState={{ checked: active }}
+                            accessibilityLabel={`${label} theme`}
+                          >
+                            <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
+                              {label}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </View>
+                </View>
               </View>
-              <Ionicons name="chevron-forward" size={16} color={theme.textMuted} />
-            </Pressable>
+            </View>
+
+            {/* SUPPORT — Play Store rating only makes sense on Android */}
+            {Platform.OS !== 'web' && (
+              <View style={styles.sectionBlock}>
+                <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>SUPPORT</Text>
+                <View style={styles.card}>
+                  <Pressable
+                    onPress={handleRate}
+                    style={({ pressed }) => [styles.cardRow, pressed && { opacity: 0.6 }]}
+                    accessibilityRole="link"
+                    accessibilityLabel="Rate the app on the Play Store"
+                  >
+                    <Ionicons name="star-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
+                    <View style={styles.rowBody}>
+                      <Text style={styles.rowLabel}>Rate the App</Text>
+                      <Text style={styles.rowDesc}>Enjoying Harp2Tab? Leave us a review on the Play Store.</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={16} color={theme.textMuted} />
+                  </Pressable>
+                </View>
+              </View>
+            )}
+
+            {/* LEGAL */}
+            <View style={styles.sectionBlock}>
+              <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>LEGAL</Text>
+              <View style={styles.card}>
+                <Pressable
+                  onPress={() => Linking.openURL('https://tgaspe.github.io/harp2tab-privacy/')}
+                  style={({ pressed, hovered }: any) => [
+                    styles.cardRow,
+                    styles.cardRowCursor,
+                    (pressed || (Platform.OS === 'web' && hovered)) && { opacity: 0.6 },
+                  ]}
+                  accessibilityRole="link"
+                  accessibilityLabel="Privacy Policy"
+                >
+                  <Ionicons name="shield-checkmark-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
+                  <View style={styles.rowBody}>
+                    <Text style={styles.rowLabel}>Privacy Policy</Text>
+                    <Text style={styles.rowDesc}>How we handle your data</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color={theme.textMuted} />
+                </Pressable>
+              </View>
+            </View>
+
           </View>
 
         </ScrollView>
@@ -191,9 +215,10 @@ function createStyles(t: Theme) {
     safe:      { flex: 1, backgroundColor: t.bg },
     container: {
       flex: 1,
+      ...webMaxWidth(WEB_CONTENT_WIDTH.wide),
       paddingHorizontal: 24,
-      paddingTop: 16,
-      paddingBottom: 24,
+      paddingTop: Platform.OS === 'web' ? WEB_SCREEN_PADDING_TOP : 16,
+      paddingBottom: Platform.OS === 'web' ? WEB_SCREEN_PADDING_BOTTOM : 24,
       gap: 12,
     },
     backBtn:  { alignSelf: 'flex-start', padding: 4 },
@@ -213,6 +238,14 @@ function createStyles(t: Theme) {
       letterSpacing: 1.4,
     },
     sectionLabelSpaced: { marginTop: 12 },
+    sectionsGrid: Platform.select({
+      web: { flexDirection: 'row', flexWrap: 'wrap', gap: 16 },
+      default: {},
+    }) as ViewStyle,
+    sectionBlock: Platform.select({
+      web: { flexBasis: 440, flexGrow: 1 },
+      default: {},
+    }) as ViewStyle,
 
     premiumBanner: {
       flexDirection:   'row',
@@ -222,7 +255,8 @@ function createStyles(t: Theme) {
       borderRadius:    14,
       paddingVertical: 18,
       paddingHorizontal: 18,
-    },
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
     premiumBody:  { flex: 1, gap: 2 },
     premiumTitle: {
       fontSize:   FONT.md,
@@ -250,6 +284,10 @@ function createStyles(t: Theme) {
       paddingHorizontal: 16,
       gap:             12,
     },
+    // Only for cardRow instances that are actually Pressable (not the plain
+    // View rows like Mic Sensitivity) — keeps cursor:pointer semantically
+    // accurate.
+    cardRowCursor: Platform.OS === 'web' ? ({ cursor: 'pointer' } as ViewStyle) : {},
     rowIcon:   { marginTop: 2 },
     rowBody:   { flex: 1, gap: 4 },
     rowLabel: {

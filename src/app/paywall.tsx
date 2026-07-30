@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo } from 'react';
-import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Platform, Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -8,6 +8,7 @@ import { useIAP } from '@/hooks/useIAP';
 import { FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { RATING_BONUS, RECORDING_LIMIT, useSettingsStore } from '@/store/useSettingsStore';
+import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
 import type { Theme } from '@/theme';
 
 const PERKS = [
@@ -80,10 +81,10 @@ export default function PaywallScreen() {
           <Pressable
             onPress={buy}
             disabled={busy || !product}
-            style={({ pressed }) => [
+            style={({ pressed, hovered }: any) => [
               styles.buyBtn,
               (busy || !product) && styles.buyBtnDisabled,
-              pressed && !busy && !!product && styles.buyBtnPressed,
+              (pressed || (Platform.OS === 'web' && hovered)) && !busy && !!product && styles.buyBtnPressed,
             ]}
             accessibilityRole="button"
             accessibilityLabel="Unlock Full App"
@@ -103,7 +104,10 @@ export default function PaywallScreen() {
         <Pressable
           onPress={restore}
           disabled={busy}
-          style={({ pressed }) => [styles.restoreBtn, pressed && { opacity: 0.6 }]}
+          style={({ pressed, hovered }: any) => [
+            styles.restoreBtn,
+            (pressed || (Platform.OS === 'web' && hovered)) && { opacity: 0.6 },
+          ]}
           accessibilityRole="button"
           accessibilityLabel="Restore Purchase"
         >
@@ -123,9 +127,10 @@ function createStyles(t: Theme) {
     safe:      { flex: 1, backgroundColor: t.bg },
     container: {
       flex: 1,
+      ...webMaxWidth(WEB_CONTENT_WIDTH.narrow),
       paddingHorizontal: 28,
       paddingTop:        16,
-      paddingBottom:     32,
+      paddingBottom:     Platform.OS === 'web' ? WEB_SCREEN_PADDING_BOTTOM : 32,
       alignItems:        'center',
     },
 
@@ -219,7 +224,8 @@ function createStyles(t: Theme) {
       backgroundColor: t.accent,
       borderRadius:    14,
       paddingVertical: 18,
-    },
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
     buyBtnDisabled: { backgroundColor: t.surface },
     buyBtnPressed:  { opacity: 0.85 },
     buyBtnText: {
@@ -232,7 +238,8 @@ function createStyles(t: Theme) {
       marginTop:      16,
       paddingVertical: 8,
       alignItems:      'center',
-    },
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
     restoreBtnText: {
       fontSize:           FONT.sm,
       fontFamily:         Poppins.regular,

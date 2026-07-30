@@ -57,12 +57,17 @@ Join our community of developers creating universal apps.
 
 ## Roadmap
 
-- [ ] Audio upload tab transcription feature
-- [ ] Redo editing feature
+- [ ] Audio upload tab transcription feature, with automatic harmonica key detection (no manual key picker needed for uploaded audio)
+- [ ] Piano-roll style editor (Signal-like): drag notes up/down across harmonica-playable pitches, resize/move in time, with playback
 - [ ] Better monetization model
 - [ ] Web version
 - [ ] iOS version
 - [ ] Developer tool for data visualization: frame-by-frame view of detected note, loudness, and note segmentation
+- [ ] Improve web UI
+- [ ] User account creation
+- [ ] Playback of the edited tab
+- [ ] Recording history/library
+- [ ] Improve tab rendering (harmonica tab arrows)
 
 ## Web Version Plan
 

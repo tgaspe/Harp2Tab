@@ -10,8 +10,9 @@ import type { HarmonicaKey, HarmonicaType } from '@/types';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Platform, Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_TOP, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
 
 export default function KeySelectionScreen() {
   const router         = useRouter();
@@ -60,25 +61,27 @@ export default function KeySelectionScreen() {
       />
       <View style={styles.container}>
 
-        {/* Header */}
+        {/* Header — TopBar covers logo/gear on web */}
         <View style={styles.header}>
-          <View style={styles.headerTop}>
-            <View style={styles.titleRow}>
-              <Image
-                source={require('../../assets/images/harp2tab-icon.png')}
-                style={styles.titleIcon}
-              />
-              <Text style={styles.appTitle}>Harp2Tab</Text>
+          {Platform.OS !== 'web' && (
+            <View style={styles.headerTop}>
+              <View style={styles.titleRow}>
+                <Image
+                  source={require('../../assets/images/harp2tab-icon.png')}
+                  style={styles.titleIcon}
+                />
+                <Text style={styles.appTitle}>Harp2Tab</Text>
+              </View>
+              <Pressable
+                onPress={() => router.push('/settings')}
+                style={({ pressed }) => [styles.gearBtn, pressed && { opacity: 0.6 }]}
+                accessibilityRole="button"
+                accessibilityLabel="Open settings"
+              >
+                <Ionicons name="settings-outline" size={28} color={theme.textSub} />
+              </Pressable>
             </View>
-            <Pressable
-              onPress={() => router.push('/settings')}
-              style={({ pressed }) => [styles.gearBtn, pressed && { opacity: 0.6 }]}
-              accessibilityRole="button"
-              accessibilityLabel="Open settings"
-            >
-              <Ionicons name="settings-outline" size={28} color={theme.textSub} />
-            </Pressable>
-          </View>
+          )}
           <Text style={styles.subtitle}>Pick a key to start recording.</Text>
         </View>
 
@@ -127,10 +130,10 @@ export default function KeySelectionScreen() {
         <Pressable
           onPress={handleStart}
           disabled={!selectedKey}
-          style={({ pressed }) => [
+          style={({ pressed, hovered }: any) => [
             styles.startBtn,
             !selectedKey && styles.startBtnDisabled,
-            pressed && !!selectedKey && styles.startBtnPressed,
+            (pressed || (Platform.OS === 'web' && hovered)) && !!selectedKey && styles.startBtnPressed,
           ]}
           accessibilityRole="button"
           accessibilityLabel="Start Recording"
@@ -158,9 +161,10 @@ function createStyles(t: Theme) {
     safe:      { flex: 1, backgroundColor: t.bg },
     container: {
       flex: 1,
+      ...webMaxWidth(WEB_CONTENT_WIDTH.compact),
       paddingHorizontal: 24,
-      paddingTop: 36,
-      paddingBottom: 24,
+      paddingTop: Platform.OS === 'web' ? WEB_SCREEN_PADDING_TOP : 36,
+      paddingBottom: Platform.OS === 'web' ? WEB_SCREEN_PADDING_BOTTOM : 24,
     },
     header:    { marginBottom: 40 },
     headerTop: {
@@ -188,7 +192,7 @@ function createStyles(t: Theme) {
       fontSize:   FONT.base,
       fontFamily: Poppins.regular,
       color:      t.textSub,
-      marginTop:  40,
+      marginTop:  Platform.OS === 'web' ? 0 : 40,
     },
     section: { gap: 12 },
     segmented: {
@@ -234,12 +238,13 @@ function createStyles(t: Theme) {
       color:      t.accent,
     },
     startBtn: {
-      marginTop: 'auto',
+      marginTop: Platform.OS === 'web' ? 32 : 'auto',
       backgroundColor: t.accent,
       borderRadius: 14,
       paddingVertical: 18,
       alignItems: 'center',
-    },
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
     startBtnDisabled: { backgroundColor: t.surface },
     startBtnPressed:  { backgroundColor: t.accentDim },
     startBtnText: {

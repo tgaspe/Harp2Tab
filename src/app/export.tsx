@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -11,6 +11,7 @@ import { useAppStore, selectKey, selectTabNotes, selectExportFmt, selectHarmonic
 import { generateForFormat } from '@/export/generators';
 import { EXPORT_FORMATS, FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
+import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_TOP, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
 import type { Theme } from '@/theme';
 import type { ExportFormat } from '@/types';
 
@@ -119,46 +120,62 @@ export default function ExportScreen() {
     <SafeAreaView style={styles.safe}>
       <View style={styles.container}>
 
-        {/* Nav */}
-        <View style={styles.navRow}>
-          <Pressable
-            onPress={() => router.back()}
-            style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.6 }]}
-            accessibilityRole="button"
-            accessibilityLabel="Go back"
-          >
-            <Ionicons name="arrow-back" size={28} color={theme.accent} />
-          </Pressable>
-          <Pressable
-            onPress={handleNewRecording}
-            style={({ pressed }) => [styles.newPill, pressed && { opacity: 0.6 }]}
-            accessibilityRole="button"
-            accessibilityLabel="New Recording"
-          >
-            <Ionicons name="mic-outline" size={14} color={theme.textSub} />
-            <Text style={styles.newPillText}>New Recording</Text>
-          </Pressable>
-          <Pressable
-            onPress={() => router.push('/settings')}
-            style={({ pressed }) => [styles.gearBtn, pressed && { opacity: 0.6 }]}
-            accessibilityRole="button"
-            accessibilityLabel="Open settings"
-          >
-            <Ionicons name="settings-outline" size={28} color={theme.textSub} />
-          </Pressable>
-        </View>
+        {/* Nav — TopBar's back chevron + gear cover this on web */}
+        {Platform.OS !== 'web' && (
+          <View style={styles.navRow}>
+            <Pressable
+              onPress={() => router.back()}
+              style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.6 }]}
+              accessibilityRole="button"
+              accessibilityLabel="Go back"
+            >
+              <Ionicons name="arrow-back" size={28} color={theme.accent} />
+            </Pressable>
+            <Pressable
+              onPress={handleNewRecording}
+              style={({ pressed }) => [styles.newPill, pressed && { opacity: 0.6 }]}
+              accessibilityRole="button"
+              accessibilityLabel="New Recording"
+            >
+              <Ionicons name="mic-outline" size={14} color={theme.textSub} />
+              <Text style={styles.newPillText}>New Recording</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => router.push('/settings')}
+              style={({ pressed }) => [styles.gearBtn, pressed && { opacity: 0.6 }]}
+              accessibilityRole="button"
+              accessibilityLabel="Open settings"
+            >
+              <Ionicons name="settings-outline" size={28} color={theme.textSub} />
+            </Pressable>
+          </View>
+        )}
 
-        {/* Header */}
+        {/* Header — "New Recording" is a real action (not nav chrome), so it
+            moves in here on web instead of disappearing with navRow. */}
         <View style={styles.header}>
-          <Text style={styles.title}>Export</Text>
-          <View style={styles.metaRow}>
-            <View style={styles.metaBadge}>
-              <Text style={styles.metaBadgeText}>Key of {selectedKey ?? '—'}</Text>
-            </View>
-            <View style={styles.metaBadge}>
-              <Text style={styles.metaBadgeText}>{tabNotes.length} notes</Text>
+          <View>
+            <Text style={styles.title}>Export</Text>
+            <View style={styles.metaRow}>
+              <View style={styles.metaBadge}>
+                <Text style={styles.metaBadgeText}>Key of {selectedKey ?? '—'}</Text>
+              </View>
+              <View style={styles.metaBadge}>
+                <Text style={styles.metaBadgeText}>{tabNotes.length} notes</Text>
+              </View>
             </View>
           </View>
+          {Platform.OS === 'web' && (
+            <Pressable
+              onPress={handleNewRecording}
+              style={({ pressed }) => [styles.newPill, pressed && { opacity: 0.6 }]}
+              accessibilityRole="button"
+              accessibilityLabel="New Recording"
+            >
+              <Ionicons name="mic-outline" size={14} color={theme.textSub} />
+              <Text style={styles.newPillText}>New Recording</Text>
+            </Pressable>
+          )}
         </View>
 
         {/* Format picker */}
@@ -188,10 +205,10 @@ export default function ExportScreen() {
           <Pressable
             onPress={handleSave}
             disabled={tabNotes.length === 0 || isExporting}
-            style={({ pressed }) => [
+            style={({ pressed, hovered }: any) => [
               styles.saveBtn,
               (tabNotes.length === 0 || isExporting) && styles.btnDisabled,
-              pressed && tabNotes.length > 0 && !isExporting && styles.saveBtnPressed,
+              (pressed || (Platform.OS === 'web' && hovered)) && tabNotes.length > 0 && !isExporting && styles.saveBtnPressed,
             ]}
             accessibilityRole="button"
             accessibilityLabel="Save to Device"
@@ -206,10 +223,10 @@ export default function ExportScreen() {
           <Pressable
             onPress={handleShare}
             disabled={tabNotes.length === 0 || isExporting}
-            style={({ pressed }) => [
+            style={({ pressed, hovered }: any) => [
               styles.shareBtn,
               (tabNotes.length === 0 || isExporting) && styles.btnDisabled,
-              pressed && tabNotes.length > 0 && !isExporting && styles.shareBtnPressed,
+              (pressed || (Platform.OS === 'web' && hovered)) && tabNotes.length > 0 && !isExporting && styles.shareBtnPressed,
             ]}
             accessibilityRole="button"
             accessibilityLabel="Share File"
@@ -233,15 +250,19 @@ function createStyles(t: Theme) {
     safe:      { flex: 1, backgroundColor: t.bg },
     container: {
       flex: 1,
+      ...webMaxWidth(WEB_CONTENT_WIDTH.standard),
       paddingHorizontal: 24,
-      paddingTop: 16,
-      paddingBottom: 24,
+      paddingTop: Platform.OS === 'web' ? WEB_SCREEN_PADDING_TOP : 16,
+      paddingBottom: Platform.OS === 'web' ? WEB_SCREEN_PADDING_BOTTOM : 24,
       gap: 16,
     },
     navRow:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
     backBtn: { padding: 4 },
     gearBtn: { padding: 4 },
-    header: { gap: 10, marginTop: -8 },
+    header: Platform.select({
+      web: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 },
+      default: { gap: 10, marginTop: -8 },
+    }) as ViewStyle,
     title: {
       fontSize:      FONT.xl,
       fontFamily:    SpaceGrotesk.bold,
@@ -277,10 +298,10 @@ function createStyles(t: Theme) {
       borderColor: t.border,
       overflow: 'hidden',
     },
-    buttonRow: {
-      flexDirection: 'column',
-      gap: 10,
-    },
+    buttonRow: Platform.select({
+      web: { flexDirection: 'row', gap: 10 },
+      default: { flexDirection: 'column', gap: 10 },
+    }) as ViewStyle,
     saveBtn: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -291,7 +312,8 @@ function createStyles(t: Theme) {
       paddingVertical: 18,
       borderWidth: 1,
       borderColor: t.accent,
-    },
+      ...(Platform.OS === 'web' ? { flex: 1, cursor: 'pointer' } : null),
+    } as ViewStyle,
     saveBtnPressed:  { opacity: 0.7 },
     saveBtnText:     { fontSize: FONT.md, fontFamily: Poppins.bold, color: t.accent },
     shareBtn: {
@@ -302,7 +324,8 @@ function createStyles(t: Theme) {
       backgroundColor: t.accent,
       borderRadius: 14,
       paddingVertical: 18,
-    },
+      ...(Platform.OS === 'web' ? { flex: 1, cursor: 'pointer' } : null),
+    } as ViewStyle,
     shareBtnPressed:  { backgroundColor: t.accentDim },
     shareBtnText:     { fontSize: FONT.md, fontFamily: Poppins.bold, color: '#fff' },
     btnDisabled:      { backgroundColor: t.surface, borderColor: t.border },

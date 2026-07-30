@@ -3,6 +3,7 @@ import { FONT } from '@/constants/keys';
 import { useTheme } from '@/hooks/useTheme';
 import { addAudioFrameListener, startCapture, stopCapture, setThreshold } from '@/native/AudioCapture';
 import { useSettingsStore } from '@/store/useSettingsStore';
+import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
 import type { Theme } from '@/theme';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -438,9 +439,10 @@ function createStyles(t: Theme) {
     safe:      { flex: 1, backgroundColor: t.bg },
     container: {
       flex: 1,
+      ...webMaxWidth(WEB_CONTENT_WIDTH.narrow),
       paddingHorizontal: 24,
       paddingTop: 24,
-      paddingBottom: 32,
+      paddingBottom: Platform.OS === 'web' ? WEB_SCREEN_PADDING_BOTTOM : 32,
       justifyContent: 'center',
     },
 

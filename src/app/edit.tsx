@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 import { FlatList } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -13,6 +13,7 @@ import { useTheme } from '@/hooks/useTheme';
 import { useAppStore, selectTabNotes, selectKey, selectHarmonicaType, selectCanUndo } from '@/store/useAppStore';
 import { FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
+import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_TOP, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
 import type { Theme } from '@/theme';
 import type { TabNote } from '@/types';
 
@@ -90,14 +91,16 @@ export default function EditScreen() {
         <View style={styles.header}>
           <View style={styles.headerTop}>
             <Text style={styles.title}>Edit</Text>
-            <Pressable
-              onPress={() => router.push('/settings')}
-              style={({ pressed }) => [styles.gearBtn, pressed && { opacity: 0.6 }]}
-              accessibilityRole="button"
-              accessibilityLabel="Open settings"
-            >
-              <Ionicons name="settings-outline" size={28} color={theme.textSub} />
-            </Pressable>
+            {Platform.OS !== 'web' && (
+              <Pressable
+                onPress={() => router.push('/settings')}
+                style={({ pressed }) => [styles.gearBtn, pressed && { opacity: 0.6 }]}
+                accessibilityRole="button"
+                accessibilityLabel="Open settings"
+              >
+                <Ionicons name="settings-outline" size={28} color={theme.textSub} />
+              </Pressable>
+            )}
           </View>
           <Text style={styles.subtitle}>
             {tabNotes.length} note{tabNotes.length !== 1 ? 's' : ''}
@@ -142,11 +145,11 @@ export default function EditScreen() {
         <View style={styles.actions}>
           <Pressable
             onPress={undo}
-            style={({ pressed }) => [
+            style={({ pressed, hovered }: any) => [
               styles.btn,
               styles.btnGhost,
               !canUndo && styles.btnFilledDisabled,
-              pressed && styles.btnPressed,
+              (pressed || (Platform.OS === 'web' && hovered)) && styles.btnPressed,
             ]}
             accessibilityRole="button"
             accessibilityLabel="Undo last action"
@@ -158,7 +161,11 @@ export default function EditScreen() {
 
           <Pressable
             onPress={handleNewRecording}
-            style={({ pressed }) => [styles.btn, styles.btnGhost, pressed && styles.btnPressed]}
+            style={({ pressed, hovered }: any) => [
+              styles.btn,
+              styles.btnGhost,
+              (pressed || (Platform.OS === 'web' && hovered)) && styles.btnPressed,
+            ]}
             accessibilityRole="button"
             accessibilityLabel="New Recording"
           >
@@ -168,7 +175,11 @@ export default function EditScreen() {
 
           <Pressable
             onPress={handleAddNote}
-            style={({ pressed }) => [styles.btn, styles.btnOutlined, pressed && styles.btnPressed]}
+            style={({ pressed, hovered }: any) => [
+              styles.btn,
+              styles.btnOutlined,
+              (pressed || (Platform.OS === 'web' && hovered)) && styles.btnPressed,
+            ]}
             accessibilityRole="button"
             accessibilityLabel="Add Note"
           >
@@ -179,11 +190,11 @@ export default function EditScreen() {
           <Pressable
             onPress={() => router.push('/export')}
             disabled={tabNotes.length === 0}
-            style={({ pressed }) => [
+            style={({ pressed, hovered }: any) => [
               styles.btn,
               styles.btnFilled,
               tabNotes.length === 0 && styles.btnFilledDisabled,
-              pressed && tabNotes.length > 0 && styles.btnPressed,
+              (pressed || (Platform.OS === 'web' && hovered)) && tabNotes.length > 0 && styles.btnPressed,
             ]}
             accessibilityRole="button"
             accessibilityLabel="Go to Export"
@@ -213,9 +224,10 @@ function createStyles(t: Theme) {
     safe:      { flex: 1, backgroundColor: t.bg },
     container: {
       flex: 1,
+      ...webMaxWidth(WEB_CONTENT_WIDTH.standard),
       paddingHorizontal: 24,
-      paddingTop: 24,
-      paddingBottom: 24,
+      paddingTop: Platform.OS === 'web' ? WEB_SCREEN_PADDING_TOP : 24,
+      paddingBottom: Platform.OS === 'web' ? WEB_SCREEN_PADDING_BOTTOM : 24,
       gap: 16,
     },
     header:    { gap: 4 },
@@ -244,7 +256,8 @@ function createStyles(t: Theme) {
       borderRadius:    14,
       borderWidth:     1,
       gap:             5,
-    },
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
     btnGhost: {
       backgroundColor: t.surface,
       borderColor:     t.border,
