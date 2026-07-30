@@ -11,9 +11,10 @@ import DraggableFlatList, {
 import { TabCard } from '@/components/TabCard';
 import { PianoRoll } from '@/components/PianoRoll';
 import { useTheme } from '@/hooks/useTheme';
-import { useAppStore, selectTabNotes, selectKey, selectHarmonicaType, selectCanUndo, selectBpm, selectMetronomeEnabled } from '@/store/useAppStore';
+import { useAppStore, selectTabNotes, selectKey, selectHarmonicaType, selectCanUndo, selectCanRedo, selectBpm, selectMetronomeEnabled } from '@/store/useAppStore';
 import { saveCurrentSessionToLibrary } from '@/store/sessionSnapshot';
 import { usePlayback } from '@/hooks/usePlayback';
+import { PLAYBACK_RATES } from '@/audio/tempo';
 import { FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_TOP, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
@@ -34,11 +35,16 @@ export default function EditScreen() {
   const reset        = useAppStore((s) => s.reset);
   const canUndo      = useAppStore(selectCanUndo);
   const undo         = useAppStore((s) => s.undo);
+  const canRedo      = useAppStore(selectCanRedo);
+  const redo         = useAppStore((s) => s.redo);
   const bpm               = useAppStore(selectBpm);
   const setBpm            = useAppStore((s) => s.setBpm);
   const metronomeEnabled  = useAppStore(selectMetronomeEnabled);
   const setMetronomeEnabled = useAppStore((s) => s.setMetronomeEnabled);
-  const { isPlaying, isPaused, currentTimeMs, play, pause, resume, stop } = usePlayback();
+  const {
+    isPlaying, isPaused, currentTimeMs, play, pause, resume, stop, seek,
+    loopEnabled, setLoopEnabled, playbackRate, setPlaybackRate,
+  } = usePlayback();
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [justSaved, setJustSaved] = useState(false);
@@ -107,9 +113,14 @@ export default function EditScreen() {
   }
 
   function handlePlayToggle() {
-    if (!isPlaying) { play(tabNotes, { bpm, metronomeEnabled }); return; }
+    if (!isPlaying) { play(tabNotes, { bpm, metronomeEnabled, rate: playbackRate }); return; }
     if (isPaused) { resume(); return; }
     pause();
+  }
+
+  function handleCycleRate() {
+    const i = PLAYBACK_RATES.indexOf(playbackRate as (typeof PLAYBACK_RATES)[number]);
+    setPlaybackRate(PLAYBACK_RATES[(i + 1) % PLAYBACK_RATES.length]);
   }
 
   function formatElapsed(ms: number): string {
@@ -118,6 +129,10 @@ export default function EditScreen() {
     const s = totalSeconds % 60;
     return `${m}:${String(s).padStart(2, '0')}`;
   }
+
+  const totalTimeMs = tabNotes.length
+    ? tabNotes.reduce((max, n) => Math.max(max, n.start_time + n.duration), 0)
+    : 0;
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -136,6 +151,8 @@ export default function EditScreen() {
             setMetronomeEnabled={setMetronomeEnabled}
             canUndo={canUndo}
             onUndo={undo}
+            canRedo={canRedo}
+            onRedo={redo}
             justSaved={justSaved}
             onSave={handleSaveToLibrary}
             onInspectFrames={() => router.push('/frame-inspector')}
@@ -270,11 +287,33 @@ export default function EditScreen() {
         )}
 
         {tabNotes.length === 0 ? (
-          <View style={styles.empty}>
-            <Ionicons name="musical-notes-outline" size={48} color={theme.textMuted} />
-            <Text style={styles.emptyTitle}>Nothing here yet</Text>
-            <Text style={styles.emptyHint}>Go back and record something first.</Text>
-          </View>
+          Platform.OS === 'web' ? (
+            <View style={styles.empty}>
+              <View style={styles.emptyIconWrap}>
+                <Ionicons name="musical-notes-outline" size={40} color={theme.accent} />
+              </View>
+              <Text style={styles.emptyTitle}>Nothing to edit yet</Text>
+              <Text style={styles.emptyHint}>Record a tab and it will show up here, ready to fine-tune.</Text>
+              <Pressable
+                onPress={handleNewRecording}
+                style={({ pressed, hovered }: any) => [
+                  styles.emptyCta,
+                  (pressed || hovered) && styles.webBtnHoverFilled,
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel="Start a New Recording"
+              >
+                <Ionicons name="mic-outline" size={16} color="#fff" />
+                <Text style={styles.emptyCtaText}>Start a New Recording</Text>
+              </Pressable>
+            </View>
+          ) : (
+            <View style={styles.empty}>
+              <Ionicons name="musical-notes-outline" size={48} color={theme.textMuted} />
+              <Text style={styles.emptyTitle}>Nothing here yet</Text>
+              <Text style={styles.emptyHint}>Go back and record something first.</Text>
+            </View>
+          )
         ) : viewMode === 'list' ? (
           <DraggableFlatList
             ref={listRef}
@@ -301,18 +340,22 @@ export default function EditScreen() {
             activationDistance={1}
           />
         ) : (
-          <PianoRoll
-            notes={tabNotes}
-            harmonicaKey={harmonicaKey}
-            harmonicaType={harmonicaType}
-            bpm={bpm}
-            selectedId={selectedId}
-            onSelect={handleSelect}
-            onUpdate={updateNote}
-            onDelete={deleteNote}
-            isPlaying={isPlaying}
-            currentTimeMs={currentTimeMs}
-          />
+          <View style={styles.pianoRollEdgeWrap}>
+            <PianoRoll
+              notes={tabNotes}
+              harmonicaKey={harmonicaKey}
+              harmonicaType={harmonicaType}
+              bpm={bpm}
+              selectedId={selectedId}
+              onSelect={handleSelect}
+              onCreate={addTabNote}
+              onUpdate={updateNote}
+              onDelete={deleteNote}
+              isPlaying={isPlaying}
+              currentTimeMs={currentTimeMs}
+              onSeek={seek}
+            />
+          </View>
         )}
 
         {Platform.OS === 'web' ? (
@@ -323,7 +366,12 @@ export default function EditScreen() {
             onPlayToggle={handlePlayToggle}
             onStop={stop}
             currentTimeMs={currentTimeMs}
+            totalTimeMs={totalTimeMs}
             formatElapsed={formatElapsed}
+            loopEnabled={loopEnabled}
+            onToggleLoop={() => setLoopEnabled(!loopEnabled)}
+            playbackRate={playbackRate}
+            onCycleRate={handleCycleRate}
             theme={theme}
             styles={styles}
           />
@@ -434,15 +482,75 @@ export default function EditScreen() {
 }
 
 // ─── Web-only chrome ────────────────────────────────────────────────────────────
-// A real desktop toolbar/transport bar — compact icon buttons in a couple of dense
-// rows, not the mobile-style stacked full-width touch targets native still uses.
+// A real desktop toolbar/transport bar — compact icon buttons grouped into clusters
+// with dividers between them, not the mobile-style stacked full-width touch targets
+// native still uses.
 
 type EditStyles = ReturnType<typeof createStyles>;
+
+// Thin vertical rule separating logical clusters of controls within a toolbar row —
+// used instead of just relying on `gap` so groups read as distinct at a glance.
+function Divider({ styles }: { styles: EditStyles }) {
+  return <View style={styles.toolbarDivider} />;
+}
+
+// Shared icon-only control for the toolbar/transport bar — every one of these gets a
+// hover tooltip (the brief specifically calls out "every icon should have a tooltip"),
+// and a `variant` so secondary utility icons stay visually quiet while the handful of
+// primary/active ones (Export, Metronome-on, Loop-on) stand out.
+function IconButton({
+  icon, label, onPress, variant = 'ghost', disabled, selected, theme, styles, iconSize = 14,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  onPress: () => void;
+  variant?: 'ghost' | 'primary' | 'active';
+  disabled?: boolean;
+  /** Exposed as accessibilityState.selected — for toggle buttons like Metronome/Loop
+   *  (variant='active' drives the visual, this drives the a11y announcement). */
+  selected?: boolean;
+  theme: Theme;
+  styles: EditStyles;
+  iconSize?: number;
+}) {
+  const [tooltipVisible, setTooltipVisible] = useState(false);
+  const iconColor = disabled
+    ? theme.textMuted
+    : variant === 'ghost' ? theme.textSub : '#fff';
+
+  return (
+    <View style={styles.iconBtnWrap}>
+      <Pressable
+        onPress={onPress}
+        disabled={disabled}
+        onHoverIn={() => setTooltipVisible(true)}
+        onHoverOut={() => setTooltipVisible(false)}
+        style={({ hovered }: any) => [
+          styles.webIconBtn,
+          variant === 'primary' && styles.webIconBtnAccent,
+          variant === 'active' && styles.webIconBtnActive,
+          variant === 'ghost' && !disabled && hovered && styles.webIconBtnHover,
+          disabled && styles.webBtnDisabled,
+        ]}
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        accessibilityState={{ disabled, selected }}
+      >
+        <Ionicons name={icon} size={iconSize} color={iconColor} />
+      </Pressable>
+      {tooltipVisible && !disabled && (
+        <View style={styles.tooltip} pointerEvents="none">
+          <Text style={styles.tooltipText} numberOfLines={1}>{label}</Text>
+        </View>
+      )}
+    </View>
+  );
+}
 
 function WebToolbar({
   tabNotesLength, viewMode, setViewMode, harmonicaKey, harmonicaType,
   bpm, setBpm, metronomeEnabled, setMetronomeEnabled,
-  canUndo, onUndo, justSaved, onSave, onInspectFrames, onNew, onAdd, onExport, theme, styles,
+  canUndo, onUndo, canRedo, onRedo, justSaved, onSave, onInspectFrames, onNew, onAdd, onExport, theme, styles,
 }: {
   tabNotesLength: number;
   viewMode: 'list' | 'pianoRoll';
@@ -455,6 +563,8 @@ function WebToolbar({
   setMetronomeEnabled: (v: boolean) => void;
   canUndo: boolean;
   onUndo: () => void;
+  canRedo: boolean;
+  onRedo: () => void;
   justSaved: boolean;
   onSave: () => void;
   onInspectFrames: () => void;
@@ -466,6 +576,7 @@ function WebToolbar({
 }) {
   return (
     <View style={styles.webToolbar}>
+      {/* View + Project cluster */}
       <View style={styles.webToolbarGroup}>
         <View style={styles.webToggle}>
           <Pressable
@@ -491,7 +602,10 @@ function WebToolbar({
         </View>
 
         {tabNotesLength > 0 && (
-          <Text style={styles.webNoteCount}>{tabNotesLength} note{tabNotesLength !== 1 ? 's' : ''}</Text>
+          <>
+            <Divider styles={styles} />
+            <Text style={styles.webNoteCount}>{tabNotesLength} note{tabNotesLength !== 1 ? 's' : ''}</Text>
+          </>
         )}
 
         {tabNotesLength > 0 && harmonicaKey && (
@@ -504,6 +618,7 @@ function WebToolbar({
 
         {tabNotesLength > 0 && viewMode === 'pianoRoll' && (
           <>
+            <Divider styles={styles} />
             <View style={styles.webBpmControl}>
               <Pressable onPress={() => setBpm(bpm - 5)} style={styles.webMiniStepBtn} accessibilityRole="button" accessibilityLabel="Decrease tempo">
                 <Ionicons name="remove" size={12} color={theme.textSub} />
@@ -513,80 +628,55 @@ function WebToolbar({
                 <Ionicons name="add" size={12} color={theme.textSub} />
               </Pressable>
             </View>
-            <Pressable
+            <IconButton
+              icon="musical-notes"
+              label={metronomeEnabled ? 'Disable metronome' : 'Enable metronome'}
               onPress={() => setMetronomeEnabled(!metronomeEnabled)}
-              style={({ hovered }: any) => [
-                styles.webIconBtn,
-                metronomeEnabled && styles.webIconBtnActive,
-                hovered && !metronomeEnabled && styles.webIconBtnHover,
-              ]}
-              accessibilityRole="button"
-              accessibilityLabel={metronomeEnabled ? 'Disable metronome' : 'Enable metronome'}
-              accessibilityState={{ selected: metronomeEnabled }}
-            >
-              <Ionicons name="musical-notes" size={14} color={metronomeEnabled ? '#fff' : theme.textSub} />
-            </Pressable>
+              variant={metronomeEnabled ? 'active' : 'ghost'}
+              selected={metronomeEnabled}
+              theme={theme}
+              styles={styles}
+            />
           </>
         )}
       </View>
 
+      {/* Edit + Actions + Export cluster */}
       <View style={styles.webToolbarGroup}>
-        <Pressable
-          onPress={onUndo}
-          disabled={!canUndo}
-          style={({ hovered }: any) => [styles.webIconBtn, canUndo && hovered && styles.webIconBtnHover]}
-          accessibilityRole="button"
-          accessibilityLabel="Undo last action"
-          accessibilityState={{ disabled: !canUndo }}
-        >
-          <Ionicons name="arrow-undo" size={14} color={canUndo ? theme.textSub : theme.textMuted} />
-        </Pressable>
-        <Pressable
-          onPress={onNew}
-          style={({ hovered }: any) => [styles.webIconBtn, hovered && styles.webIconBtnHover]}
-          accessibilityRole="button"
-          accessibilityLabel="New Recording"
-        >
-          <Ionicons name="mic-outline" size={14} color={theme.textSub} />
-        </Pressable>
-        <Pressable
-          onPress={onAdd}
-          style={({ hovered }: any) => [styles.webIconBtn, hovered && styles.webIconBtnHover]}
-          accessibilityRole="button"
-          accessibilityLabel="Add Note"
-        >
-          <Ionicons name="add" size={14} color={theme.textSub} />
-        </Pressable>
-        <Pressable
+        <IconButton icon="arrow-undo" label="Undo" onPress={onUndo} disabled={!canUndo} theme={theme} styles={styles} />
+        <IconButton icon="arrow-redo" label="Redo" onPress={onRedo} disabled={!canRedo} theme={theme} styles={styles} />
+
+        <Divider styles={styles} />
+
+        <IconButton icon="mic-outline" label="New Recording" onPress={onNew} theme={theme} styles={styles} />
+        <IconButton icon="add" label="Add Note" onPress={onAdd} theme={theme} styles={styles} />
+        <IconButton
+          icon={justSaved ? 'checkmark-circle' : 'bookmark-outline'}
+          label={justSaved ? 'Saved to recent recordings' : 'Save to recent recordings'}
           onPress={onSave}
           disabled={tabNotesLength === 0}
-          style={({ hovered }: any) => [styles.webIconBtn, tabNotesLength > 0 && hovered && styles.webIconBtnHover]}
-          accessibilityRole="button"
-          accessibilityLabel={justSaved ? 'Saved to recent recordings' : 'Save to recent recordings'}
-          accessibilityState={{ disabled: tabNotesLength === 0 }}
-        >
-          <Ionicons
-            name={justSaved ? 'checkmark-circle' : 'bookmark-outline'}
-            size={14}
-            color={tabNotesLength === 0 ? theme.textMuted : justSaved ? theme.accent : theme.textSub}
-          />
-        </Pressable>
-        <Pressable
+          variant={justSaved ? 'active' : 'ghost'}
+          theme={theme}
+          styles={styles}
+        />
+        <IconButton
+          icon="analytics-outline"
+          label="Inspect Frames"
           onPress={onInspectFrames}
           disabled={tabNotesLength === 0}
-          style={({ hovered }: any) => [styles.webIconBtn, tabNotesLength > 0 && hovered && styles.webIconBtnHover]}
-          accessibilityRole="button"
-          accessibilityLabel="Inspect frames"
-          accessibilityState={{ disabled: tabNotesLength === 0 }}
-        >
-          <Ionicons name="analytics-outline" size={14} color={tabNotesLength === 0 ? theme.textMuted : theme.textSub} />
-        </Pressable>
+          theme={theme}
+          styles={styles}
+        />
+
+        <Divider styles={styles} />
+
+        {/* The one labeled, filled button in the toolbar — Export is the "finish" action,
+            everything else here is a neutral, icon-only utility. */}
         <Pressable
           onPress={onExport}
           disabled={tabNotesLength === 0}
           style={({ pressed, hovered }: any) => [
-            styles.webIconBtn,
-            styles.webIconBtnAccent,
+            styles.exportBtn,
             tabNotesLength === 0 && styles.webBtnDisabled,
             (pressed || hovered) && tabNotesLength > 0 && styles.webBtnHoverFilled,
           ]}
@@ -595,6 +685,7 @@ function WebToolbar({
           accessibilityState={{ disabled: tabNotesLength === 0 }}
         >
           <Ionicons name="share-outline" size={14} color={tabNotesLength === 0 ? theme.textMuted : '#fff'} />
+          <Text style={[styles.exportBtnText, tabNotesLength === 0 && { color: theme.textMuted }]}>Export</Text>
         </Pressable>
       </View>
     </View>
@@ -602,7 +693,8 @@ function WebToolbar({
 }
 
 function WebTransportBar({
-  tabNotesLength, isPlaying, isPaused, onPlayToggle, onStop, currentTimeMs, formatElapsed, theme, styles,
+  tabNotesLength, isPlaying, isPaused, onPlayToggle, onStop, currentTimeMs, totalTimeMs, formatElapsed,
+  loopEnabled, onToggleLoop, playbackRate, onCycleRate, theme, styles,
 }: {
   tabNotesLength: number;
   isPlaying: boolean;
@@ -610,42 +702,68 @@ function WebTransportBar({
   onPlayToggle: () => void;
   onStop: () => void;
   currentTimeMs: number;
+  totalTimeMs: number;
   formatElapsed: (ms: number) => string;
+  loopEnabled: boolean;
+  onToggleLoop: () => void;
+  playbackRate: number;
+  onCycleRate: () => void;
   theme: Theme;
   styles: EditStyles;
 }) {
-  // Minimal, playback-only — Undo/New/Add/Export/Save/Inspect all live in the top
-  // toolbar now. Matches a real transport bar: just the controls for hearing the tab.
+  // A real transport: Loop / Stop / Play-Pause / Speed / elapsed-of-total time. Undo,
+  // New, Add, Export, Save, Inspect all live in the top toolbar now — this bar is only
+  // about hearing the tab. Three-column layout (side / controls / side), both sides
+  // flex:1, so the center controls stay dead-centered regardless of what either side's
+  // content weighs — space-between would instead push them off-center.
+  const disabled = tabNotesLength === 0;
   return (
     <View style={styles.webTransportBar}>
+      <View style={styles.webTransportSide}>
+        <IconButton
+          icon="repeat"
+          label={loopEnabled ? 'Disable loop' : 'Enable loop'}
+          onPress={onToggleLoop}
+          disabled={disabled}
+          variant={loopEnabled ? 'active' : 'ghost'}
+          selected={loopEnabled}
+          theme={theme}
+          styles={styles}
+        />
+      </View>
+
       <View style={styles.webTransportCenter}>
-        <Pressable
-          onPress={onStop}
-          disabled={tabNotesLength === 0}
-          style={({ hovered }: any) => [styles.webIconBtn, tabNotesLength > 0 && hovered && styles.webIconBtnHover]}
-          accessibilityRole="button"
-          accessibilityLabel="Stop"
-          accessibilityState={{ disabled: tabNotesLength === 0 }}
-        >
-          <Ionicons name="stop" size={13} color={tabNotesLength === 0 ? theme.textMuted : theme.textSub} />
-        </Pressable>
+        <IconButton icon="stop" label="Stop" onPress={onStop} disabled={disabled} theme={theme} styles={styles} iconSize={13} />
         <Pressable
           onPress={onPlayToggle}
-          disabled={tabNotesLength === 0}
+          disabled={disabled}
           style={({ pressed, hovered }: any) => [
             styles.webPlayCircle,
-            tabNotesLength === 0 && styles.webBtnDisabled,
-            (pressed || hovered) && tabNotesLength > 0 && styles.webBtnHoverFilled,
+            disabled && styles.webBtnDisabled,
+            (pressed || hovered) && !disabled && styles.webBtnHoverFilled,
           ]}
           accessibilityRole="button"
           accessibilityLabel={isPlaying && !isPaused ? 'Pause' : isPaused ? 'Resume' : 'Play tab'}
-          accessibilityState={{ disabled: tabNotesLength === 0 }}
+          accessibilityState={{ disabled }}
         >
-          <Ionicons name={isPlaying && !isPaused ? 'pause' : 'play'} size={15} color={tabNotesLength === 0 ? theme.textMuted : '#fff'} />
+          <Ionicons name={isPlaying && !isPaused ? 'pause' : 'play'} size={15} color={disabled ? theme.textMuted : '#fff'} />
         </Pressable>
       </View>
 
-      <Text style={styles.webPlayTime}>{formatElapsed(currentTimeMs)}</Text>
+      <View style={[styles.webTransportSide, styles.webTransportSideRight]}>
+        <Pressable
+          onPress={onCycleRate}
+          disabled={disabled}
+          style={({ hovered }: any) => [styles.webSpeedBtn, !disabled && hovered && styles.webIconBtnHover]}
+          accessibilityRole="button"
+          accessibilityLabel={`Playback speed: ${playbackRate}x. Tap to change.`}
+        >
+          <Text style={[styles.webSpeedBtnText, disabled && { color: theme.textMuted }]}>{playbackRate}x</Text>
+        </Pressable>
+        <Text style={styles.webPlayTime}>
+          {formatElapsed(currentTimeMs)} / {formatElapsed(totalTimeMs)}
+        </Text>
+      </View>
     </View>
   );
 }
@@ -664,6 +782,9 @@ function createStyles(t: Theme) {
     // The piano roll wants the full viewport width (DAW-style grid), unlike every other
     // screen's centered single-column layout — overrides webMaxWidth's cap for that mode.
     containerFullWidth: { maxWidth: '100%' } as ViewStyle,
+    // Cancels the container's own paddingHorizontal so the piano-roll panel spans edge
+    // to edge (DAW-style), instead of floating inset like every other centered screen.
+    pianoRollEdgeWrap: { flex: 1, marginHorizontal: -24 },
     header:    { gap: 4 },
     headerTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     headerIcons: { flexDirection: 'row', alignItems: 'center', gap: 4 },
@@ -742,7 +863,30 @@ function createStyles(t: Theme) {
     },
 
     emptyTitle: { fontSize: FONT.md, fontFamily: Poppins.bold,    color: t.textSub },
-    emptyHint:  { fontSize: FONT.sm, fontFamily: Poppins.regular, color: t.textMuted },
+    emptyHint:  { fontSize: FONT.sm, fontFamily: Poppins.regular, color: t.textMuted, textAlign: 'center' },
+    // Web-only empty-state extras — icon badge + a real, working CTA (no fabricated
+    // import/upload buttons for features that don't exist yet).
+    emptyIconWrap: {
+      width: 72,
+      height: 72,
+      borderRadius: 36,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: t.accentSoft,
+      marginBottom: 4,
+    },
+    emptyCta: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      marginTop: 12,
+      paddingHorizontal: 18,
+      paddingVertical: 12,
+      borderRadius: 12,
+      backgroundColor: t.accent,
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
+    emptyCtaText: { fontSize: FONT.base, fontFamily: Poppins.semiBold, color: '#fff' },
     playBtn: {
       flexDirection:   'row',
       alignItems:      'center',
@@ -812,6 +956,27 @@ function createStyles(t: Theme) {
       gap:             10,
     },
     webToolbarGroup: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    // Separates logical clusters (View / Project / Edit / Actions / Export) within a
+    // toolbar row — increased spacing plus a visible rule reads more clearly as
+    // "distinct groups" than gap alone.
+    toolbarDivider: { width: 1, height: 20, backgroundColor: t.separator, marginHorizontal: 2 },
+
+    // Wraps every IconButton so its hover tooltip can be absolutely positioned relative
+    // to just that button, not the whole toolbar row.
+    iconBtnWrap: { position: 'relative' },
+    tooltip: {
+      position: 'absolute',
+      top: '100%',
+      left: 0,
+      marginTop: 6,
+      paddingHorizontal: 7,
+      paddingVertical: 4,
+      borderRadius: 5,
+      backgroundColor: t.textPrimary,
+      zIndex: 20,
+      ...(Platform.OS === 'web' ? { boxShadow: '0 2px 6px rgba(0,0,0,0.25)', whiteSpace: 'nowrap' } : null),
+    } as any,
+    tooltipText: { fontSize: 10, fontFamily: Poppins.semiBold, color: t.bg },
 
     webToggle: {
       flexDirection:   'row',
@@ -882,6 +1047,31 @@ function createStyles(t: Theme) {
     // Export gets the one filled/accent treatment in the toolbar — it's the "finish"
     // action, everything else is a neutral utility icon.
     webIconBtnAccent: { backgroundColor: t.accent, borderColor: t.accent },
+    exportBtn: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      gap:               6,
+      paddingHorizontal: 12,
+      height:            26,
+      borderRadius:      6,
+      backgroundColor:   t.accent,
+      cursor:            'pointer',
+    } as any,
+    exportBtnText: { fontSize: 12, fontFamily: Poppins.semiBold, color: '#fff' },
+
+    webSpeedBtn: {
+      minWidth:          30,
+      height:            26,
+      alignItems:        'center',
+      justifyContent:    'center',
+      paddingHorizontal: 6,
+      borderRadius:      6,
+      backgroundColor:   t.surface,
+      borderWidth:       1,
+      borderColor:       t.border,
+      cursor:            'pointer',
+    } as any,
+    webSpeedBtnText: { fontSize: 11, fontFamily: Poppins.semiBold, color: t.textSub, fontVariant: ['tabular-nums'] },
 
     webTransportBar: {
       flexDirection:   'row',
@@ -891,6 +1081,10 @@ function createStyles(t: Theme) {
       borderTopWidth:  1,
       borderTopColor:  t.separator,
     },
+    webTransportSide: { flex: 1, flexDirection: 'row', alignItems: 'center' },
+    // Speed stepper + elapsed/total time need to sit side-by-side, not the View default
+    // of stacking vertically — this side now holds two elements, not just the time text.
+    webTransportSideRight: { justifyContent: 'flex-end', gap: 8 },
     webTransportCenter: { flexDirection: 'row', alignItems: 'center', gap: 10 },
     // The one circular control in this UI, deliberately — a play/pause transport button
     // reads as "the" primary action the way a small square icon button doesn't.

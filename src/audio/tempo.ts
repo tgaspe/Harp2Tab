@@ -18,7 +18,12 @@ export function msToBar(ms: number, bpm: number): number {
 export interface PlaybackOptions {
   bpm:              number;
   metronomeEnabled: boolean;
+  /** Playback speed multiplier — web-only (OscillatorNode scheduling), ignored by the
+   *  native (pre-rendered WAV) backend. Defaults to 1 when omitted. */
+  rate?:            number;
 }
+
+export const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
 
 export type SnapDivision = 'off' | 4 | 8 | 16;
 

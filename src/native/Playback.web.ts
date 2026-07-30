@@ -9,12 +9,15 @@ const AMPLITUDE = 0.3;
 let audioContext: AudioContext | null = null;
 let activeOscillators: OscillatorNode[] = [];
 
-function scheduleMetronome(ctx: AudioContext, now: number, totalMs: number, bpm: number): void {
+function scheduleMetronome(ctx: AudioContext, now: number, totalMs: number, bpm: number, rate: number): void {
+  // beatSec and the loop bound stay in nominal (unscaled) units — only the actual
+  // schedule time is compressed/stretched by rate, otherwise the loop would run
+  // ~rate× too many iterations past the (now shorter/longer) note audio itself.
   const beatSec = beatDurationMs(bpm) / 1000;
   let beatIndex = 0;
   for (let t = 0; t <= totalMs / 1000; t += beatSec, beatIndex++) {
     const accented = beatIndex % BEATS_PER_BAR === 0;
-    const startSec = now + t;
+    const startSec = now + t / rate;
     const osc  = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'sine';
@@ -38,13 +41,14 @@ export async function playNotes(notes: TabNote[], options?: PlaybackOptions): Pr
   const ctx = new AudioContext();
   audioContext = ctx;
   const now = ctx.currentTime;
+  const rate = options?.rate ?? 1;
 
   for (const n of notes) {
     const freq = noteNameToFrequency(n.note);
     if (freq <= 0) continue;
 
-    const startSec = now + n.start_time / 1000;
-    const durSec    = n.duration / 1000;
+    const startSec = now + (n.start_time / 1000) / rate;
+    const durSec    = (n.duration / 1000) / rate;
     const fadeSec   = Math.min(0.01, durSec / 4);
 
     const osc  = ctx.createOscillator();
@@ -67,7 +71,7 @@ export async function playNotes(notes: TabNote[], options?: PlaybackOptions): Pr
 
   if (options?.metronomeEnabled) {
     const totalMs = notes.reduce((max, n) => Math.max(max, n.start_time + n.duration), 0);
-    scheduleMetronome(ctx, now, totalMs, options.bpm);
+    scheduleMetronome(ctx, now, totalMs, options.bpm, rate);
   }
 }
 

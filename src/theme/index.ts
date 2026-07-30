@@ -9,6 +9,12 @@ export interface Theme {
   record:      string;
   recordDim:   string;
   recordSoft:  string;
+  success:     string;
+  successDim:  string;
+  successSoft: string;
+  warning:     string;
+  warningDim:  string;
+  warningSoft: string;
   textPrimary: string;
   textSub:     string;
   textMuted:   string;
@@ -29,6 +35,12 @@ export const darkTheme: Theme = {
   record:      '#EF4444',
   recordDim:   '#DC2626',
   recordSoft:  'rgba(239,68,68,0.14)',
+  success:     '#22C55E',
+  successDim:  '#16A34A',
+  successSoft: 'rgba(34,197,94,0.14)',
+  warning:     '#F59E0B',
+  warningDim:  '#D97706',
+  warningSoft: 'rgba(245,158,11,0.14)',
   textPrimary: '#FAFAFA',
   textSub:     '#A1A1AA',
   textMuted:   '#3F3F46',
@@ -49,6 +61,12 @@ export const lightTheme: Theme = {
   record:      '#EF4444',
   recordDim:   '#DC2626',
   recordSoft:  'rgba(239,68,68,0.08)',
+  success:     '#22C55E',
+  successDim:  '#16A34A',
+  successSoft: 'rgba(34,197,94,0.08)',
+  warning:     '#F59E0B',
+  warningDim:  '#D97706',
+  warningSoft: 'rgba(245,158,11,0.08)',
   textPrimary: '#09090B',
   textSub:     '#52525B',
   textMuted:   '#A1A1AA',

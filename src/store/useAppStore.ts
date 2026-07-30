@@ -13,6 +13,7 @@ interface AppState {
   recordingId:        string | null;
   tabNotes:           TabNote[];
   history:            TabNote[][];
+  future:             TabNote[][];
   exportFormat:       ExportFormat;
   /** Beats per minute — a property of the song being edited (persisted per-recording),
    *  drives the piano-roll's bar ruler, its snap-to-grid dragging, and the metronome. */
@@ -20,13 +21,15 @@ interface AppState {
   metronomeEnabled:   boolean;
 }
 
-function pushHistory(s: { tabNotes: TabNote[]; history: TabNote[][] }) {
+function pushHistory(s: { tabNotes: TabNote[]; history: TabNote[][]; future: TabNote[][] }) {
   // Copy each note object, not just the array — updateNote mutates a note's
   // fields in place via Object.assign, and since that happens on the same
   // draft within the same producer call, a shallow array copy would still
   // share the exact object reference that's about to be mutated.
   s.history.push(s.tabNotes.map((n) => ({ ...n })));
   if (s.history.length > MAX_HISTORY) s.history.shift();
+  // A fresh edit invalidates whatever was available to redo.
+  s.future = [];
 }
 
 interface AppActions {
@@ -41,6 +44,7 @@ interface AppActions {
   deleteNote:     (id: string) => void;
   updateNote:     (id: string, changes: Partial<Pick<TabNote, 'tab' | 'note' | 'start_time' | 'duration'>>) => void;
   undo:           () => void;
+  redo:           () => void;
   setExportFormat:(format: ExportFormat) => void;
   setBpm:              (bpm: number) => void;
   setMetronomeEnabled: (enabled: boolean) => void;
@@ -59,6 +63,7 @@ const initialState: AppState = {
   recordingId:        null,
   tabNotes:           [],
   history:            [],
+  future:             [],
   exportFormat:       'TXT',
   bpm:                DEFAULT_BPM,
   metronomeEnabled:   false,
@@ -82,6 +87,7 @@ export const useAppStore = create<AppState & AppActions>()(
         s.recordingId        = `rec-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         s.tabNotes           = [];
         s.history            = [];
+        s.future             = [];
       }),
 
     stopRecording: () =>
@@ -132,7 +138,16 @@ export const useAppStore = create<AppState & AppActions>()(
       set((s) => {
         const prev = s.history.pop();
         if (prev === undefined) return;
+        s.future.push(s.tabNotes.map((n) => ({ ...n })));
         s.tabNotes = prev;
+      }),
+
+    redo: () =>
+      set((s) => {
+        const next = s.future.pop();
+        if (next === undefined) return;
+        s.history.push(s.tabNotes.map((n) => ({ ...n })));
+        s.tabNotes = next;
       }),
 
     setExportFormat: (format) =>
@@ -155,6 +170,7 @@ export const useAppStore = create<AppState & AppActions>()(
         s.recordingStartTime = recording.createdAt;
         s.tabNotes           = recording.tabNotes.map((n) => ({ ...n }));
         s.history            = [];
+        s.future             = [];
         s.isRecording         = false;
         s.isPaused            = false;
         s.bpm                 = recording.bpm ?? DEFAULT_BPM;
@@ -173,6 +189,7 @@ export const selectIsPaused   = (s: AppState & AppActions) => s.isPaused;
 export const selectTabNotes   = (s: AppState & AppActions) => s.tabNotes;
 export const selectRecordingId = (s: AppState & AppActions) => s.recordingId;
 export const selectCanUndo    = (s: AppState & AppActions) => s.history.length > 0;
+export const selectCanRedo    = (s: AppState & AppActions) => s.future.length > 0;
 export const selectExportFmt  = (s: AppState & AppActions) => s.exportFormat;
 export const selectBpm              = (s: AppState & AppActions) => s.bpm;
 export const selectMetronomeEnabled = (s: AppState & AppActions) => s.metronomeEnabled;
