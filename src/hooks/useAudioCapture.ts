@@ -1,6 +1,7 @@
 import { addAudioFrameListener, startCapture, stopCapture, setThreshold } from '@/native/AudioCapture';
 import { createNoteDetector } from '@/audio/NoteDetector';
-import { selectHarmonicaType, selectIsPaused, selectIsRecording, selectKey, useAppStore } from '@/store/useAppStore';
+import { pushFrame } from '@/audio/frameBuffer';
+import { selectHarmonicaType, selectIsPaused, selectIsRecording, selectKey, selectRecordingId, useAppStore } from '@/store/useAppStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { useEffect, useRef, useState } from 'react';
 import { PermissionsAndroid, Platform } from 'react-native';
@@ -10,6 +11,7 @@ export function useAudioCapture(): { permissionDenied: boolean } {
   const isPaused           = useAppStore(selectIsPaused);
   const selectedKey        = useAppStore(selectKey);
   const harmonicaType      = useAppStore(selectHarmonicaType);
+  const recordingId        = useAppStore(selectRecordingId);
   const addTabNote         = useAppStore((s) => s.addTabNote);
   const recordingStartTime = useAppStore((s) => s.recordingStartTime);
   const stopRecording      = useAppStore((s) => s.stopRecording);
@@ -73,7 +75,11 @@ export function useAudioCapture(): { permissionDenied: boolean } {
         // Keep the native stream alive while paused — just stop feeding it
         // into detection so no notes get appended.
         if (isPausedRef.current) return;
-        detector.process(frame, startMs);
+        const now = Date.now();
+        detector.process(frame, now, startMs);
+        if (recordingId) {
+          pushFrame(recordingId, { frequency: frame.frequency, rms: frame.rms, t: now - startMs });
+        }
       });
     })();
 

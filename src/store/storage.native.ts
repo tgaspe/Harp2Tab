@@ -3,3 +3,4 @@ import { createJSONStorage } from 'zustand/middleware';
 
 // Native: backed by AsyncStorage
 export const settingsStorage = createJSONStorage(() => AsyncStorage);
+export const recordingsStorage = createJSONStorage(() => AsyncStorage);

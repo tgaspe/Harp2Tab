@@ -57,17 +57,18 @@ Join our community of developers creating universal apps.
 
 ## Roadmap
 
+- [ ] Home screen becomes a library/dashboard (recent recordings + three "start new" paths: record, upload audio, upload MIDI) instead of jumping straight to the key picker
 - [ ] Audio upload tab transcription feature, with automatic harmonica key detection (no manual key picker needed for uploaded audio)
-- [ ] Piano-roll style editor (Signal-like): drag notes up/down across harmonica-playable pitches, resize/move in time, with playback
+- [ ] MIDI file upload → harmonica tab conversion: user picks target harmonica key (transposes MIDI notes), with overblow/bend notes highlighted so the user can choose to simplify/edit them; needs a keyboard-accessible "browse files" button alongside any drag-and-drop zone
+- [ ] Piano-roll style editor (Signal-like): drag notes up/down across harmonica-playable pitches, resize/move in time, with playback. Coexists as a toggleable alternate view alongside the existing list-based edit screen (not a replacement) — some edits (precise numeric duration) are easier as a table. Needs an arrow-key nudge alternative to dragging for keyboard/screen-reader users
 - [ ] Better monetization model
 - [ ] Web version
 - [ ] iOS version
-- [ ] Developer tool for data visualization: frame-by-frame view of detected note, loudness, and note segmentation
+- [ ] Frame Inspector — frame-by-frame view of detected note, loudness, and note segmentation. User-facing (not dev-only): an "Inspect frames" button on the Edit screen opens it for the current tab's session. Works on sessions from *either* creation path (live recording or audio upload) — both run the same `NoteDetector`/pitch-detector pipeline, just fed from different sources. Requires retaining the raw frame stream after processing (currently discarded once notes are committed) on both paths. Recommendation: ship the visualization tracks to everyone; keep the raw threshold-tuning sliders (noise floor ×, min duration, confirm hold, etc.) behind an "Advanced" disclosure rather than headline UI, since they're algorithm constants, not something a typical user needs
 - [ ] Improve web UI
 - [ ] User account creation
-- [ ] Playback of the edited tab
+- [ ] Playback of the edited tab — shared plumbing (reused MIDI generation) needed by the piano-roll editor, the list edit screen, and a pre-export preview, not a one-off button
 - [ ] Recording history/library
-- [ ] Improve tab rendering (harmonica tab arrows)
 
 ## Web Version Plan
 

@@ -8,6 +8,7 @@ import * as Sharing from 'expo-sharing';
 import { ExportOption } from '@/components/ExportOption';
 import { useTheme } from '@/hooks/useTheme';
 import { useAppStore, selectKey, selectTabNotes, selectExportFmt, selectHarmonicaType } from '@/store/useAppStore';
+import { saveCurrentSessionToLibrary } from '@/store/sessionSnapshot';
 import { generateForFormat } from '@/export/generators';
 import { EXPORT_FORMATS, FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
@@ -43,6 +44,7 @@ export default function ExportScreen() {
   const [isExporting, setIsExporting] = useState(false);
 
   function handleNewRecording() {
+    saveCurrentSessionToLibrary();
     reset();
     router.replace('/');
   }

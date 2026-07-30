@@ -168,3 +168,31 @@ export function noteToTab(note: string, key: HarmonicaKey, harmonicaType: Harmon
   const cMidi  = midi - getTranspose(key);
   return layout[cMidi] ?? null;
 }
+
+export interface PlayablePosition {
+  tab:  string;
+  note: string;
+  midi: number;
+}
+
+/**
+ * Every position actually playable on the given harmonica key/type, sorted from highest
+ * to lowest pitch — the piano-roll editor's pitch axis (rows), so dragging a note can only
+ * snap to a real hole/bend/overblow, not free chromatic movement. Built from the forward
+ * layout tables (cMidi → tab) rather than the reverse lookup, so each pitch appears once
+ * under its preferred/canonical tab rather than listing every alternate spelling too.
+ */
+export function getPlayablePositions(key: HarmonicaKey, harmonicaType: HarmonicaType): PlayablePosition[] {
+  const layout    = harmonicaType === 'chromatic' ? C_CHROMATIC : C_DIATONIC;
+  const transpose = getTranspose(key);
+
+  const positions = Object.entries(layout).map(([cMidiStr, tab]) => {
+    const midi   = Number(cMidiStr) + transpose;
+    const octave = Math.floor(midi / 12) - 1;
+    const note   = NOTE_NAMES[midi % 12] + octave;
+    return { tab, note, midi };
+  });
+
+  positions.sort((a, b) => b.midi - a.midi);
+  return positions;
+}

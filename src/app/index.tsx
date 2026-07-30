@@ -1,16 +1,19 @@
 import { KeyGrid } from '@/components/KeyGrid';
 import { RatingModal } from '@/components/RatingModal';
+import { RecordingCard } from '@/components/RecordingCard';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { FONT } from '@/constants/keys';
 import { useTheme } from '@/hooks/useTheme';
 import { selectHarmonicaType, selectKey, useAppStore } from '@/store/useAppStore';
-import { RATING_BONUS, RECORDING_LIMIT, useSettingsStore } from '@/store/useSettingsStore';
+import { useSettingsStore } from '@/store/useSettingsStore';
+import { computeEffectiveLimit, resolveSessionGate } from '@/store/sessionGate';
+import { selectRecordings, useRecordingsStore } from '@/store/useRecordingsStore';
 import type { Theme } from '@/theme';
-import type { HarmonicaKey, HarmonicaType } from '@/types';
+import type { HarmonicaKey, HarmonicaType, TabRecording } from '@/types';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
-import { Image, Platform, Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native';
+import { Image, Platform, Pressable, ScrollView, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_TOP, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
 
@@ -29,25 +32,28 @@ export default function KeySelectionScreen() {
   const selectedKey          = useAppStore(selectKey);
   const selectKey_           = useAppStore((s) => s.selectKey);
   const startRecording       = useAppStore((s) => s.startRecording);
+  const loadRecording        = useAppStore((s) => s.loadRecording);
   const totalRecordingsUsed  = useSettingsStore((s) => s.totalRecordingsUsed);
   const isPurchased          = useSettingsStore((s) => s.isPurchased);
   const ratingStatus         = useSettingsStore((s) => s.ratingStatus);
+  const recordings           = useRecordingsStore(selectRecordings);
+  const deleteRecording      = useRecordingsStore((s) => s.deleteRecording);
   const [showRatingModal, setShowRatingModal] = useState(false);
 
-  const effectiveLimit = RECORDING_LIMIT + (ratingStatus === 'rated' ? RATING_BONUS : 0);
+  const effectiveLimit = computeEffectiveLimit(ratingStatus);
 
   function handleStart() {
     if (!selectedKey) return;
-    if (!isPurchased && totalRecordingsUsed >= effectiveLimit) {
-      if (ratingStatus === 'notShown') {
-        setShowRatingModal(true);
-      } else {
-        router.push('/paywall');
-      }
-      return;
-    }
+    const gate = resolveSessionGate({ isPurchased, totalRecordingsUsed, ratingStatus });
+    if (gate === 'showRating') { setShowRatingModal(true); return; }
+    if (gate === 'showPaywall') { router.push('/paywall'); return; }
     startRecording();
     router.push('/recording');
+  }
+
+  function handleOpenRecording(recording: TabRecording) {
+    loadRecording(recording);
+    router.push('/edit');
   }
 
   if (!hasCompletedOnboarding) return null;
@@ -85,71 +91,123 @@ export default function KeySelectionScreen() {
           <Text style={styles.subtitle}>Pick a key to start recording.</Text>
         </View>
 
-        {/* Harmonica type */}
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>HARMONICA TYPE</Text>
-          <View style={styles.segmented}>
-            {(['diatonic', 'chromatic'] as HarmonicaType[]).map((type) => {
-              const active = harmonicaType === type;
-              return (
-                <Pressable
-                  key={type}
-                  onPress={() => setHarmonicaType(type)}
-                  style={[styles.segment, active && styles.segmentActive]}
-                  accessibilityRole="radio"
-                  accessibilityState={{ checked: active }}
-                >
-                  <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
-                    {type === 'chromatic' ? '12-Chromatic' : 'Diatonic'}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        </View>
-
-        {/* Key section */}
-        <View style={[styles.section, { marginTop: 16 }]}>
-          <Text style={styles.sectionLabel}>HARMONICA KEY</Text>
-          <KeyGrid
-            selected={selectedKey}
-            onSelect={(k: HarmonicaKey) => selectKey_(k)}
-          />
-        </View>
-
-        {/* Tip */}
-        <View style={styles.tip}>
-          <Ionicons name="information-circle-outline" size={15} color={theme.textMuted} />
-          <Text style={styles.tipText}>
-            Tip: quiet environments give the best results. Mic sensitivity can be tuned in{' '}
-            <Text style={styles.tipLink} onPress={() => router.push('/settings')}>Settings</Text>.
-          </Text>
-        </View>
-
-        {/* CTA */}
-        <Pressable
-          onPress={handleStart}
-          disabled={!selectedKey}
-          style={({ pressed, hovered }: any) => [
-            styles.startBtn,
-            !selectedKey && styles.startBtnDisabled,
-            (pressed || (Platform.OS === 'web' && hovered)) && !!selectedKey && styles.startBtnPressed,
-          ]}
-          accessibilityRole="button"
-          accessibilityLabel="Start Recording"
-          accessibilityState={{ disabled: !selectedKey }}
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
         >
-          <Text style={[styles.startBtnText, !selectedKey && styles.startBtnTextDisabled]}>
-            Start Recording
-          </Text>
-          {!isPurchased && (
-            <View style={styles.btnCounter}>
-              <Text style={[styles.btnCounterText, !selectedKey && styles.btnCounterTextDisabled]}>
-                {Math.min(totalRecordingsUsed, effectiveLimit)} / {effectiveLimit} free recordings used
-              </Text>
+          {/* Recent recordings */}
+          {recordings.length > 0 && (
+            <View style={styles.section}>
+              <Text style={styles.sectionLabel}>RECENT RECORDINGS</Text>
+              <View style={styles.recordingsList}>
+                {/* Store keeps newest-first for future consumers; display oldest-to-newest
+                    top-to-bottom so the most recent recording reads as "last" in the list. */}
+                {[...recordings].reverse().map((recording) => (
+                  <RecordingCard
+                    key={recording.id}
+                    recording={recording}
+                    onPress={handleOpenRecording}
+                    onDelete={deleteRecording}
+                  />
+                ))}
+              </View>
             </View>
           )}
-        </Pressable>
+
+          {/* Harmonica type */}
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>HARMONICA TYPE</Text>
+            <View style={styles.segmented}>
+              {(['diatonic', 'chromatic'] as HarmonicaType[]).map((type) => {
+                const active = harmonicaType === type;
+                return (
+                  <Pressable
+                    key={type}
+                    onPress={() => setHarmonicaType(type)}
+                    style={[styles.segment, active && styles.segmentActive]}
+                    accessibilityRole="radio"
+                    accessibilityState={{ checked: active }}
+                  >
+                    <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
+                      {type === 'chromatic' ? '12-Chromatic' : 'Diatonic'}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+
+          {/* Key section */}
+          <View style={[styles.section, { marginTop: 16 }]}>
+            <Text style={styles.sectionLabel}>HARMONICA KEY</Text>
+            <KeyGrid
+              selected={selectedKey}
+              onSelect={(k: HarmonicaKey) => selectKey_(k)}
+            />
+          </View>
+
+          {/* Tip */}
+          <View style={styles.tip}>
+            <Ionicons name="information-circle-outline" size={15} color={theme.textMuted} />
+            <Text style={styles.tipText}>
+              Tip: quiet environments give the best results. Mic sensitivity can be tuned in{' '}
+              <Text style={styles.tipLink} onPress={() => router.push('/settings')}>Settings</Text>.
+            </Text>
+          </View>
+        </ScrollView>
+
+        {/* Entry points */}
+        <View style={styles.bottomActions}>
+          <Pressable
+            onPress={handleStart}
+            disabled={!selectedKey}
+            style={({ pressed, hovered }: any) => [
+              styles.startBtn,
+              !selectedKey && styles.startBtnDisabled,
+              (pressed || (Platform.OS === 'web' && hovered)) && !!selectedKey && styles.startBtnPressed,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Start Recording"
+            accessibilityState={{ disabled: !selectedKey }}
+          >
+            <Text style={[styles.startBtnText, !selectedKey && styles.startBtnTextDisabled]}>
+              Start Recording
+            </Text>
+            {!isPurchased && (
+              <View style={styles.btnCounter}>
+                <Text style={[styles.btnCounterText, !selectedKey && styles.btnCounterTextDisabled]}>
+                  {Math.min(totalRecordingsUsed, effectiveLimit)} / {effectiveLimit} free recordings used
+                </Text>
+              </View>
+            )}
+          </Pressable>
+
+          <View style={styles.uploadRow}>
+            <Pressable
+              disabled
+              style={styles.uploadBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Upload Audio — coming soon"
+              accessibilityState={{ disabled: true }}
+            >
+              <Ionicons name="cloud-upload-outline" size={18} color={theme.textMuted} />
+              <Text style={styles.uploadBtnText}>Upload Audio</Text>
+              <Text style={styles.comingSoon}>Soon</Text>
+            </Pressable>
+            <Pressable
+              disabled
+              style={styles.uploadBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Upload MIDI — coming soon"
+              accessibilityState={{ disabled: true }}
+            >
+              <Ionicons name="musical-note-outline" size={18} color={theme.textMuted} />
+              <Text style={styles.uploadBtnText}>Upload MIDI</Text>
+              <Text style={styles.comingSoon}>Soon</Text>
+            </Pressable>
+          </View>
+        </View>
 
       </View>
     </SafeAreaView>
@@ -166,7 +224,7 @@ function createStyles(t: Theme) {
       paddingTop: Platform.OS === 'web' ? WEB_SCREEN_PADDING_TOP : 36,
       paddingBottom: Platform.OS === 'web' ? WEB_SCREEN_PADDING_BOTTOM : 24,
     },
-    header:    { marginBottom: 40 },
+    header:    { marginBottom: 24 },
     headerTop: {
       flexDirection:  'row',
       alignItems:     'center',
@@ -194,7 +252,10 @@ function createStyles(t: Theme) {
       color:      t.textSub,
       marginTop:  Platform.OS === 'web' ? 0 : 40,
     },
+    scroll:        { flex: 1 },
+    scrollContent: { gap: 24, paddingBottom: 16 },
     section: { gap: 12 },
+    recordingsList: { gap: 10 },
     segmented: {
       flexDirection:   'row',
       backgroundColor: t.surface,
@@ -224,7 +285,6 @@ function createStyles(t: Theme) {
       flexDirection: 'row',
       alignItems:    'flex-start',
       gap:           6,
-      marginTop:     30,
     },
     tipText: {
       flex:       1,
@@ -237,8 +297,8 @@ function createStyles(t: Theme) {
       fontFamily: Poppins.semiBold,
       color:      t.accent,
     },
+    bottomActions: { gap: 10, paddingTop: 10 },
     startBtn: {
-      marginTop: Platform.OS === 'web' ? 32 : 'auto',
       backgroundColor: t.accent,
       borderRadius: 14,
       paddingVertical: 18,
@@ -265,5 +325,35 @@ function createStyles(t: Theme) {
       textAlign:  'center',
     },
     btnCounterTextDisabled: { color: t.textMuted },
+
+    uploadRow: { flexDirection: 'row', gap: 10 },
+    uploadBtn: {
+      flex:              1,
+      flexDirection:     'row',
+      alignItems:        'center',
+      justifyContent:    'center',
+      gap:               6,
+      backgroundColor:   t.surface,
+      borderRadius:      12,
+      paddingVertical:   12,
+      borderWidth:       1,
+      borderColor:       t.border,
+      opacity:           0.6,
+    },
+    uploadBtnText: {
+      fontSize:   FONT.sm,
+      fontFamily: Poppins.semiBold,
+      color:      t.textMuted,
+    },
+    comingSoon: {
+      fontSize:          9,
+      fontFamily:        Poppins.bold,
+      color:             t.textMuted,
+      letterSpacing:     0.6,
+      backgroundColor:   t.surfaceAlt,
+      borderRadius:      6,
+      paddingHorizontal: 5,
+      paddingVertical:   2,
+    },
   });
 }

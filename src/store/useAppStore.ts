@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
-import type { HarmonicaKey, HarmonicaType, TabNote, ExportFormat } from '@/types';
+import type { HarmonicaKey, HarmonicaType, TabNote, TabRecording, ExportFormat } from '@/types';
 
 const MAX_HISTORY = 50; // bounded for hygiene; snapshots are cheap (array of refs) so this is generous
 
@@ -10,9 +10,14 @@ interface AppState {
   isRecording:        boolean;
   isPaused:           boolean;
   recordingStartTime: number | null;
+  recordingId:        string | null;
   tabNotes:           TabNote[];
   history:            TabNote[][];
   exportFormat:       ExportFormat;
+  /** Beats per minute — a property of the song being edited (persisted per-recording),
+   *  drives the piano-roll's bar ruler, its snap-to-grid dragging, and the metronome. */
+  bpm:                number;
+  metronomeEnabled:   boolean;
 }
 
 function pushHistory(s: { tabNotes: TabNote[]; history: TabNote[][] }) {
@@ -37,8 +42,13 @@ interface AppActions {
   updateNote:     (id: string, changes: Partial<Pick<TabNote, 'tab' | 'note' | 'start_time' | 'duration'>>) => void;
   undo:           () => void;
   setExportFormat:(format: ExportFormat) => void;
+  setBpm:              (bpm: number) => void;
+  setMetronomeEnabled: (enabled: boolean) => void;
+  loadRecording:  (recording: TabRecording) => void;
   reset:          () => void;
 }
+
+export const DEFAULT_BPM = 100;
 
 const initialState: AppState = {
   harmonicaType:      'diatonic',
@@ -46,9 +56,12 @@ const initialState: AppState = {
   isRecording:        false,
   isPaused:           false,
   recordingStartTime: null,
+  recordingId:        null,
   tabNotes:           [],
   history:            [],
   exportFormat:       'TXT',
+  bpm:                DEFAULT_BPM,
+  metronomeEnabled:   false,
 };
 
 export const useAppStore = create<AppState & AppActions>()(
@@ -66,6 +79,7 @@ export const useAppStore = create<AppState & AppActions>()(
         s.isRecording        = true;
         s.isPaused           = false;
         s.recordingStartTime = Date.now();
+        s.recordingId        = `rec-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         s.tabNotes           = [];
         s.history            = [];
       }),
@@ -124,6 +138,28 @@ export const useAppStore = create<AppState & AppActions>()(
     setExportFormat: (format) =>
       set((s) => { s.exportFormat = format; }),
 
+    setBpm: (bpm) =>
+      set((s) => { s.bpm = Math.max(20, Math.min(400, Math.round(bpm))); }),
+
+    setMetronomeEnabled: (enabled) =>
+      set((s) => { s.metronomeEnabled = enabled; }),
+
+    // Reopens a saved recording for editing — distinct from startRecording()
+    // since it's not a new session (no gate check, no fresh recordingStartTime
+    // for elapsed-time purposes), just loading past notes back into the working state.
+    loadRecording: (recording) =>
+      set((s) => {
+        s.harmonicaType      = recording.harmonicaType;
+        s.selectedKey        = recording.key;
+        s.recordingId        = recording.id;
+        s.recordingStartTime = recording.createdAt;
+        s.tabNotes           = recording.tabNotes.map((n) => ({ ...n }));
+        s.history            = [];
+        s.isRecording         = false;
+        s.isPaused            = false;
+        s.bpm                 = recording.bpm ?? DEFAULT_BPM;
+      }),
+
     reset: () =>
       set(() => ({ ...initialState })),
   }))
@@ -135,5 +171,8 @@ export const selectKey           = (s: AppState & AppActions) => s.selectedKey;
 export const selectIsRecording= (s: AppState & AppActions) => s.isRecording;
 export const selectIsPaused   = (s: AppState & AppActions) => s.isPaused;
 export const selectTabNotes   = (s: AppState & AppActions) => s.tabNotes;
+export const selectRecordingId = (s: AppState & AppActions) => s.recordingId;
 export const selectCanUndo    = (s: AppState & AppActions) => s.history.length > 0;
 export const selectExportFmt  = (s: AppState & AppActions) => s.exportFormat;
+export const selectBpm              = (s: AppState & AppActions) => s.bpm;
+export const selectMetronomeEnabled = (s: AppState & AppActions) => s.metronomeEnabled;
