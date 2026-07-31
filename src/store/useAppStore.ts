@@ -12,6 +12,7 @@ interface HistorySnapshot {
   tabNotes:     TabNote[];
   selectedKey:  HarmonicaKey | null;
   harmonicaType: HarmonicaType;
+  bpm:          number;
 }
 
 interface AppState {
@@ -32,7 +33,7 @@ interface AppState {
 }
 
 function pushHistory(s: {
-  tabNotes: TabNote[]; selectedKey: HarmonicaKey | null; harmonicaType: HarmonicaType;
+  tabNotes: TabNote[]; selectedKey: HarmonicaKey | null; harmonicaType: HarmonicaType; bpm: number;
   history: HistorySnapshot[]; future: HistorySnapshot[];
 }) {
   // Copy each note object, not just the array — updateNote mutates a note's
@@ -43,6 +44,7 @@ function pushHistory(s: {
     tabNotes: s.tabNotes.map((n) => ({ ...n })),
     selectedKey: s.selectedKey,
     harmonicaType: s.harmonicaType,
+    bpm: s.bpm,
   });
   if (s.history.length > MAX_HISTORY) s.history.shift();
   // A fresh edit invalidates whatever was available to redo.
@@ -195,10 +197,12 @@ export const useAppStore = create<AppState & AppActions>()(
           tabNotes: s.tabNotes.map((n) => ({ ...n })),
           selectedKey: s.selectedKey,
           harmonicaType: s.harmonicaType,
+          bpm: s.bpm,
         });
         s.tabNotes     = prev.tabNotes;
         s.selectedKey  = prev.selectedKey;
         s.harmonicaType = prev.harmonicaType;
+        s.bpm           = prev.bpm;
       }),
 
     redo: () =>
@@ -209,10 +213,12 @@ export const useAppStore = create<AppState & AppActions>()(
           tabNotes: s.tabNotes.map((n) => ({ ...n })),
           selectedKey: s.selectedKey,
           harmonicaType: s.harmonicaType,
+          bpm: s.bpm,
         });
         s.tabNotes     = next.tabNotes;
         s.selectedKey  = next.selectedKey;
         s.harmonicaType = next.harmonicaType;
+        s.bpm           = next.bpm;
       }),
 
     // Whole-piece transpose via re-keying — every existing tab position is real
@@ -249,8 +255,22 @@ export const useAppStore = create<AppState & AppActions>()(
     setExportFormat: (format) =>
       set((s) => { s.exportFormat = format; }),
 
+    // A tempo change re-times the notes to keep their bar/beat position fixed (what
+    // "changing the tempo" of a piece of music means) — without this, only the bar
+    // ruler's spacing would move while notes stayed pinned to their old absolute
+    // millisecond, visibly drifting off the grid.
     setBpm: (bpm) =>
-      set((s) => { s.bpm = Math.max(20, Math.min(400, Math.round(bpm))); }),
+      set((s) => {
+        const clamped = Math.max(20, Math.min(400, Math.round(bpm)));
+        if (clamped === s.bpm) return;
+        pushHistory(s);
+        const ratio = s.bpm / clamped;
+        for (const note of s.tabNotes) {
+          note.start_time = Math.max(0, Math.round(note.start_time * ratio));
+          note.duration    = Math.max(1, Math.round(note.duration * ratio));
+        }
+        s.bpm = clamped;
+      }),
 
     setMetronomeEnabled: (enabled) =>
       set((s) => { s.metronomeEnabled = enabled; }),

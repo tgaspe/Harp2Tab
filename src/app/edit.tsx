@@ -20,7 +20,7 @@ import { saveCurrentSessionToLibrary, getDefaultRecordingTitle, startNewRecordin
 import { usePlayback } from '@/hooks/usePlayback';
 import { previewNote } from '@/native/Playback';
 import { noteToTab } from '@/audio/HarmonicaMapper';
-import { PLAYBACK_RATES } from '@/audio/tempo';
+import { PLAYBACK_RATES, barDurationMs } from '@/audio/tempo';
 import { FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_TOP, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
@@ -218,6 +218,27 @@ export default function EditScreen() {
     setPlaybackRate(PLAYBACK_RATES[(i + 1) % PLAYBACK_RATES.length]);
   }
 
+  // Jumps the playhead a full bar at a time — works whether stopped, paused, or mid-
+  // playback (handleSeek already restarts playback from the new spot when needed).
+  function handleSkipBar(direction: 1 | -1) {
+    const barMs = barDurationMs(bpm);
+    const target = Math.max(0, Math.min(totalTimeMs, currentTimeMs + direction * barMs));
+    handleSeek(target);
+  }
+
+  // The metronome click track is baked into the audio graph at play()-time (see
+  // Playback.web.ts's scheduleMetronome) — flipping the store flag alone doesn't touch
+  // whatever's already scheduled. Mid-playback, restart from the current spot with the
+  // new setting so the click track actually starts/stops, same trick handleSeek uses for
+  // repositioning live.
+  function handleToggleMetronome() {
+    const next = !metronomeEnabled;
+    setMetronomeEnabled(next);
+    if (isPlaying && !isPaused) {
+      play(tabNotes, { bpm, metronomeEnabled: next, rate: playbackRate }, currentTimeMs, loopRegion ?? undefined);
+    }
+  }
+
   function formatElapsed(ms: number): string {
     const totalSeconds = Math.floor(ms / 1000);
     const m = Math.floor(totalSeconds / 60);
@@ -239,10 +260,6 @@ export default function EditScreen() {
             viewMode={viewMode}
             setViewMode={setViewMode}
             harmonicaKey={harmonicaKey}
-            bpm={bpm}
-            setBpm={setBpm}
-            metronomeEnabled={metronomeEnabled}
-            setMetronomeEnabled={setMetronomeEnabled}
             canUndo={canUndo}
             onUndo={undo}
             canRedo={canRedo}
@@ -367,7 +384,7 @@ export default function EditScreen() {
                   </Pressable>
                 </View>
                 <Pressable
-                  onPress={() => setMetronomeEnabled(!metronomeEnabled)}
+                  onPress={handleToggleMetronome}
                   style={[styles.metronomeBtn, metronomeEnabled && styles.metronomeBtnActive]}
                   accessibilityRole="button"
                   accessibilityLabel={metronomeEnabled ? 'Disable metronome' : 'Enable metronome'}
@@ -461,6 +478,8 @@ export default function EditScreen() {
             isPaused={isPaused}
             onPlayToggle={handlePlayToggle}
             onStop={stop}
+            onSkipBack={() => handleSkipBar(-1)}
+            onSkipForward={() => handleSkipBar(1)}
             currentTimeMs={currentTimeMs}
             totalTimeMs={totalTimeMs}
             formatElapsed={formatElapsed}
@@ -468,6 +487,11 @@ export default function EditScreen() {
             onToggleLoop={() => setLoopEnabled(!loopEnabled)}
             playbackRate={playbackRate}
             onCycleRate={handleCycleRate}
+            bpm={bpm}
+            setBpm={setBpm}
+            metronomeEnabled={metronomeEnabled}
+            onToggleMetronome={handleToggleMetronome}
+            glued={viewMode === 'pianoRoll'}
             theme={theme}
             styles={styles}
           />
@@ -751,17 +775,12 @@ function KeyTypeControl({ theme, styles }: { theme: Theme; styles: EditStyles })
 
 function WebToolbar({
   tabNotesLength, viewMode, setViewMode, harmonicaKey,
-  bpm, setBpm, metronomeEnabled, setMetronomeEnabled,
   canUndo, onUndo, canRedo, onRedo, justSaved, onSave, onInspectFrames, onNew, onAdd, onExport, theme, styles,
 }: {
   tabNotesLength: number;
   viewMode: 'list' | 'pianoRoll';
   setViewMode: (m: 'list' | 'pianoRoll') => void;
   harmonicaKey: HarmonicaKey | null;
-  bpm: number;
-  setBpm: (bpm: number) => void;
-  metronomeEnabled: boolean;
-  setMetronomeEnabled: (v: boolean) => void;
   canUndo: boolean;
   onUndo: () => void;
   canRedo: boolean;
@@ -776,7 +795,7 @@ function WebToolbar({
   styles: EditStyles;
 }) {
   return (
-    <View style={styles.webToolbar}>
+    <View style={[styles.webToolbar, viewMode === 'pianoRoll' && styles.webToolbarGlued]}>
       {/* View + Project cluster */}
       <View style={styles.webToolbarGroup}>
         <View style={styles.webToggle}>
@@ -810,30 +829,6 @@ function WebToolbar({
         )}
 
         {tabNotesLength > 0 && harmonicaKey && <KeyTypeControl theme={theme} styles={styles} />}
-
-        {tabNotesLength > 0 && viewMode === 'pianoRoll' && (
-          <>
-            <Divider styles={styles} />
-            <View style={styles.webBpmControl}>
-              <Pressable onPress={() => setBpm(bpm - 5)} style={styles.webMiniStepBtn} accessibilityRole="button" accessibilityLabel="Decrease tempo">
-                <Ionicons name="remove" size={12} color={theme.textSub} />
-              </Pressable>
-              <Text style={styles.webBpmValue}>{bpm} BPM</Text>
-              <Pressable onPress={() => setBpm(bpm + 5)} style={styles.webMiniStepBtn} accessibilityRole="button" accessibilityLabel="Increase tempo">
-                <Ionicons name="add" size={12} color={theme.textSub} />
-              </Pressable>
-            </View>
-            <IconButton
-              icon="musical-notes"
-              label={metronomeEnabled ? 'Disable metronome' : 'Enable metronome'}
-              onPress={() => setMetronomeEnabled(!metronomeEnabled)}
-              variant={metronomeEnabled ? 'active' : 'ghost'}
-              selected={metronomeEnabled}
-              theme={theme}
-              styles={styles}
-            />
-          </>
-        )}
       </View>
 
       {/* Edit + Actions + Export cluster */}
@@ -843,8 +838,20 @@ function WebToolbar({
 
         <Divider styles={styles} />
 
-        <IconButton icon="mic-outline" label="New Recording" onPress={onNew} theme={theme} styles={styles} />
-        <IconButton icon="add" label="Add Note" onPress={onAdd} theme={theme} styles={styles} />
+        <Pressable
+          onPress={onNew}
+          style={({ pressed, hovered }: any) => [styles.newBtn, (pressed || hovered) && styles.webIconBtnHover]}
+          accessibilityRole="button"
+          accessibilityLabel="Start a new recording"
+        >
+          <Ionicons name="mic-outline" size={14} color={theme.textSub} />
+          <Text style={styles.newBtnText}>New</Text>
+        </Pressable>
+        {/* Add Note only makes sense in list view — the piano roll already lets you
+            draw a note anywhere with a click, so a "+" here would just be redundant. */}
+        {viewMode === 'list' && (
+          <IconButton icon="add" label="Add Note" onPress={onAdd} theme={theme} styles={styles} />
+        )}
         <IconButton
           icon={justSaved ? 'checkmark-circle' : 'bookmark-outline'}
           label={justSaved ? 'Saved to recent recordings' : 'Save to recent recordings'}
@@ -888,14 +895,19 @@ function WebToolbar({
 }
 
 function WebTransportBar({
-  tabNotesLength, isPlaying, isPaused, onPlayToggle, onStop, currentTimeMs, totalTimeMs, formatElapsed,
-  loopEnabled, onToggleLoop, playbackRate, onCycleRate, theme, styles,
+  tabNotesLength, isPlaying, isPaused, onPlayToggle, onStop, onSkipBack, onSkipForward,
+  currentTimeMs, totalTimeMs, formatElapsed,
+  loopEnabled, onToggleLoop, playbackRate, onCycleRate,
+  bpm, setBpm, metronomeEnabled, onToggleMetronome, glued, theme, styles,
 }: {
   tabNotesLength: number;
   isPlaying: boolean;
   isPaused: boolean;
   onPlayToggle: () => void;
   onStop: () => void;
+  /** Jump the playhead back/forward one full bar — works while stopped, paused, or mid-playback. */
+  onSkipBack: () => void;
+  onSkipForward: () => void;
   currentTimeMs: number;
   totalTimeMs: number;
   formatElapsed: (ms: number) => string;
@@ -903,17 +915,25 @@ function WebTransportBar({
   onToggleLoop: () => void;
   playbackRate: number;
   onCycleRate: () => void;
+  bpm: number;
+  setBpm: (bpm: number) => void;
+  metronomeEnabled: boolean;
+  onToggleMetronome: () => void;
+  /** True in piano-roll mode — sits flush against the data panel above it (no gap, no
+   *  separating line) instead of floating below it like it does over the list view. */
+  glued?: boolean;
   theme: Theme;
   styles: EditStyles;
 }) {
-  // A real transport: Loop / Stop / Play-Pause / Speed / elapsed-of-total time. Undo,
-  // New, Add, Export, Save, Inspect all live in the top toolbar now — this bar is only
-  // about hearing the tab. Three-column layout (side / controls / side), both sides
-  // flex:1, so the center controls stay dead-centered regardless of what either side's
-  // content weighs — space-between would instead push them off-center.
+  // A real transport: Loop / Tempo / Metronome / Skip / Stop / Play-Pause / Speed /
+  // elapsed-of-total time. Undo, New, Add, Export, Save, Inspect all live in the top
+  // toolbar now — this bar is only about hearing the tab. Three-column layout
+  // (side / controls / side), both sides flex:1, so the center controls stay
+  // dead-centered regardless of what either side's content weighs — space-between
+  // would instead push them off-center.
   const disabled = tabNotesLength === 0;
   return (
-    <View style={styles.webTransportBar}>
+    <View style={[styles.webTransportBar, glued && styles.webTransportBarGlued]}>
       <View style={styles.webTransportSide}>
         <IconButton
           icon="repeat"
@@ -925,9 +945,30 @@ function WebTransportBar({
           theme={theme}
           styles={styles}
         />
+        <Divider styles={styles} />
+        <View style={styles.webBpmControl}>
+          <Pressable onPress={() => setBpm(bpm - 5)} disabled={disabled} style={styles.webMiniStepBtn} accessibilityRole="button" accessibilityLabel="Decrease tempo">
+            <Ionicons name="remove" size={12} color={disabled ? theme.textMuted : theme.textSub} />
+          </Pressable>
+          <Text style={[styles.webBpmValue, disabled && { color: theme.textMuted }]}>{bpm} BPM</Text>
+          <Pressable onPress={() => setBpm(bpm + 5)} disabled={disabled} style={styles.webMiniStepBtn} accessibilityRole="button" accessibilityLabel="Increase tempo">
+            <Ionicons name="add" size={12} color={disabled ? theme.textMuted : theme.textSub} />
+          </Pressable>
+        </View>
+        <IconButton
+          icon="musical-notes"
+          label={metronomeEnabled ? 'Disable metronome' : 'Enable metronome'}
+          onPress={onToggleMetronome}
+          disabled={disabled}
+          variant={metronomeEnabled ? 'active' : 'ghost'}
+          selected={metronomeEnabled}
+          theme={theme}
+          styles={styles}
+        />
       </View>
 
       <View style={styles.webTransportCenter}>
+        <IconButton icon="play-skip-back" label="Back one bar" onPress={onSkipBack} disabled={disabled} theme={theme} styles={styles} iconSize={13} />
         <IconButton icon="stop" label="Stop" onPress={onStop} disabled={disabled} theme={theme} styles={styles} iconSize={13} />
         <Pressable
           onPress={onPlayToggle}
@@ -943,6 +984,7 @@ function WebTransportBar({
         >
           <Ionicons name={isPlaying && !isPaused ? 'pause' : 'play'} size={15} color={disabled ? theme.textMuted : '#fff'} />
         </Pressable>
+        <IconButton icon="play-skip-forward" label="Forward one bar" onPress={onSkipForward} disabled={disabled} theme={theme} styles={styles} iconSize={13} />
       </View>
 
       <View style={[styles.webTransportSide, styles.webTransportSideRight]}>
@@ -1156,6 +1198,11 @@ function createStyles(t: Theme) {
       // toolbarRow/rulerRow.
       zIndex: 20,
     },
+    // Piano-roll mode: the panel below is its own bordered/rounded box (see
+    // PianoRoll.tsx's `outer` style), so a second separating line here is redundant —
+    // same reasoning as webTransportBarGlued at the other end of the panel. List view
+    // keeps the border; it has no boxed panel of its own to make this line redundant.
+    webToolbarGlued: { borderBottomWidth: 0 },
     webToolbarGroup: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     // Separates logical clusters (View / Project / Edit / Actions / Export) within a
     // toolbar row — increased spacing plus a visible rule reads more clearly as
@@ -1297,6 +1344,21 @@ function createStyles(t: Theme) {
       cursor:            'pointer',
     } as any,
     exportBtnText: { fontSize: 12, fontFamily: Poppins.semiBold, color: '#fff' },
+    // "New Recording" gets a labeled button, not just an icon — a bare mic glyph reads
+    // ambiguous (record? playback?) next to Export's icon+text pattern right beside it.
+    newBtn: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      gap:               6,
+      paddingHorizontal: 12,
+      height:            30,
+      borderRadius:      6,
+      backgroundColor:   t.surface,
+      borderWidth:       1,
+      borderColor:       t.border,
+      cursor:            'pointer',
+    } as any,
+    newBtnText: { fontSize: 12, fontFamily: Poppins.semiBold, color: t.textSub },
 
     webSpeedBtn: {
       minWidth:          30,
@@ -1319,6 +1381,13 @@ function createStyles(t: Theme) {
       paddingVertical: 10,
       borderTopWidth:  1,
       borderTopColor:  t.separator,
+    },
+    // Piano-roll mode: cancels container's own `gap` (the visible space between the
+    // panel and this bar) and drops the top border, so the transport bar reads as this
+    // panel's own footer row rather than a separate floating element below it.
+    webTransportBarGlued: {
+      marginTop: -16,
+      borderTopWidth: 0,
     },
     webTransportSide: { flex: 1, flexDirection: 'row', alignItems: 'center' },
     // Speed stepper + elapsed/total time need to sit side-by-side, not the View default

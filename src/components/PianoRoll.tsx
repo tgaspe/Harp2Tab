@@ -36,10 +36,16 @@ const NUDGE_TIME_MS     = 50;
 const BLOCK_MARGIN      = 4;
 const RESIZE_HANDLE_W   = 10;
 const RULER_HEIGHT      = 30;
-const DATA_BAR_HEIGHT   = 64;
+const DATA_BAR_HEIGHT   = 140;
 const DATA_PANEL_TABS_HEIGHT = 34;
 const DATA_PANEL_COLLAPSED_HEIGHT = DATA_PANEL_TABS_HEIGHT;
-const DATA_PANEL_EXPANDED_HEIGHT  = DATA_BAR_HEIGHT + DATA_PANEL_TABS_HEIGHT;
+// dataPanel's own box (see its style below) needs paddingTop(6) + dataPanelTabs'
+// rendered height (DATA_PANEL_TABS_HEIGHT - 6) + the 6px gap to dataPanelRow +
+// DATA_BAR_HEIGHT — i.e. DATA_PANEL_TABS_HEIGHT + 6 + DATA_BAR_HEIGHT once the -6/+6
+// cancel. Missing that +6 (the gap) was clipping the bottom ~6px of the axis
+// labels/bars via dataPanel's own overflow:'hidden' — negligible at the old 64px bar
+// height, clearly visible once it grew to 140.
+const DATA_PANEL_EXPANDED_HEIGHT  = DATA_BAR_HEIGHT + DATA_PANEL_TABS_HEIGHT + 6;
 // Emit a live drag-tooltip label every Nth onUpdate call rather than every one — bounds
 // the JS-thread state-update rate without needing a wall-clock read inside a worklet.
 const DRAG_LABEL_THROTTLE = 4;
@@ -1337,6 +1343,7 @@ export function PianoRoll({
           </View>
           <View style={styles.dataBarClip}>
             <View style={[styles.dataBarContent, { width: gridWidth, transform: [{ translateX: -scrollX }] }]}>
+              <DataPanelGridLines height={DATA_BAR_HEIGHT} theme={theme} />
               <DataPanelBars
                 metric={metricTab}
                 notes={notes}
@@ -1397,6 +1404,8 @@ const TOOL_HELP: ToolHelpEntry[] = [
     desc: 'The blue tab left of the ruler. Drag it out onto the timeline and release to drop a marker, then drag it again for the second one — the span between them (regardless of which you placed first) becomes the loop region, played back on repeat. Once placed, drag either edge of the blue band to adjust it, or its × to clear it. Esc cancels a pin mid-drag.' },
   { icon: 'chevron-up', title: 'Semitone / Octave shift',
     desc: 'Moves the selected note(s) up/down the chromatic grid — the small chevrons shift a semitone, the circled arrows a full octave. Rows greyed out and labeled with just a pitch name aren’t real positions on the current harmonica; a semitone shift that would land there simply skips that note (a message says how many), while the octave buttons disable themselves instead if any selected note is already at the very edge.' },
+  { icon: 'musical-notes-outline', title: 'Key / Type ("12-Chromatic · Key C")',
+    desc: 'Click the badge above the ruler to open a dropdown. Picking a key transposes every note instantly — it can never make a note unplayable, since tab positions don’t depend on key. Switching Diatonic/Chromatic can, since the two don’t share a tab vocabulary; it warns first if it would affect any notes, and applies instantly if it wouldn’t.' },
 ];
 
 const SHORTCUTS: [string, string][] = [
@@ -1567,6 +1576,26 @@ function BeatGridLines({ bpm, durationMs, pxPerSecond, height, theme, snapSubdiv
             backgroundColor: l.isBar ? theme.textMuted : theme.separator,
             opacity: l.isBar ? 0.9 : 0.6,
           }}
+        />
+      ))}
+    </>
+  );
+}
+
+// Reference gridlines behind the bars — without these the axis labels (top/bottom, or
+// top/mid/bottom for Pitch Bend) were the only scale cue, and a bar's height was
+// otherwise ungrounded to any value. Quarter-marks at 25/50/75% give enough resolution
+// to read a bar's rough value without needing to label every line. left+right (no
+// explicit width) stretches to fill the parent regardless of how wide the scrollable
+// content currently is.
+function DataPanelGridLines({ height, theme }: { height: number; theme: Theme }) {
+  return (
+    <>
+      {[0.25, 0.5, 0.75].map((f) => (
+        <View
+          key={f}
+          pointerEvents="none"
+          style={{ position: 'absolute', left: 0, right: 0, top: height * f, height: 1, backgroundColor: theme.separator }}
         />
       ))}
     </>
