@@ -1,10 +1,11 @@
 import React from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '@/hooks/useTheme';
 import { FONT } from '@/constants/keys';
-import { SpaceGrotesk } from '@/constants/fonts';
+import { SpaceGrotesk, Poppins } from '@/constants/fonts';
+import { useAppStore, selectViewMode, selectTabNotes } from '@/store/useAppStore';
 import type { Theme } from '@/theme';
 
 // Routes that had their own gear->settings shortcut before TopBar existed.
@@ -16,6 +17,10 @@ const BACK_ROUTES = ['/settings', '/export'];
 // Focused conversion/setup flows — no nav chrome, matches their existing
 // lack of a back button.
 const HIDDEN_ROUTES = ['/paywall', '/onboarding'];
+// The List/Piano-Roll toggle only makes sense on the editor — shown next to the app
+// title here (rather than in edit.tsx's own toolbar) since it needs to stay visible
+// and drivable from this globally-rendered bar.
+const VIEW_TOGGLE_ROUTES = ['/edit'];
 
 export function TopBar() {
   const router     = useRouter();
@@ -23,10 +28,15 @@ export function TopBar() {
   const theme      = useTheme();
   const styles     = createStyles(theme);
 
+  const viewMode    = useAppStore(selectViewMode);
+  const setViewMode = useAppStore((s) => s.setViewMode);
+  const tabNotes    = useAppStore(selectTabNotes);
+
   if (HIDDEN_ROUTES.includes(pathname)) return null;
 
   const showBack = BACK_ROUTES.includes(pathname);
   const showGear = GEAR_ROUTES.includes(pathname);
+  const showViewToggle = VIEW_TOGGLE_ROUTES.includes(pathname) && tabNotes.length > 0;
 
   return (
     <View style={styles.bar}>
@@ -59,6 +69,31 @@ export function TopBar() {
           />
           <Text style={styles.logoText}>Harp2Tab</Text>
         </Pressable>
+
+        {showViewToggle && (
+          <View style={styles.viewToggle}>
+            <Pressable
+              onPress={() => setViewMode('list')}
+              style={[styles.viewToggleSeg, viewMode === 'list' && styles.viewToggleSegActive]}
+              accessibilityRole="radio"
+              accessibilityState={{ checked: viewMode === 'list' }}
+              accessibilityLabel="List view"
+            >
+              <Ionicons name="list-outline" size={13} color={viewMode === 'list' ? '#fff' : theme.textSub} />
+              <Text style={[styles.viewToggleText, viewMode === 'list' && styles.viewToggleTextActive]}>List</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setViewMode('pianoRoll')}
+              style={[styles.viewToggleSeg, viewMode === 'pianoRoll' && styles.viewToggleSegActive]}
+              accessibilityRole="radio"
+              accessibilityState={{ checked: viewMode === 'pianoRoll' }}
+              accessibilityLabel="Piano roll view"
+            >
+              <MaterialCommunityIcons name="piano" size={14} color={viewMode === 'pianoRoll' ? '#fff' : theme.textSub} />
+              <Text style={[styles.viewToggleText, viewMode === 'pianoRoll' && styles.viewToggleTextActive]}>Piano Roll</Text>
+            </Pressable>
+          </View>
+        )}
       </View>
 
       {showGear && (
@@ -121,5 +156,26 @@ function createStyles(t: Theme) {
       cursor:       'pointer',
     } as any,
     iconBtnHovered: { backgroundColor: t.surfaceAlt },
+
+    viewToggle: {
+      flexDirection:   'row',
+      backgroundColor: t.surfaceAlt,
+      borderRadius:    8,
+      padding:         2,
+      gap:             2,
+      marginLeft:      8,
+    },
+    viewToggleSeg: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      gap:               5,
+      paddingVertical:   6,
+      paddingHorizontal: 10,
+      borderRadius:      6,
+      cursor:            'pointer',
+    } as any,
+    viewToggleSegActive: { backgroundColor: t.accent },
+    viewToggleText:       { fontSize: 12, fontFamily: Poppins.semiBold, color: t.textSub },
+    viewToggleTextActive: { color: '#fff' },
   });
 }

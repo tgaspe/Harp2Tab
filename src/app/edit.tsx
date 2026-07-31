@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, TextInput, View, type ViewStyle } from 'react-native';
+import { Modal, Platform, Pressable, StyleSheet, Text, TextInput, View, type ViewStyle } from 'react-native';
 import { FlatList } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import DraggableFlatList, {
   ScaleDecorator,
@@ -16,7 +16,7 @@ import { ActionSheetModal } from '@/components/ActionSheetModal';
 import { KeyGrid } from '@/components/KeyGrid';
 import { ExportOption } from '@/components/ExportOption';
 import { useTheme } from '@/hooks/useTheme';
-import { useAppStore, selectTabNotes, selectKey, selectHarmonicaType, selectCanUndo, selectCanRedo, selectBpm, selectMetronomeEnabled, selectExportFmt, selectRecordingTitle } from '@/store/useAppStore';
+import { useAppStore, selectTabNotes, selectKey, selectHarmonicaType, selectCanUndo, selectCanRedo, selectBpm, selectMetronomeEnabled, selectExportFmt, selectRecordingTitle, selectViewMode } from '@/store/useAppStore';
 import { saveCurrentSessionToLibrary, getDefaultRecordingTitle, startNewRecordingSession } from '@/store/sessionSnapshot';
 import { usePlayback } from '@/hooks/usePlayback';
 import { previewNote } from '@/native/Playback';
@@ -50,6 +50,13 @@ export default function EditScreen() {
   const metronomeEnabled  = useAppStore(selectMetronomeEnabled);
   const setMetronomeEnabled = useAppStore((s) => s.setMetronomeEnabled);
   const recordingTitle    = useAppStore(selectRecordingTitle);
+  // Plain (non-undo-tracked) setters — only used to apply the sidebar's New Recording
+  // key/type popup choice at the moment we actually navigate away, never while the
+  // current session is still on screen (see handleNewRecording below). transposeToKey/
+  // changeHarmonicaType (used by KeyTypeControl above) are for the *current* session's
+  // notes; these are for priming the *next* one, so no note remapping applies.
+  const setKeyForNewSession  = useAppStore((s) => s.selectKey);
+  const setTypeForNewSession = useAppStore((s) => s.setHarmonicaType);
   const {
     isPlaying, isPaused, currentTimeMs, play, pause, resume, stop, seek,
     loopEnabled, setLoopEnabled, playbackRate, setPlaybackRate,
@@ -59,7 +66,11 @@ export default function EditScreen() {
   const [justSaved, setJustSaved] = useState(false);
   const [namingAction, setNamingAction] = useState<'save' | 'new' | null>(null);
   const [showRatingModal, setShowRatingModal] = useState(false);
-  const [viewMode, setViewMode] = useState<'list' | 'pianoRoll'>('list');
+  // Lives in the shared store (not local state) so the web TopBar — rendered in the
+  // root layout, outside this screen's tree — can show and drive the same toggle next
+  // to the app title.
+  const viewMode    = useAppStore(selectViewMode);
+  const setViewMode = useAppStore((s) => s.setViewMode);
   // A/B loop region marked on the piano-roll ruler — when set, it takes priority over
   // the plain whole-recording loopEnabled toggle (see handlePlayToggle/handleSeek below
   // and usePlayback's loopBounds handling).
@@ -118,6 +129,16 @@ export default function EditScreen() {
     });
   }
 
+  // The note whose [start_time, start_time+duration) span currently contains the
+  // playhead — cheap O(n) scan, fine at 60fps for a few hundred notes. Only tracked
+  // while actually playing (not paused/stopped), matching what a "now playing" border
+  // should mean. Deliberately NOT `currentTimeMs` itself in renderItem's deps below:
+  // this only changes at note boundaries, so it doesn't force DraggableFlatList to
+  // re-render every row on every animation-frame tick.
+  const playingNoteId = isPlaying
+    ? (tabNotes.find((n) => currentTimeMs >= n.start_time && currentTimeMs < n.start_time + n.duration)?.id ?? null)
+    : null;
+
   const renderItem = useCallback(
     ({ item, getIndex, drag, isActive }: RenderItemParams<TabNote>) => (
       <ScaleDecorator activeScale={0.96}>
@@ -133,10 +154,11 @@ export default function EditScreen() {
           draggable
           drag={drag}
           isActive={isActive}
+          isPlayingNow={playingNoteId === item.id}
         />
       </ScaleDecorator>
     ),
-    [deleteNote, updateNote, selectedId],
+    [deleteNote, updateNote, selectedId, playingNoteId],
   );
 
   function handleAddNote() {
@@ -166,14 +188,25 @@ export default function EditScreen() {
   // On web, the chart already has a name — it's typed inline in the toolbar
   // (ChartNameInput/recordingTitle) — so there's nothing left for a naming prompt to ask;
   // native has no such inline field, so it still prompts via NameRecordingModal below.
-  function handleNewRecording() {
+  // `keyTypeOverride` comes from the sidebar's New Recording key/type popup — applied
+  // only right here, after the current session's already been saved under its own
+  // key/type and we're actually about to navigate away, so the current view never
+  // briefly shows notes under a key they weren't recorded in.
+  function handleNewRecording(keyTypeOverride?: { key: HarmonicaKey; type: HarmonicaType }) {
+    function applyOverride() {
+      if (!keyTypeOverride) return;
+      setKeyForNewSession(keyTypeOverride.key);
+      setTypeForNewSession(keyTypeOverride.type);
+    }
     if (tabNotes.length === 0) {
+      applyOverride();
       goToNewRecording();
       return;
     }
     if (Platform.OS === 'web') {
       // Always write a fresh entry — see the comment in handleConfirmNaming's 'new' branch.
       saveCurrentSessionToLibrary(recordingTitle, { asNew: true });
+      applyOverride();
       goToNewRecording();
       return;
     }
@@ -271,15 +304,73 @@ export default function EditScreen() {
     ? tabNotes.reduce((max, n) => Math.max(max, n.start_time + n.duration), 0)
     : 0;
 
+  // List view goes full-width with its own sidebar (mirroring Home), same as Piano Roll
+  // already does — but only once there's something to edit; an empty session still uses
+  // the plain centered toolbar+CTA layout below (nothing for a sidebar to organize yet).
+  const showListSidebar = Platform.OS === 'web' && viewMode === 'list' && tabNotes.length > 0;
+
   return (
     <SafeAreaView style={styles.safe}>
-      <View style={[styles.container, viewMode === 'pianoRoll' && styles.containerFullWidth]}>
+      <View style={[styles.container, styles.containerFullWidth]}>
 
-        {Platform.OS === 'web' ? (
+        {showListSidebar ? (
+          <View style={styles.editShellEdgeWrap}>
+            <View style={styles.editShell}>
+              <EditSidebar
+                tabNotesLength={tabNotes.length}
+                justSaved={justSaved}
+                onSave={handleSaveToLibrary}
+                onNew={handleNewRecording}
+                onInspectFrames={() => router.push('/frame-inspector')}
+                canUndo={canUndo}
+                onUndo={undo}
+                canRedo={canRedo}
+                onRedo={redo}
+                theme={theme}
+                styles={styles}
+              />
+              <View style={styles.editMainColumn}>
+                <DraggableFlatList
+                  ref={listRef}
+                  data={tabNotes}
+                  keyExtractor={(item) => item.id}
+                  renderItem={renderItem}
+                  onDragEnd={({ data }) => {
+                    let cursor = 0;
+                    reorderNotes(data.map(note => {
+                      const updated = { ...note, start_time: cursor };
+                      cursor += note.duration;
+                      return updated;
+                    }));
+                  }}
+                  containerStyle={styles.list}
+                  contentContainerStyle={{ paddingBottom: 16 }}
+                  showsVerticalScrollIndicator={false}
+                  autoscrollThreshold={50}
+                  autoscrollSpeed={100}
+                  activationDistance={1}
+                  ListFooterComponent={
+                    <Pressable
+                      onPress={handleAddNote}
+                      style={({ pressed, hovered }: any) => [
+                        styles.addNoteCard,
+                        (pressed || hovered) && styles.addNoteCardHovered,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel="Add Note"
+                    >
+                      <Ionicons name="add-circle-outline" size={18} color={theme.accent} />
+                      <Text style={styles.addNoteCardText}>Add Note</Text>
+                    </Pressable>
+                  }
+                />
+              </View>
+            </View>
+          </View>
+        ) : Platform.OS === 'web' ? (
           <WebToolbar
             tabNotesLength={tabNotes.length}
             viewMode={viewMode}
-            setViewMode={setViewMode}
             harmonicaKey={harmonicaKey}
             canUndo={canUndo}
             onUndo={undo}
@@ -369,7 +460,7 @@ export default function EditScreen() {
                   accessibilityState={{ checked: viewMode === 'pianoRoll' }}
                   accessibilityLabel="Piano roll view"
                 >
-                  <Ionicons name="grid-outline" size={15} color={viewMode === 'pianoRoll' ? '#fff' : theme.textSub} />
+                  <MaterialCommunityIcons name="piano" size={16} color={viewMode === 'pianoRoll' ? '#fff' : theme.textSub} />
                   <Text style={[styles.viewModeText, viewMode === 'pianoRoll' && styles.viewModeTextActive]}>Piano Roll</Text>
                 </Pressable>
               </View>
@@ -417,7 +508,8 @@ export default function EditScreen() {
           </>
         )}
 
-        {tabNotes.length === 0 ? (
+        {!showListSidebar && (
+          tabNotes.length === 0 ? (
           Platform.OS === 'web' ? (
             <View style={styles.empty}>
               <View style={styles.emptyIconWrap}>
@@ -426,7 +518,7 @@ export default function EditScreen() {
               <Text style={styles.emptyTitle}>Nothing to edit yet</Text>
               <Text style={styles.emptyHint}>Record a tab and it will show up here, ready to fine-tune.</Text>
               <Pressable
-                onPress={handleNewRecording}
+                onPress={() => handleNewRecording()}
                 style={({ pressed, hovered }: any) => [
                   styles.emptyCta,
                   (pressed || hovered) && styles.webBtnHoverFilled,
@@ -489,6 +581,7 @@ export default function EditScreen() {
               onLoopRegionChange={setLoopRegion}
             />
           </View>
+          )
         )}
 
         {Platform.OS === 'web' ? (
@@ -511,7 +604,7 @@ export default function EditScreen() {
             setBpm={setBpm}
             metronomeEnabled={metronomeEnabled}
             onToggleMetronome={handleToggleMetronome}
-            glued={viewMode === 'pianoRoll'}
+            glued={viewMode === 'pianoRoll' || showListSidebar}
             theme={theme}
             styles={styles}
           />
@@ -560,7 +653,7 @@ export default function EditScreen() {
               </Pressable>
 
               <Pressable
-                onPress={handleNewRecording}
+                onPress={() => handleNewRecording()}
                 style={({ pressed }) => [
                   styles.btn,
                   styles.btnGhost,
@@ -713,7 +806,11 @@ function IconButton({
 // first when it would actually cost something (diatonic → chromatic never does, since
 // chromatic is a strict superset) — computed here via the same noteToTab check
 // changeHarmonicaType itself uses internally, just read-only ahead of time.
-function KeyTypeControl({ theme, styles }: { theme: Theme; styles: EditStyles }) {
+// variant='inline' is the list view sidebar's permanently-visible form — same
+// selection handlers and unplayable-note confirmation as the dropdown, but rendered
+// as an always-open type toggle + KeyGrid (onAccent) instead of a badge/chevron
+// trigger, matching how the Home screen's own sidebar shows its key/type picker.
+function KeyTypeControl({ theme, styles, variant = 'dropdown' }: { theme: Theme; styles: EditStyles; variant?: 'dropdown' | 'inline' }) {
   const harmonicaKey  = useAppStore(selectKey);
   const harmonicaType = useAppStore(selectHarmonicaType);
   const tabNotes      = useAppStore(selectTabNotes);
@@ -741,6 +838,55 @@ function KeyTypeControl({ theme, styles }: { theme: Theme; styles: EditStyles })
     setPendingType({ type, count });
   }
 
+  const typeToggle = (
+    <View style={variant === 'inline' ? styles.sidebarTypeToggle : styles.keyDropdownTypeToggle}>
+      {(['diatonic', 'chromatic'] as const).map((type) => (
+        <Pressable
+          key={type}
+          onPress={() => handleSelectType(type)}
+          style={[
+            variant === 'inline' ? styles.sidebarTypeSeg : styles.keyDropdownTypeSeg,
+            harmonicaType === type && (variant === 'inline' ? styles.sidebarTypeSegActive : styles.keyDropdownTypeSegActive),
+          ]}
+          accessibilityRole="radio"
+          accessibilityState={{ checked: harmonicaType === type }}
+        >
+          <Text style={[
+            variant === 'inline' ? styles.sidebarTypeText : styles.keyDropdownTypeText,
+            harmonicaType === type && (variant === 'inline' ? styles.sidebarTypeTextActive : styles.keyDropdownTypeTextActive),
+          ]}>
+            {type === 'diatonic' ? 'Diatonic' : 'Chromatic'}
+          </Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+
+  const confirmModal = (
+    <ActionSheetModal
+      visible={pendingType !== null}
+      title={pendingType ? `Switching to ${pendingType.type === 'chromatic' ? 'Chromatic' : 'Diatonic'} will make ${pendingType.count} note${pendingType.count !== 1 ? 's' : ''} unplayable` : undefined}
+      options={[{
+        label: 'Switch Anyway',
+        onPress: () => {
+          if (pendingType) changeHarmonicaType(pendingType.type);
+          setOpen(false);
+        },
+      }]}
+      onClose={() => setPendingType(null)}
+    />
+  );
+
+  if (variant === 'inline') {
+    return (
+      <View style={styles.sidebarKeyTypeGroup}>
+        {typeToggle}
+        <KeyGrid selected={harmonicaKey} onSelect={handleSelectKey} onAccent />
+        {confirmModal}
+      </View>
+    );
+  }
+
   return (
     <View style={styles.keyControlAnchor}>
       <Pressable
@@ -757,38 +903,13 @@ function KeyTypeControl({ theme, styles }: { theme: Theme; styles: EditStyles })
 
       {open && (
         <View style={styles.keyDropdown}>
-          <View style={styles.keyDropdownTypeToggle}>
-            {(['diatonic', 'chromatic'] as const).map((type) => (
-              <Pressable
-                key={type}
-                onPress={() => handleSelectType(type)}
-                style={[styles.keyDropdownTypeSeg, harmonicaType === type && styles.keyDropdownTypeSegActive]}
-                accessibilityRole="radio"
-                accessibilityState={{ checked: harmonicaType === type }}
-              >
-                <Text style={[styles.keyDropdownTypeText, harmonicaType === type && styles.keyDropdownTypeTextActive]}>
-                  {type === 'diatonic' ? 'Diatonic' : 'Chromatic'}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
+          {typeToggle}
           <View style={styles.keyDropdownDivider} />
           <KeyGrid selected={harmonicaKey} onSelect={handleSelectKey} />
         </View>
       )}
 
-      <ActionSheetModal
-        visible={pendingType !== null}
-        title={pendingType ? `Switching to ${pendingType.type === 'chromatic' ? 'Chromatic' : 'Diatonic'} will make ${pendingType.count} note${pendingType.count !== 1 ? 's' : ''} unplayable` : undefined}
-        options={[{
-          label: 'Switch Anyway',
-          onPress: () => {
-            if (pendingType) changeHarmonicaType(pendingType.type);
-            setOpen(false);
-          },
-        }]}
-        onClose={() => setPendingType(null)}
-      />
+      {confirmModal}
     </View>
   );
 }
@@ -796,7 +917,10 @@ function KeyTypeControl({ theme, styles }: { theme: Theme; styles: EditStyles })
 // Editable chart name, inline in the toolbar — self-contained (reads/writes the store
 // directly) so naming happens as you go instead of only being prompted for at save time.
 // Empty is a valid state (untitled); the placeholder shows what a save would default to.
-function ChartNameInput({ theme, styles }: { theme: Theme; styles: EditStyles }) {
+// variant='sidebar' is the same field sitting full-width on the list view's accent
+// sidebar (white-on-accent, matching the sidebar's other onAccent-styled controls)
+// instead of the compact dark-on-white toolbar trigger.
+function ChartNameInput({ theme, styles, variant = 'toolbar' }: { theme: Theme; styles: EditStyles; variant?: 'toolbar' | 'sidebar' }) {
   const recordingTitle    = useAppStore(selectRecordingTitle);
   const setRecordingTitle = useAppStore((s) => s.setRecordingTitle);
   return (
@@ -804,8 +928,8 @@ function ChartNameInput({ theme, styles }: { theme: Theme; styles: EditStyles })
       value={recordingTitle}
       onChangeText={setRecordingTitle}
       placeholder={getDefaultRecordingTitle()}
-      placeholderTextColor={theme.textMuted}
-      style={styles.chartNameInput}
+      placeholderTextColor={variant === 'sidebar' ? 'rgba(255,255,255,0.6)' : theme.textMuted}
+      style={variant === 'sidebar' ? styles.chartNameInputSidebar : styles.chartNameInput}
       accessibilityLabel="Chart name"
     />
   );
@@ -817,7 +941,7 @@ function ChartNameInput({ theme, styles }: { theme: Theme; styles: EditStyles })
 // on the /export route that isn't just "pick a format, then Save or Share" — the
 // full-page version stays for native, where Sharing.shareAsync/StorageAccessFramework
 // need their own screen.
-function ExportMenu({ tabNotesLength, theme, styles }: { tabNotesLength: number; theme: Theme; styles: EditStyles }) {
+function ExportMenu({ tabNotesLength, theme, styles, variant = 'toolbar' }: { tabNotesLength: number; theme: Theme; styles: EditStyles; variant?: 'toolbar' | 'sidebar' }) {
   const selectedKey     = useAppStore(selectKey);
   const tabNotes        = useAppStore(selectTabNotes);
   const harmonicaType   = useAppStore(selectHarmonicaType);
@@ -878,6 +1002,119 @@ function ExportMenu({ tabNotesLength, theme, styles }: { tabNotesLength: number;
     doShare();
   }
 
+  const sidebar = variant === 'sidebar';
+
+  // Shared between both variants — only the wrapper around it (anchored dropdown vs.
+  // centered modal card) differs.
+  const formatAndActions = (
+    <>
+      <Text style={styles.exportDropdownLabel}>FORMAT</Text>
+      <View style={styles.exportFormatGroup}>
+        {EXPORT_FORMATS.map((fmt: ExportFormat, i: number) => (
+          <ExportOption
+            key={fmt}
+            format={fmt}
+            isSelected={exportFormat === fmt}
+            onSelect={setExportFormat}
+            showDivider={i < EXPORT_FORMATS.length - 1}
+          />
+        ))}
+      </View>
+      <View style={styles.exportDropdownActions}>
+        <Pressable
+          onPress={handleSave}
+          disabled={isExporting}
+          style={({ pressed, hovered }: any) => [
+            styles.exportDropdownSaveBtn,
+            (pressed || hovered) && !isExporting && styles.webIconBtnHover,
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel="Download to device"
+        >
+          <Ionicons name="download-outline" size={15} color={theme.accent} />
+          <Text style={styles.exportDropdownSaveBtnText}>{isExporting ? '…' : 'Download'}</Text>
+        </Pressable>
+        <Pressable
+          onPress={handleShare}
+          disabled={isExporting}
+          style={({ pressed, hovered }: any) => [
+            styles.exportDropdownShareBtn,
+            (pressed || hovered) && !isExporting && styles.webBtnHoverFilled,
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel="Share file"
+        >
+          <Ionicons name="share-outline" size={15} color="#fff" />
+          <Text style={styles.exportDropdownShareBtnText}>{isExporting ? 'Exporting…' : 'Share'}</Text>
+        </Pressable>
+      </View>
+    </>
+  );
+
+  const confirmModal = (
+    <ActionSheetModal
+      visible={pendingExport !== null}
+      title={pendingExport ? `${pendingExport.count} note${pendingExport.count !== 1 ? 's' : ''} aren't playable on this harmonica` : undefined}
+      options={[{
+        label: 'Continue',
+        onPress: () => {
+          if (pendingExport?.action === 'share') doShare();
+          else if (pendingExport?.action === 'save') doSave();
+        },
+      }]}
+      onClose={() => setPendingExport(null)}
+    />
+  );
+
+  if (sidebar) {
+    return (
+      <>
+        <Pressable
+          onPress={() => setOpen(true)}
+          disabled={disabled}
+          style={({ pressed, hovered }: any) => [
+            styles.sidebarExportBtn,
+            disabled && styles.sidebarRowDisabled,
+            (pressed || hovered) && !disabled && styles.sidebarRowPressed,
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel="Export"
+          accessibilityState={{ disabled }}
+        >
+          <Ionicons name="share-outline" size={16} color={disabled ? 'rgba(255,255,255,0.85)' : '#fff'} />
+          <Text style={styles.sidebarRowText}>Export</Text>
+        </Pressable>
+
+        {/* Centered modal, same reasoning as the New Recording key/type picker —
+            exporting is a deliberate "finish" action, not a quick inline tweak. */}
+        <Modal
+          visible={open && !disabled}
+          transparent
+          animationType="fade"
+          statusBarTranslucent
+          onRequestClose={() => setOpen(false)}
+        >
+          <Pressable style={styles.newRecordingBackdrop} onPress={() => setOpen(false)}>
+            <Pressable style={styles.newRecordingCard} onPress={(e) => e.stopPropagation()}>
+              <Text style={styles.newRecordingTitle}>Export</Text>
+              {formatAndActions}
+              <Pressable
+                onPress={() => setOpen(false)}
+                style={({ pressed }: any) => [styles.newRecordingCancel, pressed && { opacity: 0.7 }]}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel"
+              >
+                <Text style={styles.newRecordingCancelText}>Cancel</Text>
+              </Pressable>
+            </Pressable>
+          </Pressable>
+        </Modal>
+
+        {confirmModal}
+      </>
+    );
+  }
+
   return (
     <View style={styles.exportAnchor}>
       <Pressable
@@ -899,72 +1136,246 @@ function ExportMenu({ tabNotesLength, theme, styles }: { tabNotesLength: number;
 
       {open && !disabled && (
         <View style={styles.exportDropdown}>
-          <Text style={styles.exportDropdownLabel}>FORMAT</Text>
-          <View style={styles.exportFormatGroup}>
-            {EXPORT_FORMATS.map((fmt: ExportFormat, i: number) => (
-              <ExportOption
-                key={fmt}
-                format={fmt}
-                isSelected={exportFormat === fmt}
-                onSelect={setExportFormat}
-                showDivider={i < EXPORT_FORMATS.length - 1}
-              />
-            ))}
-          </View>
-          <View style={styles.exportDropdownActions}>
-            <Pressable
-              onPress={handleSave}
-              disabled={isExporting}
-              style={({ pressed, hovered }: any) => [
-                styles.exportDropdownSaveBtn,
-                (pressed || hovered) && !isExporting && styles.webIconBtnHover,
-              ]}
-              accessibilityRole="button"
-              accessibilityLabel="Save to device"
-            >
-              <Ionicons name="download-outline" size={15} color={theme.accent} />
-              <Text style={styles.exportDropdownSaveBtnText}>{isExporting ? '…' : 'Save'}</Text>
-            </Pressable>
-            <Pressable
-              onPress={handleShare}
-              disabled={isExporting}
-              style={({ pressed, hovered }: any) => [
-                styles.exportDropdownShareBtn,
-                (pressed || hovered) && !isExporting && styles.webBtnHoverFilled,
-              ]}
-              accessibilityRole="button"
-              accessibilityLabel="Share file"
-            >
-              <Ionicons name="share-outline" size={15} color="#fff" />
-              <Text style={styles.exportDropdownShareBtnText}>{isExporting ? 'Exporting…' : 'Share'}</Text>
-            </Pressable>
-          </View>
+          {formatAndActions}
         </View>
       )}
 
-      <ActionSheetModal
-        visible={pendingExport !== null}
-        title={pendingExport ? `${pendingExport.count} note${pendingExport.count !== 1 ? 's' : ''} aren't playable on this harmonica` : undefined}
-        options={[{
-          label: 'Continue',
-          onPress: () => {
-            if (pendingExport?.action === 'share') doShare();
-            else if (pendingExport?.action === 'save') doSave();
-          },
-        }]}
-        onClose={() => setPendingExport(null)}
-      />
+      {confirmModal}
+    </View>
+  );
+}
+
+// List view's left rail — mirrors the Home screen's sidebar (full-height, accent-filled,
+// plain rows with no card chrome) instead of the piano-roll's compact top toolbar. Only
+// used for List view: Piano Roll keeps its existing edge-to-edge DAW-style layout, which
+// a sidebar would fight rather than complement.
+function EditSidebar({
+  tabNotesLength, justSaved, onSave, onNew, onInspectFrames, canUndo, onUndo, canRedo, onRedo, theme, styles,
+}: {
+  tabNotesLength: number;
+  justSaved: boolean;
+  onSave: () => void;
+  onNew: (keyType: { key: HarmonicaKey; type: HarmonicaType }) => void;
+  onInspectFrames: () => void;
+  canUndo: boolean;
+  onUndo: () => void;
+  canRedo: boolean;
+  onRedo: () => void;
+  theme: Theme;
+  styles: EditStyles;
+}) {
+  // Priming key/type for the *next* recording, not the one currently open — local,
+  // plain state (not the store's transposeToKey/changeHarmonicaType, and deliberately
+  // not the store's raw selectedKey/harmonicaType either) so opening this popup and
+  // poking around never touches what's currently on screen. Only committed to the
+  // store at the moment New Recording is actually pressed (see handleNewRecording).
+  const currentKey  = useAppStore(selectKey);
+  const currentType = useAppStore(selectHarmonicaType);
+  const [newPickerOpen, setNewPickerOpen] = useState(false);
+  const [pendingKey, setPendingKey]   = useState<HarmonicaKey>(currentKey ?? 'C');
+  const [pendingType, setPendingType] = useState<HarmonicaType>(currentType);
+
+  function toggleNewPicker() {
+    if (!newPickerOpen) {
+      setPendingKey(currentKey ?? 'C');
+      setPendingType(currentType);
+    }
+    setNewPickerOpen((v) => !v);
+  }
+
+  function confirmNewRecording() {
+    setNewPickerOpen(false);
+    onNew({ key: pendingKey, type: pendingType });
+  }
+
+  return (
+    <View style={styles.editSidebar}>
+      <View style={styles.sidebarSection}>
+        <Text style={styles.sidebarSectionLabel}>CHART</Text>
+        <ChartNameInput theme={theme} styles={styles} variant="sidebar" />
+        <Text style={styles.sidebarNoteCount}>{tabNotesLength} note{tabNotesLength !== 1 ? 's' : ''}</Text>
+      </View>
+
+      <View style={styles.sidebarDivider} />
+
+      <View style={styles.sidebarSection}>
+        <Text style={styles.sidebarSectionLabel}>KEY & TYPE</Text>
+        <KeyTypeControl theme={theme} styles={styles} variant="inline" />
+      </View>
+
+      <View style={styles.sidebarDivider} />
+
+      <View style={styles.sidebarSection}>
+        <Text style={styles.sidebarSectionLabel}>ACTIONS</Text>
+
+        <Pressable
+          disabled
+          style={[styles.sidebarRow, styles.sidebarRowDisabled]}
+          accessibilityRole="button"
+          accessibilityLabel="Upload Audio or MIDI — coming soon"
+          accessibilityState={{ disabled: true }}
+        >
+          <View style={styles.sidebarRowIconWrap}>
+            <Ionicons name="cloud-upload-outline" size={16} color="#fff" />
+          </View>
+          <Text style={styles.sidebarRowText}>Upload</Text>
+          <Text style={styles.sidebarComingSoon}>Soon</Text>
+        </Pressable>
+
+        <Pressable
+          onPress={toggleNewPicker}
+          style={({ pressed, hovered }: any) => [
+            styles.sidebarRow,
+            (pressed || hovered) && styles.sidebarRowPressed,
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel="New Recording — choose key & type"
+        >
+          <View style={styles.sidebarRowIconWrap}>
+            <Ionicons name="mic-outline" size={16} color="#fff" />
+          </View>
+          <Text style={styles.sidebarRowText}>New Recording</Text>
+        </Pressable>
+
+        <Pressable
+          onPress={onSave}
+          disabled={tabNotesLength === 0}
+          style={({ pressed, hovered }: any) => [
+            styles.sidebarRow,
+            tabNotesLength === 0 && styles.sidebarRowDisabled,
+            (pressed || hovered) && tabNotesLength > 0 && styles.sidebarRowPressed,
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel={justSaved ? 'Saved to recent recordings' : 'Save to recent recordings'}
+          accessibilityState={{ disabled: tabNotesLength === 0 }}
+        >
+          <View style={styles.sidebarRowIconWrap}>
+            <Ionicons name={justSaved ? 'checkmark-circle' : 'bookmark-outline'} size={16} color="#fff" />
+          </View>
+          <Text style={styles.sidebarRowText}>{justSaved ? 'Saved' : 'Save'}</Text>
+        </Pressable>
+
+        <Modal
+          visible={newPickerOpen}
+          transparent
+          animationType="fade"
+          statusBarTranslucent
+          onRequestClose={() => setNewPickerOpen(false)}
+        >
+          {/* No accessibilityRole="button" on these two wrappers — that's what makes
+              react-native-web render a real <button>, and nesting one inside another
+              (the option rows below do need the role) is invalid HTML. Same pattern as
+              ActionSheetModal. */}
+          <Pressable style={styles.newRecordingBackdrop} onPress={() => setNewPickerOpen(false)}>
+            <Pressable style={styles.newRecordingCard} onPress={(e) => e.stopPropagation()}>
+              <Text style={styles.newRecordingTitle}>New Recording</Text>
+              <Text style={styles.sidebarPopoverLabel}>KEY & TYPE</Text>
+              <View style={styles.keyDropdownTypeToggle}>
+                {(['diatonic', 'chromatic'] as const).map((type) => (
+                  <Pressable
+                    key={type}
+                    onPress={() => setPendingType(type)}
+                    style={[styles.keyDropdownTypeSeg, pendingType === type && styles.keyDropdownTypeSegActive]}
+                    accessibilityRole="radio"
+                    accessibilityState={{ checked: pendingType === type }}
+                  >
+                    <Text style={[styles.keyDropdownTypeText, pendingType === type && styles.keyDropdownTypeTextActive]}>
+                      {type === 'diatonic' ? 'Diatonic' : 'Chromatic'}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+              <View style={styles.keyDropdownDivider} />
+              <KeyGrid selected={pendingKey} onSelect={setPendingKey} />
+              <Pressable
+                onPress={confirmNewRecording}
+                style={({ pressed, hovered }: any) => [
+                  styles.sidebarPopoverConfirm,
+                  (pressed || hovered) && styles.sidebarPopoverConfirmHover,
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel={`Start new recording — ${pendingType === 'chromatic' ? '12-Chromatic' : 'Diatonic'}, Key ${pendingKey}`}
+              >
+                <Ionicons name="mic-outline" size={14} color="#fff" />
+                <Text style={styles.sidebarPopoverConfirmText}>Start New Recording</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setNewPickerOpen(false)}
+                style={({ pressed }: any) => [styles.newRecordingCancel, pressed && { opacity: 0.7 }]}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel"
+              >
+                <Text style={styles.newRecordingCancelText}>Cancel</Text>
+              </Pressable>
+            </Pressable>
+          </Pressable>
+        </Modal>
+
+        <Pressable
+          onPress={onInspectFrames}
+          disabled={tabNotesLength === 0}
+          style={({ pressed, hovered }: any) => [
+            styles.sidebarRow,
+            tabNotesLength === 0 && styles.sidebarRowDisabled,
+            (pressed || hovered) && tabNotesLength > 0 && styles.sidebarRowPressed,
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel="Inspect frames"
+          accessibilityState={{ disabled: tabNotesLength === 0 }}
+        >
+          <View style={styles.sidebarRowIconWrap}>
+            <Ionicons name="analytics-outline" size={16} color="#fff" />
+          </View>
+          <Text style={styles.sidebarRowText}>Inspect Frames</Text>
+        </Pressable>
+
+        <ExportMenu tabNotesLength={tabNotesLength} theme={theme} styles={styles} variant="sidebar" />
+
+        <View style={styles.sidebarRowSplit}>
+          <Pressable
+            onPress={onUndo}
+            disabled={!canUndo}
+            style={({ pressed, hovered }: any) => [
+              styles.sidebarRow,
+              styles.sidebarRowHalf,
+              !canUndo && styles.sidebarRowDisabled,
+              (pressed || hovered) && canUndo && styles.sidebarRowPressed,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Undo last action"
+            accessibilityState={{ disabled: !canUndo }}
+          >
+            <Ionicons name="arrow-undo" size={16} color="#fff" />
+            <Text style={styles.sidebarRowHalfText}>Undo</Text>
+          </Pressable>
+          <Pressable
+            onPress={onRedo}
+            disabled={!canRedo}
+            style={({ pressed, hovered }: any) => [
+              styles.sidebarRow,
+              styles.sidebarRowHalf,
+              !canRedo && styles.sidebarRowDisabled,
+              (pressed || hovered) && canRedo && styles.sidebarRowPressed,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Redo"
+            accessibilityState={{ disabled: !canRedo }}
+          >
+            <Ionicons name="arrow-redo" size={16} color="#fff" />
+            <Text style={styles.sidebarRowHalfText}>Redo</Text>
+          </Pressable>
+        </View>
+      </View>
     </View>
   );
 }
 
 function WebToolbar({
-  tabNotesLength, viewMode, setViewMode, harmonicaKey,
+  tabNotesLength, viewMode, harmonicaKey,
   canUndo, onUndo, canRedo, onRedo, justSaved, onSave, onInspectFrames, onNew, onAdd, theme, styles,
 }: {
   tabNotesLength: number;
   viewMode: 'list' | 'pianoRoll';
-  setViewMode: (m: 'list' | 'pianoRoll') => void;
   harmonicaKey: HarmonicaKey | null;
   canUndo: boolean;
   onUndo: () => void;
@@ -980,39 +1391,13 @@ function WebToolbar({
 }) {
   return (
     <View style={[styles.webToolbar, viewMode === 'pianoRoll' && styles.webToolbarGlued]}>
-      {/* View + Project cluster */}
+      {/* View + Project cluster — the List/Piano-Roll toggle itself now lives in the
+          global TopBar next to the app title, since it needs to be visible/drivable
+          from outside this screen too. */}
       <View style={styles.webToolbarGroup}>
         {tabNotesLength > 0 && (
           <>
             <ChartNameInput theme={theme} styles={styles} />
-            <Divider styles={styles} />
-          </>
-        )}
-        <View style={styles.webToggle}>
-          <Pressable
-            onPress={() => setViewMode('list')}
-            style={[styles.webToggleSeg, viewMode === 'list' && styles.webToggleSegActive]}
-            accessibilityRole="radio"
-            accessibilityState={{ checked: viewMode === 'list' }}
-            accessibilityLabel="List view"
-          >
-            <Ionicons name="list-outline" size={13} color={viewMode === 'list' ? '#fff' : theme.textSub} />
-            <Text style={[styles.webToggleText, viewMode === 'list' && styles.webToggleTextActive]}>List</Text>
-          </Pressable>
-          <Pressable
-            onPress={() => setViewMode('pianoRoll')}
-            style={[styles.webToggleSeg, viewMode === 'pianoRoll' && styles.webToggleSegActive]}
-            accessibilityRole="radio"
-            accessibilityState={{ checked: viewMode === 'pianoRoll' }}
-            accessibilityLabel="Piano roll view"
-          >
-            <Ionicons name="grid-outline" size={13} color={viewMode === 'pianoRoll' ? '#fff' : theme.textSub} />
-            <Text style={[styles.webToggleText, viewMode === 'pianoRoll' && styles.webToggleTextActive]}>Piano Roll</Text>
-          </Pressable>
-        </View>
-
-        {tabNotesLength > 0 && (
-          <>
             <Divider styles={styles} />
             <Text style={styles.webNoteCount}>{tabNotesLength} note{tabNotesLength !== 1 ? 's' : ''}</Text>
           </>
@@ -1130,36 +1515,38 @@ function WebTransportBar({
   return (
     <View style={[styles.webTransportBar, glued && styles.webTransportBarGlued]}>
       <View style={styles.webTransportSide}>
-        <IconButton
-          icon="repeat"
-          label={loopEnabled ? 'Disable loop' : 'Enable loop'}
-          onPress={onToggleLoop}
-          disabled={disabled}
-          variant={loopEnabled ? 'active' : 'ghost'}
-          selected={loopEnabled}
-          theme={theme}
-          styles={styles}
-        />
-        <Divider styles={styles} />
-        <View style={styles.webBpmControl}>
-          <Pressable onPress={() => setBpm(bpm - 5)} disabled={disabled} style={styles.webMiniStepBtn} accessibilityRole="button" accessibilityLabel="Decrease tempo">
-            <Ionicons name="remove" size={12} color={disabled ? theme.textMuted : theme.textSub} />
-          </Pressable>
-          <Text style={[styles.webBpmValue, disabled && { color: theme.textMuted }]}>{bpm} BPM</Text>
-          <Pressable onPress={() => setBpm(bpm + 5)} disabled={disabled} style={styles.webMiniStepBtn} accessibilityRole="button" accessibilityLabel="Increase tempo">
-            <Ionicons name="add" size={12} color={disabled ? theme.textMuted : theme.textSub} />
-          </Pressable>
+        <View style={styles.webTransportGroup}>
+          <IconButton
+            icon="repeat"
+            label={loopEnabled ? 'Disable loop' : 'Enable loop'}
+            onPress={onToggleLoop}
+            disabled={disabled}
+            variant={loopEnabled ? 'active' : 'ghost'}
+            selected={loopEnabled}
+            theme={theme}
+            styles={styles}
+          />
+          <Divider styles={styles} />
+          <View style={styles.webBpmControl}>
+            <Pressable onPress={() => setBpm(bpm - 5)} disabled={disabled} style={styles.webMiniStepBtn} accessibilityRole="button" accessibilityLabel="Decrease tempo">
+              <Ionicons name="remove" size={12} color={disabled ? theme.textMuted : theme.textSub} />
+            </Pressable>
+            <Text style={[styles.webBpmValue, disabled && { color: theme.textMuted }]}>{bpm} BPM</Text>
+            <Pressable onPress={() => setBpm(bpm + 5)} disabled={disabled} style={styles.webMiniStepBtn} accessibilityRole="button" accessibilityLabel="Increase tempo">
+              <Ionicons name="add" size={12} color={disabled ? theme.textMuted : theme.textSub} />
+            </Pressable>
+          </View>
+          <IconButton
+            icon="musical-notes"
+            label={metronomeEnabled ? 'Disable metronome' : 'Enable metronome'}
+            onPress={onToggleMetronome}
+            disabled={disabled}
+            variant={metronomeEnabled ? 'active' : 'ghost'}
+            selected={metronomeEnabled}
+            theme={theme}
+            styles={styles}
+          />
         </View>
-        <IconButton
-          icon="musical-notes"
-          label={metronomeEnabled ? 'Disable metronome' : 'Enable metronome'}
-          onPress={onToggleMetronome}
-          disabled={disabled}
-          variant={metronomeEnabled ? 'active' : 'ghost'}
-          selected={metronomeEnabled}
-          theme={theme}
-          styles={styles}
-        />
       </View>
 
       <View style={styles.webTransportCenter}>
@@ -1170,31 +1557,33 @@ function WebTransportBar({
           disabled={disabled}
           style={({ pressed, hovered }: any) => [
             styles.webPlayCircle,
-            disabled && styles.webBtnDisabled,
-            (pressed || hovered) && !disabled && styles.webBtnHoverFilled,
+            disabled && styles.webPlayCircleDisabled,
+            (pressed || hovered) && !disabled && styles.webPlayCircleHover,
           ]}
           accessibilityRole="button"
           accessibilityLabel={isPlaying && !isPaused ? 'Pause' : isPaused ? 'Resume' : 'Play tab'}
           accessibilityState={{ disabled }}
         >
-          <Ionicons name={isPlaying && !isPaused ? 'pause' : 'play'} size={15} color={disabled ? theme.textMuted : '#fff'} />
+          <Ionicons name={isPlaying && !isPaused ? 'pause' : 'play'} size={17} color={disabled ? theme.textMuted : '#fff'} />
         </Pressable>
         <IconButton icon="play-skip-forward" label="Forward one bar" onPress={onSkipForward} disabled={disabled} theme={theme} styles={styles} iconSize={13} />
       </View>
 
       <View style={[styles.webTransportSide, styles.webTransportSideRight]}>
-        <Pressable
-          onPress={onCycleRate}
-          disabled={disabled}
-          style={({ hovered }: any) => [styles.webSpeedBtn, !disabled && hovered && styles.webIconBtnHover]}
-          accessibilityRole="button"
-          accessibilityLabel={`Playback speed: ${playbackRate}x. Tap to change.`}
-        >
-          <Text style={[styles.webSpeedBtnText, disabled && { color: theme.textMuted }]}>{playbackRate}x</Text>
-        </Pressable>
-        <Text style={styles.webPlayTime}>
-          {formatElapsed(currentTimeMs)} / {formatElapsed(totalTimeMs)}
-        </Text>
+        <View style={styles.webTransportGroup}>
+          <Pressable
+            onPress={onCycleRate}
+            disabled={disabled}
+            style={({ hovered }: any) => [styles.webSpeedBtn, !disabled && hovered && styles.webIconBtnHover]}
+            accessibilityRole="button"
+            accessibilityLabel={`Playback speed: ${playbackRate}x. Tap to change.`}
+          >
+            <Text style={[styles.webSpeedBtnText, disabled && { color: theme.textMuted }]}>{playbackRate}x</Text>
+          </Pressable>
+          <Text style={styles.webPlayTime}>
+            {formatElapsed(currentTimeMs)} / {formatElapsed(totalTimeMs)}
+          </Text>
+        </View>
       </View>
     </View>
   );
@@ -1217,6 +1606,206 @@ function createStyles(t: Theme) {
     // Cancels the container's own paddingHorizontal so the piano-roll panel spans edge
     // to edge (DAW-style), instead of floating inset like every other centered screen.
     pianoRollEdgeWrap: { flex: 1, marginHorizontal: -24 },
+
+    // List view's sidebar shell — same edge-to-edge trick as pianoRollEdgeWrap (cancel
+    // container's own paddingHorizontal), plus cancels container's paddingTop too, so
+    // the sidebar reaches the true viewport edge on the left AND touches the TopBar
+    // above it, like Home's fullSidebar. The bottom edge meets WebTransportBar via that
+    // bar's own `glued` variant instead (cancels container's `gap`, not padding here).
+    editShellEdgeWrap: { flex: 1, marginHorizontal: -24, marginTop: -WEB_SCREEN_PADDING_TOP },
+    editShell: { flexDirection: 'row', flex: 1 },
+    // Mirrors Home's fullSidebar almost exactly (same width, accent fill, plain rows) —
+    // deliberately reusing that visual language rather than inventing a second sidebar
+    // style, so the two full-height accent rails read as the same UI pattern.
+    editSidebar: {
+      width:             280,
+      flexShrink:        0,
+      gap:               16,
+      backgroundColor:   t.accent,
+      paddingHorizontal: 20,
+      paddingVertical:   28,
+      borderRightWidth:  1,
+      borderRightColor:  'rgba(0,0,0,0.18)',
+    } as ViewStyle,
+    editMainColumn: { flex: 1, paddingHorizontal: 24, paddingTop: 4, gap: 12 },
+
+    // Add Note as a trailing card in the list itself, matching TabCard's own shape
+    // (same radius/vertical rhythm) but dashed/outlined and centered — reads as "the
+    // next row" rather than a toolbar action once it's the flatlist's own footer.
+    addNoteCard: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      justifyContent:    'center',
+      gap:               8,
+      marginVertical:    3,
+      // TabCard's rows are two lines tall (a label over a value) plus its own
+      // paddingVertical:10 — this is one centered line, so it needs an explicit
+      // minHeight (not just matching paddingVertical) to read as the same row height
+      // rather than a visibly shorter card.
+      minHeight:         52,
+      borderRadius:      10,
+      borderWidth:       1.5,
+      borderStyle:       'dashed',
+      borderColor:       t.border,
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
+    addNoteCardHovered: { backgroundColor: t.surface, borderColor: t.accent },
+    addNoteCardText: { fontSize: FONT.sm, fontFamily: Poppins.semiBold, color: t.accent },
+
+    sidebarSection: { gap: 8 },
+    sidebarSectionLabel: {
+      fontSize:      FONT.xs,
+      fontFamily:    Poppins.bold,
+      color:         '#fff',
+      letterSpacing: 1,
+      marginBottom:  2,
+    },
+    sidebarDivider: { height: 1, backgroundColor: 'rgba(255,255,255,0.18)' },
+    sidebarNoteCount: {
+      fontSize:   FONT.xs,
+      fontFamily: Poppins.regular,
+      color:      'rgba(255,255,255,0.75)',
+    },
+    chartNameInputSidebar: {
+      fontSize:          13,
+      fontFamily:        SpaceGrotesk.bold,
+      color:             '#fff',
+      backgroundColor:   'rgba(255,255,255,0.14)',
+      borderRadius:      8,
+      borderWidth:       1,
+      borderColor:       'rgba(255,255,255,0.22)',
+      paddingHorizontal: 10,
+      paddingVertical:   8,
+      width:             '100%',
+      ...(Platform.OS === 'web' ? { outlineStyle: 'none' } as any : null),
+    } as any,
+
+    // Sidebar's always-visible key/type picker — same pattern as Home's own sidebar
+    // (plain selectable rows + KeyGrid's onAccent variant) instead of the toolbar's
+    // dropdown-behind-a-badge treatment, since there's no reason to hide it here.
+    sidebarKeyTypeGroup: { gap: 10 },
+    sidebarTypeToggle: {
+      flexDirection:   'row',
+      backgroundColor: 'rgba(255,255,255,0.14)',
+      borderRadius:    8,
+      padding:         2,
+      gap:             2,
+    },
+    sidebarTypeSeg: {
+      flex:              1,
+      alignItems:        'center',
+      paddingVertical:   7,
+      borderRadius:      6,
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
+    sidebarTypeSegActive: { backgroundColor: '#fff' },
+    sidebarTypeText:       { fontSize: FONT.xs, fontFamily: Poppins.semiBold, color: 'rgba(255,255,255,0.85)' },
+    sidebarTypeTextActive: { color: t.accent },
+
+    // Sidebar action rows (Save / New Recording / Inspect Frames / Export trigger) —
+    // same translucent-pill pattern as Home's sidebarRow, so all four read as one
+    // consistent "quick actions" group.
+    sidebarRow: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      gap:               10,
+      paddingVertical:   10,
+      paddingHorizontal: 12,
+      borderRadius:      10,
+      backgroundColor:   'rgba(255,255,255,0.14)',
+      borderWidth:       1,
+      borderColor:       'rgba(255,255,255,0.22)',
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
+    sidebarRowPressed:   { backgroundColor: 'rgba(255,255,255,0.22)' },
+    sidebarRowDisabled:  { opacity: 0.55 },
+    sidebarRowIconWrap:  { width: 20, alignItems: 'center', justifyContent: 'center' },
+    sidebarRowText:      { flex: 1, fontSize: FONT.sm, fontFamily: Poppins.semiBold, color: '#fff' },
+
+    // Undo/Redo side by side — a paired row instead of two full-width stacked rows,
+    // since neither needs a trailing chevron/badge and both read fine as compact,
+    // centered half-width buttons.
+    sidebarRowSplit: { flexDirection: 'row', gap: 8 },
+    sidebarRowHalf:  { flex: 1, justifyContent: 'center' },
+    sidebarRowHalfText: { fontSize: FONT.sm, fontFamily: Poppins.semiBold, color: '#fff' },
+
+    sidebarExportBtn: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      gap:               10,
+      paddingVertical:   10,
+      paddingHorizontal: 12,
+      borderRadius:      10,
+      backgroundColor:   'rgba(255,255,255,0.14)',
+      borderWidth:       1,
+      borderColor:       'rgba(255,255,255,0.22)',
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
+
+    // "Soon" tag on the sidebar's disabled Upload row — same pattern as the coming-soon
+    // badges on Home's own not-yet-wired upload buttons.
+    sidebarComingSoon: {
+      fontSize:          9,
+      fontFamily:        Poppins.bold,
+      color:             'rgba(255,255,255,0.85)',
+      letterSpacing:     0.6,
+      backgroundColor:   'rgba(255,255,255,0.18)',
+      borderRadius:      6,
+      paddingHorizontal: 5,
+      paddingVertical:   2,
+    },
+
+    // New Recording's key/type picker — a real centered Modal (same backdrop/card
+    // pattern as ActionSheetModal/NameRecordingModal) rather than an anchored dropdown,
+    // since choosing where the next session starts is a deliberate, focused decision,
+    // not a quick inline tweak — it deserves the whole screen's attention for a moment.
+    newRecordingBackdrop: {
+      flex:              1,
+      backgroundColor:   'rgba(0,0,0,0.65)',
+      alignItems:        'center',
+      justifyContent:    'center',
+      paddingHorizontal: 32,
+    },
+    newRecordingCard: {
+      backgroundColor:   t.bg,
+      borderRadius:      20,
+      paddingHorizontal: 24,
+      paddingVertical:   24,
+      gap:               12,
+      width:             '100%',
+      maxWidth:          480,
+      borderWidth:       1,
+      borderColor:       t.border,
+    },
+    newRecordingTitle: {
+      fontSize:      FONT.lg,
+      fontFamily:    SpaceGrotesk.bold,
+      color:         t.textPrimary,
+      textAlign:     'center',
+      letterSpacing: -0.3,
+    },
+    newRecordingCancel: { alignItems: 'center', paddingVertical: 4 },
+    newRecordingCancelText: { fontSize: FONT.sm, fontFamily: Poppins.semiBold, color: t.textSub },
+
+    sidebarPopoverLabel: {
+      fontSize:      FONT.xs,
+      fontFamily:    Poppins.bold,
+      color:         t.textMuted,
+      letterSpacing: 1,
+    },
+    sidebarPopoverConfirm: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      justifyContent:    'center',
+      gap:               6,
+      paddingVertical:   10,
+      borderRadius:      8,
+      backgroundColor:   t.accent,
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as any,
+    sidebarPopoverConfirmHover: { backgroundColor: t.accentDim },
+    sidebarPopoverConfirmText: { fontSize: 12, fontFamily: Poppins.bold, color: '#fff' },
+
     header:    { gap: 4 },
     headerTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     headerIcons: { flexDirection: 'row', alignItems: 'center', gap: 4 },
@@ -1421,26 +2010,6 @@ function createStyles(t: Theme) {
     } as any,
     tooltipText: { fontSize: 10, fontFamily: Poppins.semiBold, color: t.bg },
 
-    webToggle: {
-      flexDirection:   'row',
-      backgroundColor: t.surface,
-      borderRadius:    8,
-      padding:         2,
-      gap:             2,
-    },
-    webToggleSeg: {
-      flexDirection:     'row',
-      alignItems:        'center',
-      gap:               5,
-      paddingVertical:   5,
-      paddingHorizontal: 10,
-      borderRadius:      6,
-      cursor:            'pointer',
-    } as any,
-    webToggleSegActive: { backgroundColor: t.accent },
-    webToggleText:       { fontSize: 12, fontFamily: Poppins.semiBold, color: t.textSub },
-    webToggleTextActive: { color: '#fff' },
-
     webNoteCount: { fontSize: 12, fontFamily: Poppins.regular, color: t.textMuted },
 
     keyControlAnchor: { position: 'relative' },
@@ -1563,16 +2132,14 @@ function createStyles(t: Theme) {
     } as any,
     exportDropdownShareBtnText: { fontSize: 12, fontFamily: Poppins.bold, color: '#fff' },
 
+    // No background/border of its own anymore — sits inside webTransportGroup's pill,
+    // which is now the only visual boundary in this cluster (a box-within-a-box read
+    // busier, not more polished).
     webBpmControl: {
       flexDirection:     'row',
       alignItems:        'center',
       gap:               4,
-      backgroundColor:   t.surface,
-      borderRadius:      6,
-      borderWidth:       1,
-      borderColor:       t.border,
       paddingHorizontal: 4,
-      paddingVertical:   3,
     },
     webMiniStepBtn: { padding: 2, cursor: 'pointer' } as any,
     webBpmValue: {
@@ -1627,31 +2194,44 @@ function createStyles(t: Theme) {
     } as any,
     newBtnText: { fontSize: 12, fontFamily: Poppins.semiBold, color: t.textSub },
 
+    // Same reasoning as webBpmControl — no border/bg of its own, blends into the
+    // enclosing pill.
     webSpeedBtn: {
       minWidth:          30,
-      height:            26,
+      height:            22,
       alignItems:        'center',
       justifyContent:    'center',
       paddingHorizontal: 6,
       borderRadius:      6,
-      backgroundColor:   t.surface,
-      borderWidth:       1,
-      borderColor:       t.border,
       cursor:            'pointer',
     } as any,
     webSpeedBtnText: { fontSize: 11, fontFamily: Poppins.semiBold, color: t.textSub, fontVariant: ['tabular-nums'] },
 
+    // Docked footer — full viewport width (matches the edge-to-edge sidebar/panel it
+    // sits directly against), its own surface tone + upward shadow so it reads as a
+    // distinct floating dock rather than a plain strip of page background.
     webTransportBar: {
-      flexDirection:   'row',
-      alignItems:      'center',
-      justifyContent:  'space-between',
-      paddingVertical: 10,
-      borderTopWidth:  1,
-      borderTopColor:  t.separator,
+      flexDirection:     'row',
+      alignItems:        'center',
+      justifyContent:    'space-between',
+      paddingVertical:   14,
+      paddingHorizontal: 28,
+      marginHorizontal:  -24,
+      // Now that this bar has its own opaque surface, container's paddingBottom (below
+      // this, its last child) would otherwise show through as a bare strip of page
+      // background beneath it — cancel it so the bar's own padding is the real bottom
+      // inset, flush to the true viewport edge like the sidebar is to the top edge.
+      marginBottom:      Platform.OS === 'web' ? -WEB_SCREEN_PADDING_BOTTOM : 0,
+      backgroundColor:   t.surface,
+      borderTopWidth:    1,
+      borderTopColor:    t.separator,
+      ...(Platform.OS === 'web'
+        ? { boxShadow: t.isDark ? '0 -6px 18px rgba(0,0,0,0.35)' : '0 -6px 18px rgba(0,0,0,0.06)' } as any
+        : null),
     },
-    // Piano-roll mode: cancels container's own `gap` (the visible space between the
-    // panel and this bar) and drops the top border, so the transport bar reads as this
-    // panel's own footer row rather than a separate floating element below it.
+    // Piano-roll/list-sidebar mode: cancels container's own `gap` (the visible space
+    // between the panel/sidebar and this bar) and drops the top border, so the transport
+    // bar reads as their own footer row rather than a separate floating element below.
     webTransportBarGlued: {
       marginTop: -16,
       borderTopWidth: 0,
@@ -1659,19 +2239,45 @@ function createStyles(t: Theme) {
     webTransportSide: { flex: 1, flexDirection: 'row', alignItems: 'center' },
     // Speed stepper + elapsed/total time need to sit side-by-side, not the View default
     // of stacking vertically — this side now holds two elements, not just the time text.
-    webTransportSideRight: { justifyContent: 'flex-end', gap: 8 },
-    webTransportCenter: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    webTransportSideRight: { justifyContent: 'flex-end' },
+    // Shared pill wrapper for each cluster (Loop/BPM/Metronome, and Speed/Time) — a
+    // single rounded surface per group reads as "one control cluster" far more clearly
+    // than each individual control carrying its own separate border/box.
+    webTransportGroup: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      gap:               6,
+      backgroundColor:   t.surfaceAlt,
+      borderRadius:      20,
+      paddingHorizontal: 10,
+      paddingVertical:   5,
+    },
+    webTransportCenter: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      gap:               12,
+      backgroundColor:   t.surfaceAlt,
+      borderRadius:      24,
+      paddingHorizontal: 12,
+      paddingVertical:   6,
+    },
     // The one circular control in this UI, deliberately — a play/pause transport button
-    // reads as "the" primary action the way a small square icon button doesn't.
+    // reads as "the" primary action the way a small square icon button doesn't. Sized up
+    // and given real depth (shadow) so it reads as the bar's obvious focal point.
     webPlayCircle: {
-      width:            34,
-      height:           34,
-      borderRadius:     17,
+      width:            40,
+      height:           40,
+      borderRadius:      20,
       alignItems:       'center',
       justifyContent:   'center',
       backgroundColor:  t.accent,
       cursor:           'pointer',
+      ...(Platform.OS === 'web'
+        ? { boxShadow: `0 3px 10px ${t.accent}66` } as any
+        : null),
     } as any,
+    webPlayCircleHover:    { backgroundColor: t.accentDim },
+    webPlayCircleDisabled: { backgroundColor: t.surface, boxShadow: 'none' } as any,
     webPlayTime: {
       fontSize:    12,
       fontFamily:  Poppins.regular,

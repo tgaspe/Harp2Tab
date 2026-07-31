@@ -38,13 +38,16 @@ interface TabCardProps {
   draggable?:     boolean;
   drag?:          () => void;
   isActive?:      boolean;
+  /** True while playback's playhead is inside this note's [start_time, start_time +
+   *  duration) span — the "now playing" indicator asked for alongside the transport bar. */
+  isPlayingNow?:  boolean;
 }
 
 function fmtStartTime(ms: number): string { return `${(ms / 1000).toFixed(1)}s`; }
 function fmtDuration(ms: number): string  { return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`; }
 
 export function TabCard({
-  note, index, harmonicaKey, harmonicaType, isSelected, onSelect, onDelete, onUpdate, draggable, drag, isActive,
+  note, index, harmonicaKey, harmonicaType, isSelected, onSelect, onDelete, onUpdate, draggable, drag, isActive, isPlayingNow,
 }: TabCardProps) {
   const theme  = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
@@ -100,8 +103,9 @@ export function TabCard({
       disabled={isActive}
       style={({ pressed }) => [
         styles.card,
-        isSelected && styles.cardSelected,
-        isActive   && styles.cardActive,
+        isSelected   && styles.cardSelected,
+        isPlayingNow && styles.cardPlaying,
+        isActive     && styles.cardActive,
         pressed && !isSelected && !isActive && styles.cardPressed,
       ]}
       accessibilityLabel={`Note ${index + 1}: ${note.tab}, ${note.note}`}
@@ -296,6 +300,15 @@ function createStyles(t: Theme) {
       paddingVertical:   10,
     },
     cardSelected: { backgroundColor: t.accentSoft },
+    // Playback's "now playing" indicator — same accent border cardActive (drag) uses,
+    // since the two states never coincide in practice, plus a soft glow so it still
+    // reads as distinct from a plain selection when this note also happens to be
+    // selected (cardSelected's bg tint applies underneath either way).
+    cardPlaying: {
+      borderWidth: 1.5,
+      borderColor: t.accent,
+      ...(Platform.OS === 'web' ? { boxShadow: `0 0 0 3px ${t.accent}26` } as any : null),
+    },
     cardActive: {
       borderWidth: 1.5,
       borderColor: t.accent,

@@ -34,6 +34,11 @@ interface AppState {
    *  Empty means untitled — save falls back to a timestamp (see saveCurrentSessionToLibrary).
    *  Not undo-tracked: it's metadata, not part of the musical content being edited. */
   recordingTitle:     string;
+  /** Editor's List vs Piano-Roll view — lifted out of edit.tsx's own local state so the
+   *  web TopBar (rendered outside the edit screen's tree, in the root layout) can show
+   *  and drive the same toggle next to the app title. Not undo-tracked, same reasoning
+   *  as recordingTitle. */
+  viewMode:           'list' | 'pianoRoll';
 }
 
 function pushHistory(s: {
@@ -76,6 +81,7 @@ interface AppActions {
   setBpm:              (bpm: number) => void;
   setMetronomeEnabled: (enabled: boolean) => void;
   setRecordingTitle:   (title: string) => void;
+  setViewMode:         (mode: 'list' | 'pianoRoll') => void;
   loadRecording:  (recording: TabRecording) => void;
   reset:          () => void;
 }
@@ -96,6 +102,7 @@ const initialState: AppState = {
   bpm:                DEFAULT_BPM,
   metronomeEnabled:   false,
   recordingTitle:     '',
+  viewMode:           'list',
 };
 
 export const useAppStore = create<AppState & AppActions>()(
@@ -285,6 +292,9 @@ export const useAppStore = create<AppState & AppActions>()(
     setRecordingTitle: (title) =>
       set((s) => { s.recordingTitle = title; }),
 
+    setViewMode: (mode) =>
+      set((s) => { s.viewMode = mode; }),
+
     // Reopens a saved recording for editing — distinct from startRecording()
     // since it's not a new session (no gate check, no fresh recordingStartTime
     // for elapsed-time purposes), just loading past notes back into the working state.
@@ -321,3 +331,4 @@ export const selectExportFmt  = (s: AppState & AppActions) => s.exportFormat;
 export const selectBpm              = (s: AppState & AppActions) => s.bpm;
 export const selectMetronomeEnabled = (s: AppState & AppActions) => s.metronomeEnabled;
 export const selectRecordingTitle   = (s: AppState & AppActions) => s.recordingTitle;
+export const selectViewMode         = (s: AppState & AppActions) => s.viewMode;
