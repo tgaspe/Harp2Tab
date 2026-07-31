@@ -9,15 +9,19 @@ const AMPLITUDE = 0.3;
 let audioContext: AudioContext | null = null;
 let activeOscillators: OscillatorNode[] = [];
 
-function scheduleMetronome(ctx: AudioContext, now: number, totalMs: number, bpm: number, rate: number): void {
+function scheduleMetronome(ctx: AudioContext, now: number, totalMs: number, bpm: number, rate: number, startAtMs: number): void {
   // beatSec and the loop bound stay in nominal (unscaled) units — only the actual
   // schedule time is compressed/stretched by rate, otherwise the loop would run
   // ~rate× too many iterations past the (now shorter/longer) note audio itself.
   const beatSec = beatDurationMs(bpm) / 1000;
+  const startAtSec = startAtMs / 1000;
   let beatIndex = 0;
   for (let t = 0; t <= totalMs / 1000; t += beatSec, beatIndex++) {
+    // Still increments beatIndex for skipped beats so the accent phase (every
+    // BEATS_PER_BAR-th click) lines up with where it would've landed from t=0.
+    if (t < startAtSec) continue;
     const accented = beatIndex % BEATS_PER_BAR === 0;
-    const startSec = now + t / rate;
+    const startSec = now + (t - startAtSec) / rate;
     const osc  = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'sine';
@@ -34,7 +38,7 @@ function scheduleMetronome(ctx: AudioContext, now: number, totalMs: number, bpm:
   }
 }
 
-export async function playNotes(notes: TabNote[], options?: PlaybackOptions): Promise<void> {
+export async function playNotes(notes: TabNote[], options?: PlaybackOptions, startAtMs = 0): Promise<void> {
   stopPlayback();
   if (notes.length === 0) return;
 
@@ -44,11 +48,17 @@ export async function playNotes(notes: TabNote[], options?: PlaybackOptions): Pr
   const rate = options?.rate ?? 1;
 
   for (const n of notes) {
+    const noteEnd = n.start_time + n.duration;
+    if (noteEnd <= startAtMs) continue; // fully before the seek point
+
     const freq = noteNameToFrequency(n.note);
     if (freq <= 0) continue;
 
-    const startSec = now + (n.start_time / 1000) / rate;
-    const durSec    = (n.duration / 1000) / rate;
+    // Notes straddling the seek point start partway through rather than jumping to
+    // wherever they'd naturally begin, so playback picks up exactly at the seek point.
+    const effectiveStart = Math.max(n.start_time, startAtMs);
+    const startSec = now + (effectiveStart - startAtMs) / 1000 / rate;
+    const durSec    = (noteEnd - effectiveStart) / 1000 / rate;
     const fadeSec   = Math.min(0.01, durSec / 4);
 
     const osc  = ctx.createOscillator();
@@ -71,8 +81,39 @@ export async function playNotes(notes: TabNote[], options?: PlaybackOptions): Pr
 
   if (options?.metronomeEnabled) {
     const totalMs = notes.reduce((max, n) => Math.max(max, n.start_time + n.duration), 0);
-    scheduleMetronome(ctx, now, totalMs, options.bpm, rate);
+    scheduleMetronome(ctx, now, totalMs, options.bpm, rate, startAtMs);
   }
+}
+
+// Single-tone preview (e.g. clicking a note in the piano-roll editor to hear it) — its
+// own one-shot AudioContext, entirely independent from the transport's `audioContext`
+// above, so it can't be paused/stopped by playback controls and doesn't touch
+// isPlaying/isPaused state. Closed once the tone finishes so repeated clicks don't leak
+// contexts.
+export function previewNote(noteName: string, durationMs = 180): void {
+  const freq = noteNameToFrequency(noteName);
+  if (freq <= 0) return;
+
+  const ctx = new AudioContext();
+  const now = ctx.currentTime;
+  const durSec  = durationMs / 1000;
+  const fadeSec = Math.min(0.01, durSec / 4);
+
+  const osc  = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'sine';
+  osc.frequency.value = freq;
+
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(AMPLITUDE, now + fadeSec);
+  gain.gain.setValueAtTime(AMPLITUDE, now + durSec - fadeSec);
+  gain.gain.linearRampToValueAtTime(0, now + durSec);
+
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(now);
+  osc.stop(now + durSec + 0.02);
+  osc.onended = () => { ctx.close(); };
 }
 
 export function pausePlayback(): void {

@@ -6,9 +6,12 @@ import { useRouter } from 'expo-router';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { ExportOption } from '@/components/ExportOption';
+import { NameRecordingModal } from '@/components/NameRecordingModal';
+import { RatingModal } from '@/components/RatingModal';
+import { ActionSheetModal } from '@/components/ActionSheetModal';
 import { useTheme } from '@/hooks/useTheme';
 import { useAppStore, selectKey, selectTabNotes, selectExportFmt, selectHarmonicaType } from '@/store/useAppStore';
-import { saveCurrentSessionToLibrary } from '@/store/sessionSnapshot';
+import { saveCurrentSessionToLibrary, getDefaultRecordingTitle, startNewRecordingSession } from '@/store/sessionSnapshot';
 import { generateForFormat } from '@/export/generators';
 import { EXPORT_FORMATS, FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
@@ -40,13 +43,34 @@ export default function ExportScreen() {
   const harmonicaType   = useAppStore(selectHarmonicaType);
   const exportFormat    = useAppStore(selectExportFmt);
   const setExportFormat = useAppStore((s) => s.setExportFormat);
-  const reset           = useAppStore((s) => s.reset);
   const [isExporting, setIsExporting] = useState(false);
+  const [pendingExport, setPendingExport] = useState<{ action: 'share' | 'save'; count: number } | null>(null);
+  const [naming, setNaming] = useState(false);
+  const [showRatingModal, setShowRatingModal] = useState(false);
+
+  // "New Recording" means "drop me straight back into recording" — not back to the home
+  // screen. Respects the same free-tier gate every other start-a-session entry point does.
+  function goToNewRecording() {
+    const gate = startNewRecordingSession();
+    if (gate === 'showPaywall') { router.push('/paywall'); return; }
+    if (gate === 'showRating') { setShowRatingModal(true); return; }
+    router.dismissAll();
+    router.push('/recording');
+  }
 
   function handleNewRecording() {
-    saveCurrentSessionToLibrary();
-    reset();
-    router.replace('/');
+    if (tabNotes.length === 0) {
+      goToNewRecording();
+      return;
+    }
+    setNaming(true);
+  }
+
+  function handleConfirmNaming(title: string) {
+    // Always write a fresh entry — see the comment in edit.tsx's handleConfirmNaming.
+    saveCurrentSessionToLibrary(title, { asNew: true });
+    setNaming(false);
+    goToNewRecording();
   }
 
   async function buildFile() {
@@ -58,7 +82,7 @@ export default function ExportScreen() {
     return { uri, ext, mimeType };
   }
 
-  async function handleShare() {
+  async function doShare() {
     if (!selectedKey || tabNotes.length === 0 || isExporting) return;
     setIsExporting(true);
     try {
@@ -87,7 +111,7 @@ export default function ExportScreen() {
     }
   }
 
-  async function handleSave() {
+  async function doSave() {
     if (!selectedKey || tabNotes.length === 0 || isExporting) return;
     setIsExporting(true);
     try {
@@ -116,6 +140,21 @@ export default function ExportScreen() {
     } finally {
       setIsExporting(false);
     }
+  }
+
+  // Pre-flight gate in front of doShare/doSave — a note with tab: '' has no real
+  // position on the current harmonica (see getGridRows/PianoRoll.tsx). Skips the
+  // confirm sheet entirely when there's nothing to warn about.
+  function handleShare() {
+    const count = tabNotes.filter((n) => n.tab === '').length;
+    if (count > 0) { setPendingExport({ action: 'share', count }); return; }
+    doShare();
+  }
+
+  function handleSave() {
+    const count = tabNotes.filter((n) => n.tab === '').length;
+    if (count > 0) { setPendingExport({ action: 'save', count }); return; }
+    doSave();
   }
 
   return (
@@ -243,6 +282,32 @@ export default function ExportScreen() {
         </View>
 
       </View>
+
+      <NameRecordingModal
+        visible={naming}
+        defaultTitle={getDefaultRecordingTitle()}
+        onSave={handleConfirmNaming}
+        onCancel={() => setNaming(false)}
+      />
+
+      <RatingModal
+        visible={showRatingModal}
+        onClose={() => setShowRatingModal(false)}
+        onUpgrade={() => router.push('/paywall')}
+      />
+
+      <ActionSheetModal
+        visible={pendingExport !== null}
+        title={pendingExport ? `${pendingExport.count} note${pendingExport.count !== 1 ? 's' : ''} aren't playable on this harmonica` : undefined}
+        options={[{
+          label: 'Continue',
+          onPress: () => {
+            if (pendingExport?.action === 'share') doShare();
+            else if (pendingExport?.action === 'save') doSave();
+          },
+        }]}
+        onClose={() => setPendingExport(null)}
+      />
     </SafeAreaView>
   );
 }

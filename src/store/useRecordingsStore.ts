@@ -7,6 +7,7 @@ interface RecordingsState {
   recordings: TabRecording[];
   saveRecording:   (recording: TabRecording) => void;
   deleteRecording: (id: string) => void;
+  renameRecording: (id: string, title: string) => void;
 }
 
 export const useRecordingsStore = create<RecordingsState>()(
@@ -22,6 +23,11 @@ export const useRecordingsStore = create<RecordingsState>()(
 
       deleteRecording: (id) =>
         set((s) => ({ recordings: s.recordings.filter((r) => r.id !== id) })),
+
+      renameRecording: (id, title) =>
+        set((s) => ({
+          recordings: s.recordings.map((r) => (r.id === id ? { ...r, title } : r)),
+        })),
     }),
     {
       name:    'harp2tab-recordings',

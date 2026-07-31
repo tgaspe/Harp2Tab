@@ -38,6 +38,7 @@ export default function KeySelectionScreen() {
   const ratingStatus         = useSettingsStore((s) => s.ratingStatus);
   const recordings           = useRecordingsStore(selectRecordings);
   const deleteRecording      = useRecordingsStore((s) => s.deleteRecording);
+  const renameRecording      = useRecordingsStore((s) => s.renameRecording);
   const [showRatingModal, setShowRatingModal] = useState(false);
 
   const effectiveLimit = computeEffectiveLimit(ratingStatus);
@@ -109,6 +110,7 @@ export default function KeySelectionScreen() {
                     recording={recording}
                     onPress={handleOpenRecording}
                     onDelete={deleteRecording}
+                    onRename={renameRecording}
                   />
                 ))}
               </View>

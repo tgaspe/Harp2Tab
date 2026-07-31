@@ -34,6 +34,10 @@ export function usePlayback() {
   const loopEnabledRef  = useRef(false);
   const lastNotesRef    = useRef<TabNote[]>([]);
   const lastOptionsRef  = useRef<PlaybackOptions | undefined>(undefined);
+  // Set by play()'s loopBounds argument — when present, this (not the plain loopEnabled
+  // toggle below) governs both when the current play() ends and where the next loop
+  // restart begins. A loop region always wins over the whole-recording loop toggle.
+  const lastLoopBoundsRef = useRef<{ startMs: number; endMs: number } | null>(null);
   // Absolute wall-clock timestamp the current end/loop timer is scheduled to fire at.
   const endAtRef        = useRef(0);
   // Snapshot of time-left-until-endAtRef, captured the instant pause() runs — resume()
@@ -41,6 +45,16 @@ export function usePlayback() {
   // then, wall-clock time has passed *during* the pause itself, which would wrongly eat
   // into the remaining duration).
   const remainingMsRef  = useRef(0);
+  // Set when seek() moves the playhead while paused — the paused audio engine is still
+  // sitting at the old position (pause/resume only suspend/unsuspend it, they don't
+  // reposition it), so a plain resumePlayback() would audibly jump back there. Consumed
+  // by resume(), which does a full play() restart from currentTimeMs instead just this once.
+  const pendingReseekRef = useRef(false);
+  // Mirrors currentTimeMs for resume() to read without needing it in its own dep array —
+  // tick() updates currentTimeMs every animation frame during playback, and a useCallback
+  // depending on it directly would be torn down/rebuilt 60x/sec.
+  const currentTimeMsRef = useRef(0);
+  currentTimeMsRef.current = currentTimeMs;
 
   useEffect(() => { loopEnabledRef.current = loopEnabled; }, [loopEnabled]);
 
@@ -73,39 +87,68 @@ export function usePlayback() {
     endAtRef.current = Date.now() + delayMs;
     endTimeoutRef.current = setTimeout(() => {
       clearTicker();
+      const loopBounds = lastLoopBoundsRef.current;
+      if (loopBounds) {
+        // A loop region always loops itself, regardless of the separate whole-recording
+        // loopEnabled toggle below — marking a region implies "loop this."
+        play(lastNotesRef.current, lastOptionsRef.current, loopBounds.startMs, loopBounds);
+        return;
+      }
       if (loopEnabledRef.current) {
         play(lastNotesRef.current, lastOptionsRef.current);
         return;
       }
       setIsPlaying(false);
       setIsPaused(false);
+      // Reaching the end naturally resets the playhead to the top, same as stop() —
+      // otherwise the next play() would start from startAtMs≈totalMs (wherever
+      // currentTimeMs's last tick landed) instead of the beginning.
+      setCurrentTimeMs(0);
     }, delayMs);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clearTicker]);
 
-  const play = useCallback((notes: TabNote[], options?: PlaybackOptions) => {
+  // `startAtMs` defaults to 0 (the loop restart in armEndTimeout's timeout relies on this
+  // for the whole-recording-loop case — it calls play() with just notes/options, and that
+  // always restarts from the top). `loopBounds`, when given, is a *persistent* range this
+  // play() call belongs to — distinct from `startAtMs`, which is just where *this*
+  // invocation happens to start (e.g. a mid-region scrub): armEndTimeout stops/loops at
+  // `loopBounds.endMs` rather than the sequence's natural end, and a loop restart re-uses
+  // the same bounds via armEndTimeout above, not wherever this particular call started.
+  const play = useCallback((
+    notes: TabNote[],
+    options?: PlaybackOptions,
+    startAtMs = 0,
+    loopBounds?: { startMs: number; endMs: number },
+  ) => {
     if (notes.length === 0) return;
     clearEndTimeout();
     clearTicker();
     const last = notes[notes.length - 1];
     const totalMs = last.start_time + last.duration;
     const rate = options?.rate ?? 1;
+    const clampedStart = Math.max(0, Math.min(startAtMs, totalMs));
+    const effectiveEnd  = Math.min(loopBounds?.endMs ?? totalMs, totalMs);
 
-    lastNotesRef.current    = notes;
-    lastOptionsRef.current  = options;
-    playbackRateRef.current = rate;
+    lastNotesRef.current      = notes;
+    lastOptionsRef.current    = options;
+    lastLoopBoundsRef.current = loopBounds ?? null;
+    playbackRateRef.current   = rate;
 
-    startedAtRef.current   = Date.now();
+    // Back-date startedAtRef by the (rate-adjusted) skipped duration so tick()'s elapsed-
+    // time math reports clampedStart immediately and counts up from there, without needing
+    // a separate offset threaded through every place currentTimeMs gets computed.
+    startedAtRef.current   = Date.now() - clampedStart / rate;
     pausedTotalRef.current = 0;
     pauseStartRef.current  = null;
-    setCurrentTimeMs(0);
+    setCurrentTimeMs(clampedStart);
 
-    playNotes(notes, options);
+    playNotes(notes, options, clampedStart);
     setIsPlaying(true);
     setIsPaused(false);
     rafRef.current = requestAnimationFrame(tick);
 
-    armEndTimeout(totalMs / rate + 150);
+    armEndTimeout(Math.max(0, (effectiveEnd - clampedStart) / rate) + 150);
   }, [clearEndTimeout, clearTicker, tick, armEndTimeout]);
 
   const pause = useCallback(() => {
@@ -120,6 +163,14 @@ export function usePlayback() {
   }, [clearEndTimeout]);
 
   const resume = useCallback(() => {
+    if (pendingReseekRef.current) {
+      // The playhead moved while paused — restart from there instead of unsuspending the
+      // old (now-stale) audio position. Carries the active loop region (if any) forward
+      // unchanged — pausing and reseeking mid-region shouldn't silently drop the loop.
+      pendingReseekRef.current = false;
+      play(lastNotesRef.current, lastOptionsRef.current, currentTimeMsRef.current, lastLoopBoundsRef.current ?? undefined);
+      return;
+    }
     resumePlayback();
     if (pauseStartRef.current !== null) {
       pausedTotalRef.current += Date.now() - pauseStartRef.current;
@@ -127,22 +178,26 @@ export function usePlayback() {
     }
     setIsPaused(false);
     armEndTimeout(remainingMsRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [armEndTimeout]);
 
   // Moves the playhead marker without starting playback — e.g. clicking the piano-roll
-  // ruler. Only while not actively playing (matches Signal's own click-to-position
-  // behavior); resuming playback still starts from 0, not the seeked position — wiring a
-  // real "play from here" would mean threading a start offset through the native/web audio
-  // scheduling, a bigger change than this visual seek.
+  // ruler. While stopped, this is a plain visual seek. While paused, it also stays paused
+  // (the audio engine doesn't move until resume() explicitly restarts it from the new spot
+  // — see pendingReseekRef above) rather than audibly jumping back on resume. No-ops while
+  // actively playing: callers that want to reposition mid-playback call play() again with
+  // the new offset instead (a scrub) — see edit.tsx's handleSeek.
   const seek = useCallback((ms: number) => {
-    if (isPlaying) return;
+    if (isPlaying && !isPaused) return;
+    if (isPaused) pendingReseekRef.current = true;
     setCurrentTimeMs(Math.max(0, ms));
-  }, [isPlaying]);
+  }, [isPlaying, isPaused]);
 
   const stop = useCallback(() => {
     clearEndTimeout();
     clearTicker();
     stopPlayback();
+    pendingReseekRef.current = false;
     setIsPlaying(false);
     setIsPaused(false);
     setCurrentTimeMs(0);

@@ -20,16 +20,20 @@ import { selectHarmonicaType, selectKey, selectRecordingId, selectTabNotes, useA
 import { selectRecordings, useRecordingsStore } from '@/store/useRecordingsStore';
 import { getFrames, type RawFrame } from '@/audio/frameBuffer';
 import { frequencyToTab } from '@/audio/HarmonicaMapper';
-import { createNoteDetector, DEFAULT_NOTE_DETECTOR_CONFIG, type NoteDetectorConfig } from '@/audio/NoteDetector';
+import { createNoteDetector, DEFAULT_NOTE_DETECTOR_CONFIG } from '@/audio/NoteDetector';
+import { createAubioNotesSegmenter, DEFAULT_AUBIO_NOTES_CONFIG } from '@/audio/segmenters/aubioNotesSegmenter';
+import { createEnvelopeGate, type EnvelopeConfig } from '@/audio/segmenters/envelope';
 import { FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
-import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_TOP, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
+import { WEB_SCREEN_PADDING_TOP, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
 import type { Theme } from '@/theme';
 import type { HarmonicaKey, HarmonicaType, TabNote } from '@/types';
 
-const TRACK_HEIGHTS = { loudness: 96, pitch: 64, notes: 44, raw: 34 };
-const TRACKS_TOTAL_HEIGHT =
-  TRACK_HEIGHTS.loudness + TRACK_HEIGHTS.pitch + TRACK_HEIGHTS.notes + TRACK_HEIGHTS.raw;
+const TRACK_HEIGHTS = { loudness: 96, envelope: 70, pitch: 64, notes: 38, raw: 34 };
+// TRACKS_TOTAL_HEIGHT (loudness + envelope debug + pitch + one Notes row per algorithm
+// variant + raw) is computed just after VARIANTS is declared below, once its length is
+// known — hardcoding a per-variant-count multiplier here is exactly what silently went
+// stale the last time a variant was added.
 const TIME_AXIS_HEIGHT = 22;
 const LOUDNESS_COLOR = '#f5a623'; // warm amber — distinct from the cyan accent used for Pitch
 const LABEL_WIDTH = 88;
@@ -81,19 +85,47 @@ function splitValidRuns(frames: RawFrame[]): RawFrame[][] {
   return runs;
 }
 
-function runDetectorOverFrames(
+// Common shape all three segmenters (NoteDetector + the two envelope-first candidates)
+// expose — lets Frame Inspector replay any of them over the same frozen frame array for
+// side-by-side comparison. Config is kept loosely typed here (each real factory has its
+// own precise config interface) since this registry only needs to drive generic stepper UI.
+type SegmenterHandle = ReturnType<typeof createNoteDetector>;
+type SegmenterFactory = (
+  onNote: (n: Omit<TabNote, 'id'>) => void,
+  key: HarmonicaKey,
+  harmonicaType: HarmonicaType,
+  configOverrides?: Record<string, number>,
+) => SegmenterHandle;
+
+function runSegmenterOverFrames(
+  factory: SegmenterFactory,
   frames: RawFrame[],
   key: HarmonicaKey,
   harmonicaType: HarmonicaType,
-  config: NoteDetectorConfig,
+  config: Record<string, number>,
 ): TabNote[] {
   const notes: Omit<TabNote, 'id'>[] = [];
-  const detector = createNoteDetector((n) => notes.push(n), key, harmonicaType, config);
+  const segmenter = factory((n) => notes.push(n), key, harmonicaType, config);
   for (const f of frames) {
-    detector.process({ frequency: f.frequency, rms: f.rms }, f.t, 0);
+    segmenter.process({ frequency: f.frequency, rms: f.rms }, f.t, 0);
   }
-  detector.flush(0);
+  segmenter.flush(0);
   return notes.map((n, i) => ({ ...n, id: `preview-${i}` }));
+}
+
+interface EnvelopeTracePoint { t: number; value: number; high: number; low: number }
+
+// Replays frames through the exact same createEnvelopeGate the loudness/hybrid segmenters
+// use internally, so the debug track can never drift from what actually decides segment
+// boundaries — no second hand-rolled copy of the state machine to keep in sync.
+function traceEnvelope(frames: RawFrame[], config: EnvelopeConfig): EnvelopeTracePoint[] {
+  const gate = createEnvelopeGate(config);
+  const points: EnvelopeTracePoint[] = [];
+  for (const f of frames) {
+    const { value, high, low } = gate.step(f.rms, f.t);
+    points.push({ t: f.t, value, high, low });
+  }
+  return points;
 }
 
 function buildMinimapBars(frames: RawFrame[], durationMs: number): number[] {
@@ -110,7 +142,7 @@ function buildMinimapBars(frames: RawFrame[], durationMs: number): number[] {
 }
 
 interface TunableField {
-  key:    keyof NoteDetectorConfig;
+  key:    string; // key into whichever variant's config record this field belongs to
   label:  string;
   step:   number;
   min:    number;
@@ -118,12 +150,56 @@ interface TunableField {
   format: (v: number) => string;
 }
 
-const TUNABLE_FIELDS: TunableField[] = [
+const CURRENT_TUNABLE_FIELDS: TunableField[] = [
   { key: 'graceMs',        label: 'Silence Hold',      step: 10,  min: 20, max: 500, format: (v) => `${Math.round(v)}ms` },
   { key: 'confirmMs',      label: 'Confirm Hold',      step: 5,   min: 5,  max: 200, format: (v) => `${Math.round(v)}ms` },
   { key: 'minDurationMs',  label: 'Min Note Duration', step: 10,  min: 20, max: 500, format: (v) => `${Math.round(v)}ms` },
   { key: 'noiseFloorMult', label: 'Noise Floor ×',     step: 0.1, min: 1,  max: 6,   format: (v) => `${v.toFixed(1)}×` },
 ];
+
+const AUBIO_TUNABLE_FIELDS: TunableField[] = [
+  { key: 'thresholdMult',      label: 'Onset Threshold ×', step: 0.1,  min: 1,    max: 8,    format: (v) => `${v.toFixed(1)}×` },
+  { key: 'hysteresisLowRatio', label: 'Onset Hysteresis',  step: 0.05, min: 0.2,  max: 0.95, format: (v) => `${Math.round(v * 100)}%` },
+  { key: 'dipRatio',           label: 'Onset Dip Ratio',   step: 0.05, min: 0.1,  max: 0.95, format: (v) => `${Math.round(v * 100)}%` },
+  { key: 'riseRatio',          label: 'Onset Rise Ratio',  step: 0.05, min: 0.1,  max: 0.95, format: (v) => `${Math.round(v * 100)}%` },
+  { key: 'silenceDb',          label: 'Silence',           step: 1,    min: -90,  max: -20,  format: (v) => `${Math.round(v)}dB` },
+  { key: 'releaseDropDb',      label: 'Release Drop',      step: 1,    min: 1,    max: 40,   format: (v) => `${Math.round(v)}dB` },
+  { key: 'minOnsetGapMs',      label: 'Min Onset Gap',     step: 5,    min: 5,    max: 200,  format: (v) => `${Math.round(v)}ms` },
+  { key: 'medianFrames',       label: 'Median Frames',     step: 1,    min: 2,    max: 15,   format: (v) => `${Math.round(v)}` },
+  { key: 'minMidi',            label: 'Min MIDI Pitch',    step: 1,    min: 20,   max: 60,   format: (v) => `${Math.round(v)}` },
+];
+
+interface VariantDef {
+  id:            'current' | 'aubio';
+  label:         string;
+  factory:       SegmenterFactory;
+  defaultConfig: Record<string, number>;
+  fields:        TunableField[];
+  hasEnvelope:   boolean; // whether this variant's config can drive the envelope debug track
+}
+
+const VARIANTS: VariantDef[] = [
+  {
+    id:            'current',
+    label:         'Current',
+    factory:       createNoteDetector as unknown as SegmenterFactory,
+    defaultConfig: DEFAULT_NOTE_DETECTOR_CONFIG as unknown as Record<string, number>,
+    fields:        CURRENT_TUNABLE_FIELDS,
+    hasEnvelope:   false,
+  },
+  {
+    id:            'aubio',
+    label:         'Aubio Notes',
+    factory:       createAubioNotesSegmenter as unknown as SegmenterFactory,
+    defaultConfig: DEFAULT_AUBIO_NOTES_CONFIG as unknown as Record<string, number>,
+    fields:        AUBIO_TUNABLE_FIELDS,
+    hasEnvelope:   true,
+  },
+];
+
+// Loudness + envelope debug + pitch + one Notes row per algorithm variant + raw.
+const TRACKS_TOTAL_HEIGHT =
+  TRACK_HEIGHTS.loudness + TRACK_HEIGHTS.envelope + TRACK_HEIGHTS.pitch + TRACK_HEIGHTS.notes * VARIANTS.length + TRACK_HEIGHTS.raw;
 
 export default function FrameInspectorScreen() {
   const router        = useRouter();
@@ -148,7 +224,10 @@ export default function FrameInspectorScreen() {
 
   const [zoomMultiplier, setZoomMultiplier] = useState(1);
   const [advancedOpen, setAdvancedOpen] = useState(true);
-  const [config, setConfig]         = useState<NoteDetectorConfig>(DEFAULT_NOTE_DETECTOR_CONFIG);
+  const [configs, setConfigs] = useState<Record<string, Record<string, number>>>(() =>
+    Object.fromEntries(VARIANTS.map((v) => [v.id, { ...v.defaultConfig }])),
+  );
+  const [tuningVariantId, setTuningVariantId] = useState<VariantDef['id']>('aubio');
   const [scrollX, setScrollX]       = useState(0);
   const [viewportWidth, setViewportWidth] = useState(0);
   const [minimapWidth, setMinimapWidth]   = useState(0);
@@ -159,7 +238,12 @@ export default function FrameInspectorScreen() {
   const minimapContainerRef = useRef<View>(null);
   const minimapPageXRef     = useRef(0);
 
-  const isDirty = TUNABLE_FIELDS.some((f) => config[f.key] !== DEFAULT_NOTE_DETECTOR_CONFIG[f.key]);
+  const tuningVariant = VARIANTS.find((v) => v.id === tuningVariantId)!;
+
+  function isVariantDirty(id: string): boolean {
+    const v = VARIANTS.find((variant) => variant.id === id)!;
+    return v.fields.some((f) => configs[id][f.key] !== v.defaultConfig[f.key]);
+  }
 
   const noteEnd  = tabNotes.length ? tabNotes[tabNotes.length - 1].start_time + tabNotes[tabNotes.length - 1].duration : 0;
   const frameEnd = frames.length ? frames[frames.length - 1].t : 0;
@@ -181,10 +265,25 @@ export default function FrameInspectorScreen() {
   const viewportWidthRef = useRef(viewportWidth); viewportWidthRef.current = viewportWidth;
   const framesRef        = useRef(frames);      framesRef.current        = frames;
 
-  const displayedNotes: TabNote[] = useMemo(() => {
-    if (!isDirty || frames.length === 0 || !selectedKey) return tabNotes;
-    return runDetectorOverFrames(frames, selectedKey, harmonicaType, config);
-  }, [isDirty, frames, selectedKey, harmonicaType, config, tabNotes]);
+  // One note stream per variant, all replayed over the same frozen frame array so
+  // boundaries are directly comparable. "Current" falls back to the real committed
+  // tabNotes (from the live capture pipeline) unless its config has been tuned away from
+  // default — matching the pre-existing single-variant preview behavior. The other two
+  // variants have no live equivalent, so they're always replayed.
+  const notesByVariant: Record<string, TabNote[]> = useMemo(() => {
+    const result: Record<string, TabNote[]> = {};
+    for (const v of VARIANTS) {
+      if (v.id === 'current' && !isVariantDirty('current')) {
+        result[v.id] = tabNotes;
+      } else if (frames.length > 0 && selectedKey) {
+        result[v.id] = runSegmenterOverFrames(v.factory, frames, selectedKey, harmonicaType, configs[v.id]);
+      } else {
+        result[v.id] = [];
+      }
+    }
+    return result;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [frames, selectedKey, harmonicaType, configs, tabNotes]);
 
   const minimapBars = useMemo(
     () => (frames.length ? buildMinimapBars(frames, durationMs) : []),
@@ -198,7 +297,7 @@ export default function FrameInspectorScreen() {
     : null;
 
   const selectedFrameCommittedNote = selectedFrame
-    ? displayedNotes.find(
+    ? notesByVariant.current?.find(
         (n) => selectedFrame.t >= n.start_time && selectedFrame.t < n.start_time + n.duration,
       ) ?? null
     : null;
@@ -343,10 +442,11 @@ export default function FrameInspectorScreen() {
     return () => node.removeEventListener('wheel', onWheel);
   }, []);
 
-  function updateConfigField(key: keyof NoteDetectorConfig, delta: number, field: TunableField) {
-    setConfig((c) => {
-      const next = Math.min(field.max, Math.max(field.min, +(c[key] + delta).toFixed(4)));
-      return { ...c, [key]: next };
+  function updateConfigField(variantId: string, key: string, delta: number, field: TunableField) {
+    setConfigs((c) => {
+      const current = c[variantId];
+      const next = Math.min(field.max, Math.max(field.min, +(current[key] + delta).toFixed(4)));
+      return { ...c, [variantId]: { ...current, [key]: next } };
     });
   }
 
@@ -390,7 +490,8 @@ export default function FrameInspectorScreen() {
             </Text>
           </View>
         ) : (
-          <>
+          <View style={styles.bodyRow}>
+          <View style={styles.mainColumn}>
             {/* Minimap — tap to jump, or press-and-drag to scrub continuously */}
             <View
               ref={minimapContainerRef}
@@ -447,7 +548,21 @@ export default function FrameInspectorScreen() {
               >
                 <Ionicons name="add" size={16} color={theme.textSub} />
               </Pressable>
-              {isDirty && <Text style={styles.previewBadge}>PREVIEW</Text>}
+
+              <View style={styles.zoomRowRight}>
+                {isVariantDirty(tuningVariantId) && <Text style={styles.previewBadge}>PREVIEW</Text>}
+                <Pressable
+                  onPress={() => setAdvancedOpen((v) => !v)}
+                  style={[styles.advancedToggle, advancedOpen && styles.advancedToggleActive]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Toggle advanced tuning"
+                >
+                  <Ionicons name="options-outline" size={15} color={advancedOpen ? theme.accent : theme.textSub} />
+                  <Text style={[styles.advancedToggleText, advancedOpen && styles.advancedToggleTextActive]}>
+                    {advancedOpen ? 'Hide' : 'Show'} advanced tuning
+                  </Text>
+                </Pressable>
+              </View>
             </View>
 
             {/* Tracks: pinned label rail + horizontally scrollable content */}
@@ -456,12 +571,17 @@ export default function FrameInspectorScreen() {
                 <View style={[styles.labelCell, { height: TRACK_HEIGHTS.loudness }]}>
                   <Text style={styles.labelText}>LOUDNESS</Text>
                 </View>
+                <View style={[styles.labelCell, { height: TRACK_HEIGHTS.envelope }]}>
+                  <Text style={styles.labelText}>THRESHOLD{'\n'}({tuningVariant.label})</Text>
+                </View>
                 <View style={[styles.labelCell, { height: TRACK_HEIGHTS.pitch }]}>
                   <Text style={styles.labelText}>PITCH</Text>
                 </View>
-                <View style={[styles.labelCell, { height: TRACK_HEIGHTS.notes }]}>
-                  <Text style={styles.labelText}>NOTES</Text>
-                </View>
+                {VARIANTS.map((v) => (
+                  <View key={v.id} style={[styles.labelCell, { height: TRACK_HEIGHTS.notes }]}>
+                    <Text style={styles.labelText}>NOTES{'\n'}({v.label})</Text>
+                  </View>
+                ))}
                 <View style={[styles.labelCell, { height: TRACK_HEIGHTS.raw }]}>
                   <Text style={styles.labelText}>RAW</Text>
                 </View>
@@ -478,8 +598,22 @@ export default function FrameInspectorScreen() {
                 >
                   <View style={{ width: trackWidth }}>
                     <LoudnessTrack frames={frames} width={trackWidth} height={TRACK_HEIGHTS.loudness} pxPerSecond={pxPerSecond} color={LOUDNESS_COLOR} />
+                    {tuningVariant.hasEnvelope ? (
+                      <EnvelopeDebugTrack
+                        frames={frames}
+                        width={trackWidth}
+                        height={TRACK_HEIGHTS.envelope}
+                        pxPerSecond={pxPerSecond}
+                        config={configs[tuningVariantId] as unknown as EnvelopeConfig}
+                        color={LOUDNESS_COLOR}
+                      />
+                    ) : (
+                      <View style={{ width: trackWidth, height: TRACK_HEIGHTS.envelope }} />
+                    )}
                     <PitchTrack    frames={frames} width={trackWidth} height={TRACK_HEIGHTS.pitch}    pxPerSecond={pxPerSecond} color={theme.accent} />
-                    <NotesTrack    notes={displayedNotes} height={TRACK_HEIGHTS.notes} pxPerSecond={pxPerSecond} theme={theme} />
+                    {VARIANTS.map((v) => (
+                      <NotesTrack key={v.id} notes={notesByVariant[v.id]} height={TRACK_HEIGHTS.notes} pxPerSecond={pxPerSecond} theme={theme} />
+                    ))}
                     <RawNotesTrack frames={frames} height={TRACK_HEIGHTS.raw} pxPerSecond={pxPerSecond} harmonicaKey={selectedKey} harmonicaType={harmonicaType} />
 
                     {/* Tap-to-inspect overlay — sits on top of all four tracks (rendered last,
@@ -521,37 +655,54 @@ export default function FrameInspectorScreen() {
               styles={styles}
             />
 
-            {/* Advanced disclosure */}
-            <Pressable
-              onPress={() => setAdvancedOpen((v) => !v)}
-              style={styles.advancedToggle}
-              accessibilityRole="button"
-              accessibilityLabel="Toggle advanced tuning"
-            >
-              <Ionicons name={advancedOpen ? 'chevron-down' : 'chevron-forward'} size={16} color={theme.textSub} />
-              <Text style={styles.advancedToggleText}>Advanced tuning</Text>
-            </Pressable>
+          </View>
 
             {advancedOpen && (
-              <View style={styles.advancedPanel}>
+              <View style={styles.sidePanel}>
+                <View style={styles.sidePanelHeader}>
+                  <Text style={styles.sidePanelTitle}>Advanced tuning</Text>
+                  <Pressable
+                    onPress={() => setAdvancedOpen(false)}
+                    accessibilityRole="button"
+                    accessibilityLabel="Close advanced tuning"
+                    style={styles.sidePanelCloseBtn}
+                  >
+                    <Ionicons name="close" size={18} color={theme.textSub} />
+                  </Pressable>
+                </View>
                 <Text style={styles.advancedHint}>
-                  Preview only — adjusts the Notes track above without changing your saved recording.
+                  Preview only — adjusts the matching Notes track above without changing your saved recording.
                 </Text>
-                {TUNABLE_FIELDS.map((field) => (
+                <View style={styles.variantSelectorRow}>
+                  {VARIANTS.map((v) => (
+                    <Pressable
+                      key={v.id}
+                      onPress={() => setTuningVariantId(v.id)}
+                      style={[styles.variantPill, v.id === tuningVariantId && styles.variantPillActive]}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Tune ${v.label}`}
+                    >
+                      <Text style={[styles.variantPillText, v.id === tuningVariantId && styles.variantPillTextActive]}>
+                        {v.label}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+                {tuningVariant.fields.map((field) => (
                   <View key={field.key} style={styles.fieldRow}>
                     <Text style={styles.fieldLabel}>{field.label}</Text>
                     <View style={styles.fieldControls}>
                       <Pressable
-                        onPress={() => updateConfigField(field.key, -field.step, field)}
+                        onPress={() => updateConfigField(tuningVariantId, field.key, -field.step, field)}
                         style={styles.stepperBtn}
                         accessibilityRole="button"
                         accessibilityLabel={`Decrease ${field.label}`}
                       >
                         <Ionicons name="remove" size={16} color={theme.textSub} />
                       </Pressable>
-                      <Text style={styles.fieldValue}>{field.format(config[field.key])}</Text>
+                      <Text style={styles.fieldValue}>{field.format(configs[tuningVariantId][field.key])}</Text>
                       <Pressable
-                        onPress={() => updateConfigField(field.key, field.step, field)}
+                        onPress={() => updateConfigField(tuningVariantId, field.key, field.step, field)}
                         style={styles.stepperBtn}
                         accessibilityRole="button"
                         accessibilityLabel={`Increase ${field.label}`}
@@ -561,9 +712,9 @@ export default function FrameInspectorScreen() {
                     </View>
                   </View>
                 ))}
-                {isDirty && (
+                {isVariantDirty(tuningVariantId) && (
                   <Pressable
-                    onPress={() => setConfig(DEFAULT_NOTE_DETECTOR_CONFIG)}
+                    onPress={() => setConfigs((c) => ({ ...c, [tuningVariantId]: { ...tuningVariant.defaultConfig } }))}
                     style={styles.resetBtn}
                     accessibilityRole="button"
                     accessibilityLabel="Reset to defaults"
@@ -573,7 +724,7 @@ export default function FrameInspectorScreen() {
                 )}
               </View>
             )}
-          </>
+          </View>
         )}
 
       </View>
@@ -685,6 +836,31 @@ function LoudnessTrack({ frames, width, height, pxPerSecond, color }: {
   return (
     <Svg width={width} height={height}>
       <Polyline points={points} fill="none" stroke={color} strokeWidth={1.5} />
+    </Svg>
+  );
+}
+
+// Visualizes raw per-frame RMS + adaptive high/low thresholds for whichever loudness-first
+// variant is currently being tuned, by replaying the exact same envelopeStep/
+// computeThresholds math the segmenter itself runs (traceEnvelope) — so this can never
+// show a boundary the segmenter didn't actually use.
+function EnvelopeDebugTrack({ frames, width, height, pxPerSecond, config, color }: {
+  frames: RawFrame[]; width: number; height: number; pxPerSecond: number;
+  config: EnvelopeConfig; color: string;
+}) {
+  const points = useMemo(() => traceEnvelope(frames, config), [frames, config]);
+  if (points.length === 0) return <View style={{ width, height }} />;
+
+  const maxV = maxOf(points.flatMap((p) => [p.value, p.high, p.low]), 0.0001);
+  const yFor = (v: number) => height - (v / maxV) * height;
+  const line = (get: (p: EnvelopeTracePoint) => number) =>
+    points.map((p) => `${(p.t / 1000) * pxPerSecond},${yFor(get(p))}`).join(' ');
+
+  return (
+    <Svg width={width} height={height}>
+      <Polyline points={line((p) => p.high)} fill="none" stroke={color} strokeWidth={1} strokeOpacity={0.5} strokeDasharray="4,3" />
+      <Polyline points={line((p) => p.low)}  fill="none" stroke={color} strokeWidth={1} strokeOpacity={0.5} strokeDasharray="1,3" />
+      <Polyline points={line((p) => p.value)} fill="none" stroke={color} strokeWidth={1.5} />
     </Svg>
   );
 }
@@ -838,7 +1014,7 @@ function createStyles(t: Theme) {
     safe:      { flex: 1, backgroundColor: t.bg },
     container: {
       flex: 1,
-      ...webMaxWidth(WEB_CONTENT_WIDTH.wide),
+      width: '100%',
       paddingHorizontal: 24,
       paddingTop: Platform.OS === 'web' ? WEB_SCREEN_PADDING_TOP : 16,
       paddingBottom: Platform.OS === 'web' ? WEB_SCREEN_PADDING_BOTTOM : 24,
@@ -853,6 +1029,13 @@ function createStyles(t: Theme) {
     empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 32 },
     emptyTitle: { fontSize: FONT.md, fontFamily: Poppins.bold, color: t.textSub, textAlign: 'center' },
     emptyHint:  { fontSize: FONT.sm, fontFamily: Poppins.regular, color: t.textMuted, textAlign: 'center', lineHeight: 20 },
+
+    // Row splits into main content + a fixed-width side panel on web (where there's
+    // horizontal room to spare); native stacks the panel below instead.
+    bodyRow: Platform.OS === 'web'
+      ? { flexDirection: 'row', alignItems: 'flex-start', gap: 16, flex: 1 }
+      : { flexDirection: 'column', gap: 14, flex: 1 },
+    mainColumn: { flex: 1, minWidth: 0, gap: 14 },
 
     minimap: {
       height: MINIMAP_HEIGHT,
@@ -875,7 +1058,8 @@ function createStyles(t: Theme) {
       borderColor: t.accent,
     },
 
-    zoomRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    zoomRow: { flexDirection: 'row', alignItems: 'center', gap: 8, justifyContent: 'space-between' },
+    zoomRowRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     zoomBtn: {
       width: 30,
       height: 30,
@@ -898,7 +1082,6 @@ function createStyles(t: Theme) {
     },
     zoomPillText: { fontSize: FONT.xs, fontFamily: Poppins.semiBold, color: t.textSub },
     previewBadge: {
-      marginLeft: 'auto',
       fontSize: 9,
       fontFamily: Poppins.bold,
       letterSpacing: 0.8,
@@ -959,17 +1142,46 @@ function createStyles(t: Theme) {
     },
     frameInfoValue: { fontSize: FONT.sm, fontFamily: Poppins.semiBold, color: t.textPrimary },
 
-    advancedToggle: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 4 },
-    advancedToggleText: { fontSize: FONT.sm, fontFamily: Poppins.semiBold, color: t.textSub },
-    advancedPanel: {
+    advancedToggle: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderRadius: 8,
+      backgroundColor: t.surface,
+      borderWidth: 1,
+      borderColor: t.border,
+    },
+    advancedToggleActive: { backgroundColor: t.accentSoft, borderColor: t.accent },
+    advancedToggleText: { fontSize: FONT.xs, fontFamily: Poppins.semiBold, color: t.textSub },
+    advancedToggleTextActive: { color: t.accent },
+    sidePanel: {
+      width: Platform.OS === 'web' ? 300 : '100%',
       gap: 10,
       backgroundColor: t.surface,
       borderRadius: 12,
       borderWidth: 1,
       borderColor: t.border,
       padding: 14,
-    },
+      ...(Platform.OS === 'web' ? { position: 'sticky', top: WEB_SCREEN_PADDING_TOP } : null),
+    } as any,
+    sidePanelHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    sidePanelTitle: { fontSize: FONT.sm, fontFamily: Poppins.bold, color: t.textPrimary },
+    sidePanelCloseBtn: { padding: 4 },
     advancedHint: { fontSize: FONT.xs, fontFamily: Poppins.regular, color: t.textMuted, lineHeight: 16 },
+    variantSelectorRow: { flexDirection: 'row', gap: 8, marginBottom: 2 },
+    variantPill: {
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderRadius: 8,
+      backgroundColor: t.surfaceAlt,
+      borderWidth: 1,
+      borderColor: t.border,
+    },
+    variantPillActive: { backgroundColor: t.accentSoft, borderColor: t.accent },
+    variantPillText: { fontSize: FONT.xs, fontFamily: Poppins.semiBold, color: t.textSub },
+    variantPillTextActive: { color: t.accent },
     fieldRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     fieldLabel: { fontSize: FONT.sm, fontFamily: Poppins.medium, color: t.textSub },
     fieldControls: { flexDirection: 'row', alignItems: 'center', gap: 10 },

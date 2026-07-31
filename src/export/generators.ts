@@ -20,6 +20,13 @@ export function generateForFormat(
   }
 }
 
+// A note with tab: '' has no real position on the current harmonica (see
+// getGridRows/PianoRoll.tsx) — human-facing text formats show its pitch instead of a
+// blank, bracketed so it reads as "not a real tab" rather than a malformed one.
+function tabOrFallback(n: TabNote): string {
+  return n.tab || `[${n.note}]`;
+}
+
 // ── TXT ───────────────────────────────────────────────────────────────────────
 
 function generateTxt(notes: TabNote[], key: HarmonicaKey): string {
@@ -28,7 +35,7 @@ function generateTxt(notes: TabNote[], key: HarmonicaKey): string {
   const divider = '-'.repeat(40);
   const lines: string[] = [];
   for (let i = 0; i < notes.length; i += NOTES_PER_LINE) {
-    lines.push(notes.slice(i, i + NOTES_PER_LINE).map(n => n.tab).join('  '));
+    lines.push(notes.slice(i, i + NOTES_PER_LINE).map(tabOrFallback).join('  '));
   }
   return [header, divider, ...lines].join('\n');
 }
@@ -36,7 +43,7 @@ function generateTxt(notes: TabNote[], key: HarmonicaKey): string {
 // ── CSV ───────────────────────────────────────────────────────────────────────
 
 function generateCsv(notes: TabNote[]): string {
-  const rows = notes.map(n => `${n.tab},${n.note},${n.start_time},${n.duration}`);
+  const rows = notes.map(n => `${tabOrFallback(n)},${n.note},${n.start_time},${n.duration}`);
   return ['tab,note,start_time_ms,duration_ms', ...rows].join('\n');
 }
 

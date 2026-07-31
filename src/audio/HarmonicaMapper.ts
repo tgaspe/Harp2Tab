@@ -196,3 +196,30 @@ export function getPlayablePositions(key: HarmonicaKey, harmonicaType: Harmonica
   positions.sort((a, b) => b.midi - a.midi);
   return positions;
 }
+
+export interface GridRow extends PlayablePosition {
+  /** False for a row that exists on the chromatic grid but has no equivalent position
+   *  on the current (diatonic) instrument — see getGridRows. */
+  playable: boolean;
+}
+
+/**
+ * Every row the piano-roll editor draws — always the full chromatic ladder (gapless
+ * across its range), not just the current instrument's own playable positions. For a
+ * chromatic recording every row is real. For diatonic, chromatic's range is a strict
+ * superset (diatonic never reaches outside it, and has real gaps within it — e.g. no
+ * diatonic position produces C#6 or G#6 at all), so rows diatonic can't reach are kept
+ * as unplayable placeholders (tab: '') rather than simply not existing. This is what
+ * gives transpose/octave-shift somewhere real to land, and what a note "falls off the
+ * edge" clamps against, instead of the instrument's own narrower position list.
+ */
+export function getGridRows(key: HarmonicaKey, harmonicaType: HarmonicaType): GridRow[] {
+  const chromatic = getPlayablePositions(key, 'chromatic');
+  if (harmonicaType === 'chromatic') {
+    return chromatic.map((p) => ({ ...p, playable: true }));
+  }
+  return chromatic.map((p) => {
+    const tab = noteToTab(p.note, key, 'diatonic');
+    return tab ? { ...p, tab, playable: true } : { ...p, tab: '', playable: false };
+  });
+}
