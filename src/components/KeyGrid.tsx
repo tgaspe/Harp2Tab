@@ -9,9 +9,13 @@ import type { HarmonicaKey } from '@/types';
 interface KeyGridProps {
   selected: HarmonicaKey | null;
   onSelect: (key: HarmonicaKey) => void;
+  /** Outlined-on-transparent cells with a solid-white selected state, instead of the
+   *  normal filled-white cells — for placement directly on a colored background (the
+   *  sidebar) where a light cell fill would read as a stray white box. */
+  onAccent?: boolean;
 }
 
-export function KeyGrid({ selected, onSelect }: KeyGridProps) {
+export function KeyGrid({ selected, onSelect, onAccent = false }: KeyGridProps) {
   const theme  = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
 
@@ -29,6 +33,7 @@ export function KeyGrid({ selected, onSelect }: KeyGridProps) {
           isSelected={selected === item}
           onPress={() => onSelect(item)}
           theme={theme}
+          onAccent={onAccent}
         />
       )}
     />
@@ -40,23 +45,29 @@ interface KeyCellProps {
   isSelected: boolean;
   onPress: () => void;
   theme: Theme;
+  onAccent?: boolean;
 }
 
-function KeyCell({ label, isSelected, onPress, theme }: KeyCellProps) {
+function KeyCell({ label, isSelected, onPress, theme, onAccent = false }: KeyCellProps) {
   const styles = useMemo(() => createStyles(theme), [theme]);
   return (
     <Pressable
       onPress={onPress}
       style={({ pressed }) => [
         styles.cell,
-        isSelected && styles.cellSelected,
+        onAccent && styles.cellOnAccent,
+        isSelected && (onAccent ? styles.cellSelectedOnAccent : styles.cellSelected),
         pressed && styles.cellPressed,
       ]}
       accessibilityRole="button"
       accessibilityLabel={`Key ${label}`}
       accessibilityState={{ selected: isSelected }}
     >
-      <Text style={[styles.label, isSelected && styles.labelSelected]}>
+      <Text style={[
+        styles.label,
+        onAccent && styles.labelOnAccent,
+        isSelected && (onAccent ? styles.labelSelectedOnAccent : styles.labelSelected),
+      ]}>
         {label}
       </Text>
     </Pressable>
@@ -82,6 +93,14 @@ function createStyles(t: Theme) {
       backgroundColor: t.accent,
       borderColor: t.accent,
     },
+    cellOnAccent: {
+      backgroundColor: 'transparent',
+      borderColor: 'rgba(255,255,255,0.35)',
+    },
+    cellSelectedOnAccent: {
+      backgroundColor: '#fff',
+      borderColor: '#fff',
+    },
     cellPressed: { opacity: 0.65 },
     label: {
       fontSize:      FONT.md,
@@ -92,6 +111,13 @@ function createStyles(t: Theme) {
     labelSelected: {
       fontFamily: Poppins.bold,
       color:      '#fff',
+    },
+    labelOnAccent: {
+      color: 'rgba(255,255,255,0.9)',
+    },
+    labelSelectedOnAccent: {
+      fontFamily: Poppins.bold,
+      color:      t.accent,
     },
   });
 }

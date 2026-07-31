@@ -5,7 +5,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/hooks/useTheme';
 import { FONT } from '@/constants/keys';
 import { SpaceGrotesk } from '@/constants/fonts';
-import { webMaxWidth, WEB_CONTENT_WIDTH } from '@/constants/layout';
 import type { Theme } from '@/theme';
 
 // Routes that had their own gear->settings shortcut before TopBar existed.
@@ -31,97 +30,93 @@ export function TopBar() {
 
   return (
     <View style={styles.bar}>
-      <View style={styles.inner}>
-        <View style={styles.left}>
-          {showBack && (
-            <Pressable
-              onPress={() => router.back()}
-              style={({ pressed, hovered }: any) => [
-                styles.iconBtn,
-                (pressed || hovered) && styles.iconBtnHovered,
-              ]}
-              accessibilityRole="button"
-              accessibilityLabel="Go back"
-            >
-              <Ionicons name="arrow-back" size={22} color={theme.textSub} />
-            </Pressable>
-          )}
+      <View style={styles.left}>
+        {showBack && (
           <Pressable
-            onPress={() => router.push('/')}
-            style={({ pressed, hovered }: any) => [
-              styles.logoRow,
-              (pressed || hovered) && styles.logoRowHovered,
-            ]}
-            accessibilityRole="link"
-            accessibilityLabel="Harp2Tab home"
-          >
-            <Image
-              source={require('../../assets/images/harp2tab-icon.png')}
-              style={styles.logoIcon}
-            />
-            <Text style={styles.logoText}>Harp2Tab</Text>
-          </Pressable>
-        </View>
-
-        {showGear && (
-          <Pressable
-            onPress={() => router.push('/settings')}
+            onPress={() => router.back()}
             style={({ pressed, hovered }: any) => [
               styles.iconBtn,
               (pressed || hovered) && styles.iconBtnHovered,
             ]}
             accessibilityRole="button"
-            accessibilityLabel="Open settings"
+            accessibilityLabel="Go back"
           >
-            <Ionicons name="settings-outline" size={22} color={theme.textSub} />
+            <Ionicons name="arrow-back" size={24} color={theme.textSub} />
           </Pressable>
         )}
+        <Pressable
+          onPress={() => router.push('/')}
+          style={({ pressed, hovered }: any) => [
+            styles.logoRow,
+            (pressed || hovered) && styles.logoRowHovered,
+          ]}
+          accessibilityRole="link"
+          accessibilityLabel="Harp2Tab home"
+        >
+          <Image
+            source={require('../../assets/images/harp2tab-icon.png')}
+            style={styles.logoIcon}
+          />
+          <Text style={styles.logoText}>Harp2Tab</Text>
+        </Pressable>
       </View>
+
+      {showGear && (
+        <Pressable
+          onPress={() => router.push('/settings')}
+          style={({ pressed, hovered }: any) => [
+            styles.iconBtn,
+            (pressed || hovered) && styles.iconBtnHovered,
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel="Open settings"
+        >
+          <Ionicons name="settings-outline" size={24} color={theme.textSub} />
+        </Pressable>
+      )}
     </View>
   );
 }
 
 function createStyles(t: Theme) {
   return StyleSheet.create({
+    // Full-bleed: the bar's contents pin to the actual viewport corners, not to the
+    // narrower centered content column each page uses below it — a global chrome
+    // element shouldn't inherit a page's content max-width.
     bar: {
-      height:          56,
+      height:            64,
       borderBottomWidth: 1,
       borderBottomColor: t.border,
-      backgroundColor: t.bg,
-      alignItems:      'center',
-    },
-    inner: {
-      ...webMaxWidth(WEB_CONTENT_WIDTH.wide),
-      flex:              1,
+      backgroundColor:   t.bg,
       flexDirection:     'row',
       alignItems:        'center',
       justifyContent:    'space-between',
-      paddingHorizontal: 20,
+      paddingHorizontal: 28,
     },
     left: {
       flexDirection: 'row',
       alignItems:    'center',
-      gap:           4,
+      gap:           6,
     },
     logoRow: {
       flexDirection:     'row',
       alignItems:        'center',
-      gap:               8,
-      paddingVertical:   6,
-      paddingHorizontal: 8,
+      gap:               10,
+      paddingVertical:   7,
+      paddingHorizontal: 10,
       borderRadius:      8,
       cursor:            'pointer',
     } as any,
     logoRowHovered: { backgroundColor: t.surfaceAlt },
-    logoIcon: { width: 26, height: 26 },
+    logoIcon: { width: 42, height: 42 },
     logoText: {
-      fontSize:      FONT.md,
+      fontSize:      FONT.lg,
       fontFamily:    SpaceGrotesk.bold,
       color:         t.accent,
       letterSpacing: -0.3,
     },
     iconBtn: {
-      padding:      8,
+      padding:      9,
       borderRadius: 8,
       cursor:       'pointer',
     } as any,

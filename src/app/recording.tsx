@@ -290,12 +290,15 @@ function createStyles(t: Theme) {
       gap:             8,
       backgroundColor: t.surface,
       borderRadius:    14,
-      paddingVertical: 18,
+      paddingVertical: Platform.OS === 'web' ? 14 : 18,
       borderWidth:     1,
       borderColor:     t.border,
       ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
     } as ViewStyle,
-    pauseBtnPressed: { opacity: 0.7 },
+    // A real hover tint (not a flat opacity dim) — same "state = color change" language
+    // as the edit screen's web toolbar buttons, since this button starts on plain
+    // `surface`, not a filled color, an opacity fade would barely read as a state change.
+    pauseBtnPressed: Platform.OS === 'web' ? { backgroundColor: t.surfaceAlt } : { opacity: 0.7 },
     pauseBtnText: {
       fontSize:   FONT.md,
       fontFamily: Poppins.semiBold,
@@ -305,7 +308,7 @@ function createStyles(t: Theme) {
       flexDirection:   'row',
       backgroundColor: t.record,
       borderRadius:    14,
-      paddingVertical: 18,
+      paddingVertical: Platform.OS === 'web' ? 14 : 18,
       alignItems:      'center',
       justifyContent:  'center',
       gap:             10,

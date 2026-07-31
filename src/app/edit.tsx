@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, TextInput, View, type ViewStyle } from 'react-native';
 import { FlatList } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,18 +14,21 @@ import { NameRecordingModal } from '@/components/NameRecordingModal';
 import { RatingModal } from '@/components/RatingModal';
 import { ActionSheetModal } from '@/components/ActionSheetModal';
 import { KeyGrid } from '@/components/KeyGrid';
+import { ExportOption } from '@/components/ExportOption';
 import { useTheme } from '@/hooks/useTheme';
-import { useAppStore, selectTabNotes, selectKey, selectHarmonicaType, selectCanUndo, selectCanRedo, selectBpm, selectMetronomeEnabled } from '@/store/useAppStore';
+import { useAppStore, selectTabNotes, selectKey, selectHarmonicaType, selectCanUndo, selectCanRedo, selectBpm, selectMetronomeEnabled, selectExportFmt, selectRecordingTitle } from '@/store/useAppStore';
 import { saveCurrentSessionToLibrary, getDefaultRecordingTitle, startNewRecordingSession } from '@/store/sessionSnapshot';
 import { usePlayback } from '@/hooks/usePlayback';
 import { previewNote } from '@/native/Playback';
 import { noteToTab } from '@/audio/HarmonicaMapper';
 import { PLAYBACK_RATES, barDurationMs } from '@/audio/tempo';
-import { FONT } from '@/constants/keys';
+import { generateForFormat } from '@/export/generators';
+import { contentToBlob, triggerWebDownload } from '@/export/webDownload';
+import { FONT, EXPORT_FORMATS } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_TOP, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
 import type { Theme } from '@/theme';
-import type { HarmonicaKey, HarmonicaType, TabNote } from '@/types';
+import type { HarmonicaKey, HarmonicaType, TabNote, ExportFormat } from '@/types';
 
 export default function EditScreen() {
   const router       = useRouter();
@@ -46,6 +49,7 @@ export default function EditScreen() {
   const setBpm            = useAppStore((s) => s.setBpm);
   const metronomeEnabled  = useAppStore(selectMetronomeEnabled);
   const setMetronomeEnabled = useAppStore((s) => s.setMetronomeEnabled);
+  const recordingTitle    = useAppStore(selectRecordingTitle);
   const {
     isPlaying, isPaused, currentTimeMs, play, pause, resume, stop, seek,
     loopEnabled, setLoopEnabled, playbackRate, setPlaybackRate,
@@ -158,8 +162,18 @@ export default function EditScreen() {
   // Nothing to save yet — skip the naming prompt and go straight to recording, matching
   // the old silent behavior (saveCurrentSessionToLibrary was already a no-op for an empty
   // session), just landing on the recording screen instead of home.
+  //
+  // On web, the chart already has a name — it's typed inline in the toolbar
+  // (ChartNameInput/recordingTitle) — so there's nothing left for a naming prompt to ask;
+  // native has no such inline field, so it still prompts via NameRecordingModal below.
   function handleNewRecording() {
     if (tabNotes.length === 0) {
+      goToNewRecording();
+      return;
+    }
+    if (Platform.OS === 'web') {
+      // Always write a fresh entry — see the comment in handleConfirmNaming's 'new' branch.
+      saveCurrentSessionToLibrary(recordingTitle, { asNew: true });
       goToNewRecording();
       return;
     }
@@ -168,6 +182,13 @@ export default function EditScreen() {
 
   function handleSaveToLibrary() {
     if (tabNotes.length === 0) return;
+    if (Platform.OS === 'web') {
+      saveCurrentSessionToLibrary(recordingTitle);
+      setJustSaved(true);
+      if (savedTimeoutRef.current) clearTimeout(savedTimeoutRef.current);
+      savedTimeoutRef.current = setTimeout(() => setJustSaved(false), 1500);
+      return;
+    }
     setNamingAction('save');
   }
 
@@ -269,7 +290,6 @@ export default function EditScreen() {
             onInspectFrames={() => router.push('/frame-inspector')}
             onNew={handleNewRecording}
             onAdd={handleAddNote}
-            onExport={() => router.push('/export')}
             theme={theme}
             styles={styles}
           />
@@ -773,9 +793,174 @@ function KeyTypeControl({ theme, styles }: { theme: Theme; styles: EditStyles })
   );
 }
 
+// Editable chart name, inline in the toolbar — self-contained (reads/writes the store
+// directly) so naming happens as you go instead of only being prompted for at save time.
+// Empty is a valid state (untitled); the placeholder shows what a save would default to.
+function ChartNameInput({ theme, styles }: { theme: Theme; styles: EditStyles }) {
+  const recordingTitle    = useAppStore(selectRecordingTitle);
+  const setRecordingTitle = useAppStore((s) => s.setRecordingTitle);
+  return (
+    <TextInput
+      value={recordingTitle}
+      onChangeText={setRecordingTitle}
+      placeholder={getDefaultRecordingTitle()}
+      placeholderTextColor={theme.textMuted}
+      style={styles.chartNameInput}
+      accessibilityLabel="Chart name"
+    />
+  );
+}
+
+// Export as an inline dropdown instead of a separate screen — self-contained like
+// KeyTypeControl above, reading tabNotes/key/type/format straight from the store. Web
+// can always trigger a browser download in place; there's no navigation-worthy content
+// on the /export route that isn't just "pick a format, then Save or Share" — the
+// full-page version stays for native, where Sharing.shareAsync/StorageAccessFramework
+// need their own screen.
+function ExportMenu({ tabNotesLength, theme, styles }: { tabNotesLength: number; theme: Theme; styles: EditStyles }) {
+  const selectedKey     = useAppStore(selectKey);
+  const tabNotes        = useAppStore(selectTabNotes);
+  const harmonicaType   = useAppStore(selectHarmonicaType);
+  const exportFormat    = useAppStore(selectExportFmt);
+  const setExportFormat = useAppStore((s) => s.setExportFormat);
+
+  const [open, setOpen] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [pendingExport, setPendingExport] = useState<{ action: 'share' | 'save'; count: number } | null>(null);
+
+  const disabled = tabNotesLength === 0;
+
+  async function doSave() {
+    if (!selectedKey || tabNotes.length === 0 || isExporting) return;
+    setIsExporting(true);
+    try {
+      const { content, encoding, ext, mimeType } = generateForFormat(tabNotes, selectedKey, harmonicaType, exportFormat);
+      triggerWebDownload(contentToBlob(content, encoding, mimeType), `harp2tab_export.${ext}`);
+    } finally {
+      setIsExporting(false);
+      setOpen(false);
+    }
+  }
+
+  async function doShare() {
+    if (!selectedKey || tabNotes.length === 0 || isExporting) return;
+    setIsExporting(true);
+    try {
+      const { content, encoding, ext, mimeType } = generateForFormat(tabNotes, selectedKey, harmonicaType, exportFormat);
+      const filename = `harp2tab_export.${ext}`;
+      const blob = contentToBlob(content, encoding, mimeType);
+      const canUseWebShare = typeof navigator.share === 'function' && typeof navigator.canShare === 'function';
+      if (canUseWebShare) {
+        const file = new File([blob], filename, { type: mimeType });
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: filename });
+          return;
+        }
+      }
+      triggerWebDownload(blob, filename);
+    } finally {
+      setIsExporting(false);
+      setOpen(false);
+    }
+  }
+
+  // Pre-flight gate — a note with tab: '' has no real position on the current harmonica
+  // (see getGridRows/PianoRoll.tsx). Skips the confirm sheet when there's nothing to warn about.
+  function handleSave() {
+    const count = tabNotes.filter((n) => n.tab === '').length;
+    if (count > 0) { setPendingExport({ action: 'save', count }); return; }
+    doSave();
+  }
+
+  function handleShare() {
+    const count = tabNotes.filter((n) => n.tab === '').length;
+    if (count > 0) { setPendingExport({ action: 'share', count }); return; }
+    doShare();
+  }
+
+  return (
+    <View style={styles.exportAnchor}>
+      <Pressable
+        onPress={() => setOpen((v) => !v)}
+        disabled={disabled}
+        style={({ pressed, hovered }: any) => [
+          styles.exportBtn,
+          disabled && styles.webBtnDisabled,
+          (pressed || hovered) && !disabled && styles.webBtnHoverFilled,
+        ]}
+        accessibilityRole="button"
+        accessibilityLabel="Export"
+        accessibilityState={{ disabled }}
+      >
+        <Ionicons name="share-outline" size={14} color={disabled ? theme.textMuted : '#fff'} />
+        <Text style={[styles.exportBtnText, disabled && { color: theme.textMuted }]}>Export</Text>
+        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={11} color={disabled ? theme.textMuted : '#fff'} />
+      </Pressable>
+
+      {open && !disabled && (
+        <View style={styles.exportDropdown}>
+          <Text style={styles.exportDropdownLabel}>FORMAT</Text>
+          <View style={styles.exportFormatGroup}>
+            {EXPORT_FORMATS.map((fmt: ExportFormat, i: number) => (
+              <ExportOption
+                key={fmt}
+                format={fmt}
+                isSelected={exportFormat === fmt}
+                onSelect={setExportFormat}
+                showDivider={i < EXPORT_FORMATS.length - 1}
+              />
+            ))}
+          </View>
+          <View style={styles.exportDropdownActions}>
+            <Pressable
+              onPress={handleSave}
+              disabled={isExporting}
+              style={({ pressed, hovered }: any) => [
+                styles.exportDropdownSaveBtn,
+                (pressed || hovered) && !isExporting && styles.webIconBtnHover,
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel="Save to device"
+            >
+              <Ionicons name="download-outline" size={15} color={theme.accent} />
+              <Text style={styles.exportDropdownSaveBtnText}>{isExporting ? '…' : 'Save'}</Text>
+            </Pressable>
+            <Pressable
+              onPress={handleShare}
+              disabled={isExporting}
+              style={({ pressed, hovered }: any) => [
+                styles.exportDropdownShareBtn,
+                (pressed || hovered) && !isExporting && styles.webBtnHoverFilled,
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel="Share file"
+            >
+              <Ionicons name="share-outline" size={15} color="#fff" />
+              <Text style={styles.exportDropdownShareBtnText}>{isExporting ? 'Exporting…' : 'Share'}</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
+
+      <ActionSheetModal
+        visible={pendingExport !== null}
+        title={pendingExport ? `${pendingExport.count} note${pendingExport.count !== 1 ? 's' : ''} aren't playable on this harmonica` : undefined}
+        options={[{
+          label: 'Continue',
+          onPress: () => {
+            if (pendingExport?.action === 'share') doShare();
+            else if (pendingExport?.action === 'save') doSave();
+          },
+        }]}
+        onClose={() => setPendingExport(null)}
+      />
+    </View>
+  );
+}
+
 function WebToolbar({
   tabNotesLength, viewMode, setViewMode, harmonicaKey,
-  canUndo, onUndo, canRedo, onRedo, justSaved, onSave, onInspectFrames, onNew, onAdd, onExport, theme, styles,
+  canUndo, onUndo, canRedo, onRedo, justSaved, onSave, onInspectFrames, onNew, onAdd, theme, styles,
 }: {
   tabNotesLength: number;
   viewMode: 'list' | 'pianoRoll';
@@ -790,7 +975,6 @@ function WebToolbar({
   onInspectFrames: () => void;
   onNew: () => void;
   onAdd: () => void;
-  onExport: () => void;
   theme: Theme;
   styles: EditStyles;
 }) {
@@ -798,6 +982,12 @@ function WebToolbar({
     <View style={[styles.webToolbar, viewMode === 'pianoRoll' && styles.webToolbarGlued]}>
       {/* View + Project cluster */}
       <View style={styles.webToolbarGroup}>
+        {tabNotesLength > 0 && (
+          <>
+            <ChartNameInput theme={theme} styles={styles} />
+            <Divider styles={styles} />
+          </>
+        )}
         <View style={styles.webToggle}>
           <Pressable
             onPress={() => setViewMode('list')}
@@ -852,15 +1042,32 @@ function WebToolbar({
         {viewMode === 'list' && (
           <IconButton icon="add" label="Add Note" onPress={onAdd} theme={theme} styles={styles} />
         )}
-        <IconButton
-          icon={justSaved ? 'checkmark-circle' : 'bookmark-outline'}
-          label={justSaved ? 'Saved to recent recordings' : 'Save to recent recordings'}
+        <Pressable
           onPress={onSave}
           disabled={tabNotesLength === 0}
-          variant={justSaved ? 'active' : 'ghost'}
-          theme={theme}
-          styles={styles}
-        />
+          style={({ pressed, hovered }: any) => [
+            styles.newBtn,
+            justSaved && styles.webIconBtnActive,
+            tabNotesLength === 0 && styles.webBtnDisabled,
+            (pressed || hovered) && tabNotesLength > 0 && !justSaved && styles.webIconBtnHover,
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel={justSaved ? 'Saved to recent recordings' : 'Save to recent recordings'}
+          accessibilityState={{ disabled: tabNotesLength === 0 }}
+        >
+          <Ionicons
+            name={justSaved ? 'checkmark-circle' : 'save-outline'}
+            size={14}
+            color={tabNotesLength === 0 ? theme.textMuted : justSaved ? '#fff' : theme.textSub}
+          />
+          <Text style={[
+            styles.newBtnText,
+            justSaved && { color: '#fff' },
+            tabNotesLength === 0 && { color: theme.textMuted },
+          ]}>
+            {justSaved ? 'Saved' : 'Save'}
+          </Text>
+        </Pressable>
         <IconButton
           icon="analytics-outline"
           label="Inspect Frames"
@@ -873,22 +1080,10 @@ function WebToolbar({
         <Divider styles={styles} />
 
         {/* The one labeled, filled button in the toolbar — Export is the "finish" action,
-            everything else here is a neutral, icon-only utility. */}
-        <Pressable
-          onPress={onExport}
-          disabled={tabNotesLength === 0}
-          style={({ pressed, hovered }: any) => [
-            styles.exportBtn,
-            tabNotesLength === 0 && styles.webBtnDisabled,
-            (pressed || hovered) && tabNotesLength > 0 && styles.webBtnHoverFilled,
-          ]}
-          accessibilityRole="button"
-          accessibilityLabel="Go to Export"
-          accessibilityState={{ disabled: tabNotesLength === 0 }}
-        >
-          <Ionicons name="share-outline" size={14} color={tabNotesLength === 0 ? theme.textMuted : '#fff'} />
-          <Text style={[styles.exportBtnText, tabNotesLength === 0 && { color: theme.textMuted }]}>Export</Text>
-        </Pressable>
+            everything else here is a neutral, icon-only utility. Opens inline instead of
+            navigating to a separate page — on web there's no reason to leave the editor
+            just to pick a format and download. */}
+        <ExportMenu tabNotesLength={tabNotesLength} theme={theme} styles={styles} />
       </View>
     </View>
   );
@@ -1295,6 +1490,78 @@ function createStyles(t: Theme) {
     keyDropdownTypeText: { fontSize: FONT.xs, fontFamily: Poppins.semiBold, color: t.textSub },
     keyDropdownTypeTextActive: { color: '#fff' },
     keyDropdownDivider: { height: 1, backgroundColor: t.border },
+
+    chartNameInput: {
+      fontSize:          13,
+      fontFamily:        SpaceGrotesk.bold,
+      color:             t.textPrimary,
+      backgroundColor:   t.surface,
+      borderRadius:      6,
+      borderWidth:       1,
+      borderColor:       t.border,
+      paddingHorizontal: 8,
+      paddingVertical:   4,
+      minWidth:          100,
+      maxWidth:          220,
+      ...(Platform.OS === 'web' ? { outlineStyle: 'none' } as any : null),
+    } as any,
+
+    exportAnchor: { position: 'relative' },
+    exportDropdown: {
+      position: 'absolute',
+      top: '100%',
+      right: 0,
+      marginTop: 6,
+      width: 280,
+      backgroundColor: t.bg,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: t.border,
+      padding: 10,
+      gap: 8,
+      zIndex: 20,
+      ...(Platform.OS === 'web' ? { boxShadow: t.isDark ? '0 8px 24px rgba(0,0,0,0.4)' : '0 8px 24px rgba(0,0,0,0.15)' } : null),
+    } as any,
+    exportDropdownLabel: {
+      fontSize:      FONT.xs,
+      fontFamily:    Poppins.bold,
+      color:         t.textMuted,
+      letterSpacing: 1.2,
+      paddingHorizontal: 2,
+    },
+    exportFormatGroup: {
+      backgroundColor: t.surface,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: t.border,
+      overflow: 'hidden',
+    },
+    exportDropdownActions: { flexDirection: 'row', gap: 8 },
+    exportDropdownSaveBtn: {
+      flex: 1,
+      flexDirection:  'row',
+      alignItems:     'center',
+      justifyContent: 'center',
+      gap:            6,
+      paddingVertical: 10,
+      borderRadius:    8,
+      borderWidth:     1,
+      borderColor:     t.accent,
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as any,
+    exportDropdownSaveBtnText: { fontSize: 12, fontFamily: Poppins.bold, color: t.accent },
+    exportDropdownShareBtn: {
+      flex: 1,
+      flexDirection:  'row',
+      alignItems:     'center',
+      justifyContent: 'center',
+      gap:            6,
+      paddingVertical: 10,
+      borderRadius:    8,
+      backgroundColor: t.accent,
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as any,
+    exportDropdownShareBtnText: { fontSize: 12, fontFamily: Poppins.bold, color: '#fff' },
 
     webBpmControl: {
       flexDirection:     'row',

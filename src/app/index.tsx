@@ -2,8 +2,9 @@ import { KeyGrid } from '@/components/KeyGrid';
 import { RatingModal } from '@/components/RatingModal';
 import { RecordingCard } from '@/components/RecordingCard';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
-import { FONT } from '@/constants/keys';
+import { FONT, HARMONICA_KEYS } from '@/constants/keys';
 import { useTheme } from '@/hooks/useTheme';
+import { usePlayback } from '@/hooks/usePlayback';
 import { selectHarmonicaType, selectKey, useAppStore } from '@/store/useAppStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { computeEffectiveLimit, resolveSessionGate } from '@/store/sessionGate';
@@ -13,9 +14,118 @@ import type { HarmonicaKey, HarmonicaType, TabRecording } from '@/types';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
-import { Image, Platform, Pressable, ScrollView, StyleSheet, Text, View, type ViewStyle } from 'react-native';
+import { Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_TOP, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
+import { WEB_SCREEN_PADDING_TOP, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
+
+type SortOption = 'recent' | 'oldest' | 'title' | 'longest';
+const SORT_OPTIONS: { value: SortOption; label: string }[] = [
+  { value: 'recent',  label: 'Most recent' },
+  { value: 'oldest',  label: 'Oldest first' },
+  { value: 'title',   label: 'Title (A–Z)' },
+  { value: 'longest', label: 'Longest' },
+];
+
+// Shared by the key filter and sort pills — a small pill that opens an absolute-positioned
+// option list below it, same interaction as the split button's key/type dropdown elsewhere
+// on this screen.
+function FilterDropdown({ pillPrefix = '', value, options, onSelect, theme, styles }: {
+  pillPrefix?: string;
+  value: string;
+  options: { value: string; label: string }[];
+  onSelect: (value: string) => void;
+  theme: Theme;
+  styles: ReturnType<typeof createStyles>;
+}) {
+  const [open, setOpen] = useState(false);
+  const selectedLabel = options.find((o) => o.value === value)?.label ?? value;
+
+  return (
+    <View style={styles.filterDropdownAnchor}>
+      <Pressable
+        onPress={() => setOpen((v) => !v)}
+        style={({ pressed, hovered }: any) => [
+          styles.filterPill,
+          (pressed || hovered) && styles.filterPillHovered,
+        ]}
+        accessibilityRole="button"
+        accessibilityLabel={`${pillPrefix}${selectedLabel}`}
+        accessibilityState={{ expanded: open }}
+      >
+        <Text style={styles.filterPillText} numberOfLines={1}>{pillPrefix}{selectedLabel}</Text>
+        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={12} color={theme.textSub} />
+      </Pressable>
+
+      {open && (
+        <View style={styles.filterDropdownPanel}>
+          {options.map((opt) => {
+            const active = opt.value === value;
+            return (
+              <Pressable
+                key={opt.value}
+                onPress={() => { onSelect(opt.value); setOpen(false); }}
+                style={({ hovered }: any) => [
+                  styles.filterOption,
+                  active && styles.filterOptionActive,
+                  hovered && !active && styles.filterOptionHovered,
+                ]}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+              >
+                <Text style={[styles.filterOptionText, active && styles.filterOptionTextActive]}>
+                  {opt.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      )}
+    </View>
+  );
+}
+
+// `layout="row"` is the sidebar's compact icon-and-two-line-stack form — used for the
+// dashboard's secondary/glanceable stats, which shouldn't be as visually loud as the
+// primary "column" tile form (kept around in case a future full-width band needs it).
+function StatTile({ icon, value, label, styles, theme, accent = 'accent', layout = 'column', onAccent = false }: {
+  icon: keyof typeof Ionicons.glyphMap;
+  value: string;
+  label: string;
+  styles: ReturnType<typeof createStyles>;
+  theme: Theme;
+  accent?: 'accent' | 'warning';
+  layout?: 'column' | 'row';
+  /** Row sits directly on the accent-colored sidebar (no white card underneath it
+   *  anymore) — needs light/white text and icon instead of the normal dark-on-white set. */
+  onAccent?: boolean;
+}) {
+  const iconColor = onAccent ? '#fff' : accent === 'warning' ? theme.warning : theme.accent;
+
+  if (layout === 'row') {
+    return (
+      <View style={styles.statRow}>
+        <View style={[
+          styles.statRowIconWrap,
+          onAccent ? styles.statRowIconWrapOnAccent : accent === 'warning' && styles.statRowIconWrapWarning,
+        ]}>
+          <Ionicons name={icon} size={16} color={iconColor} />
+        </View>
+        <View style={styles.statRowText}>
+          <Text style={[styles.statRowValue, onAccent && styles.statRowValueOnAccent]}>{value}</Text>
+          <Text style={[styles.statRowLabel, onAccent && styles.statRowLabelOnAccent]}>{label}</Text>
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.statTile}>
+      <Ionicons name={icon} size={18} color={iconColor} />
+      <Text style={styles.statValue}>{value}</Text>
+      <Text style={styles.statLabel}>{label}</Text>
+    </View>
+  );
+}
 
 export default function KeySelectionScreen() {
   const router         = useRouter();
@@ -39,7 +149,28 @@ export default function KeySelectionScreen() {
   const recordings           = useRecordingsStore(selectRecordings);
   const deleteRecording      = useRecordingsStore((s) => s.deleteRecording);
   const renameRecording      = useRecordingsStore((s) => s.renameRecording);
+  const toggleFavorite       = useRecordingsStore((s) => s.toggleFavorite);
   const [showRatingModal, setShowRatingModal] = useState(false);
+  // Web-only: the key/type picker lives behind the "New Recording" action's chevron
+  // instead of always being on-screen. Shared between the hero (empty-library / first
+  // visit) and the compact dashboard header (returning user) below — only one of those
+  // two ever renders at a time, so one flag covers both.
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  // Web-only: lets a recording row's play button preview it without leaving Home or
+  // touching the shared editing session in useAppStore — this hook instance is fully
+  // self-contained (play() takes notes as an argument), so previewing here can't clobber
+  // whatever's currently loaded for editing.
+  const preview = usePlayback();
+  const [previewId, setPreviewId] = useState<string | null>(null);
+
+  // Web-only: library toolbar state — search/filter/sort operate on `recordings` directly
+  // (not the display-ordered `orderedRecordings` below), since an explicit sort control
+  // replaces the old fixed "oldest to newest" convention once it's in play.
+  const [librarySearch, setLibrarySearch] = useState('');
+  const [libraryKeyFilter, setLibraryKeyFilter] = useState<'all' | HarmonicaKey>('all');
+  const [librarySort, setLibrarySort] = useState<SortOption>('recent');
+  const [libraryView, setLibraryView] = useState<'list' | 'grid'>('list');
 
   const effectiveLimit = computeEffectiveLimit(ratingStatus);
 
@@ -57,7 +188,240 @@ export default function KeySelectionScreen() {
     router.push('/edit');
   }
 
+  function handleTogglePreview(recording: TabRecording) {
+    if (previewId === recording.id && preview.isPlaying) {
+      preview.stop();
+      return;
+    }
+    setPreviewId(recording.id);
+    preview.play(recording.tabNotes, { bpm: recording.bpm ?? 100, metronomeEnabled: false, rate: 1 });
+  }
+
   if (!hasCompletedOnboarding) return null;
+
+  // Shared across the web hero dropdown and the native single-column layout below — the
+  // markup is identical, only where each piece lands in the page differs per platform.
+  const harmonicaTypeSection = (
+    <View style={styles.section}>
+      <Text style={styles.sectionLabel}>HARMONICA TYPE</Text>
+      <View style={styles.segmented}>
+        {(['diatonic', 'chromatic'] as HarmonicaType[]).map((type) => {
+          const active = harmonicaType === type;
+          return (
+            <Pressable
+              key={type}
+              onPress={() => setHarmonicaType(type)}
+              style={[styles.segment, active && styles.segmentActive]}
+              accessibilityRole="radio"
+              accessibilityState={{ checked: active }}
+            >
+              <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
+                {type === 'chromatic' ? '12-Chromatic' : 'Diatonic'}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+
+  const keySection = (
+    <View style={[styles.section, Platform.OS !== 'web' && { marginTop: 16 }]}>
+      <Text style={styles.sectionLabel}>HARMONICA KEY</Text>
+      <KeyGrid
+        selected={selectedKey}
+        onSelect={(k: HarmonicaKey) => selectKey_(k)}
+      />
+    </View>
+  );
+
+  // Sidebar-only — plain selectable rows instead of the pill-shaped segmented control
+  // `harmonicaTypeSection` uses elsewhere (hero, native). Same underlying state/handler.
+  const sidebarTypeSection = (
+    <View style={styles.section}>
+      <Text style={styles.sidebarSectionLabel}>HARMONICA TYPE</Text>
+      {(['diatonic', 'chromatic'] as HarmonicaType[]).map((type) => {
+        const active = harmonicaType === type;
+        return (
+          <Pressable
+            key={type}
+            onPress={() => setHarmonicaType(type)}
+            style={({ hovered }: any) => [
+              styles.sidebarTypeRow,
+              active && styles.sidebarTypeRowActive,
+              hovered && !active && styles.sidebarTypeRowHovered,
+            ]}
+            accessibilityRole="radio"
+            accessibilityState={{ checked: active }}
+          >
+            <Text style={[styles.sidebarTypeRowText, active && styles.sidebarTypeRowTextActive]}>
+              {type === 'chromatic' ? '12-Chromatic' : 'Diatonic'}
+            </Text>
+            {active && <Ionicons name="checkmark" size={14} color="#fff" />}
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+
+  // Sidebar-only key grid — same onAccent treatment as the type rows above, sitting
+  // straight on the blue panel instead of in a white card.
+  const sidebarKeySection = (
+    <View style={[styles.section, { marginTop: 12 }]}>
+      <Text style={styles.sidebarSectionLabel}>HARMONICA KEY</Text>
+      <KeyGrid
+        selected={selectedKey}
+        onSelect={(k: HarmonicaKey) => selectKey_(k)}
+        onAccent
+      />
+    </View>
+  );
+
+  const tipSection = (
+    <View style={styles.tip}>
+      <Ionicons name="information-circle-outline" size={15} color={theme.textMuted} />
+      <Text style={styles.tipText}>
+        Tip: quiet environments give the best results. Mic sensitivity can be tuned in{' '}
+        <Text style={styles.tipLink} onPress={() => router.push('/settings')}>Settings</Text>.
+      </Text>
+    </View>
+  );
+
+  const startAndUpload = (
+    <View style={styles.startAndUpload}>
+      <Pressable
+        onPress={handleStart}
+        disabled={!selectedKey}
+        style={({ pressed, hovered }: any) => [
+          styles.startBtn,
+          !selectedKey && styles.startBtnDisabled,
+          (pressed || (Platform.OS === 'web' && hovered)) && !!selectedKey && styles.startBtnPressed,
+        ]}
+        accessibilityRole="button"
+        accessibilityLabel="Start Recording"
+        accessibilityState={{ disabled: !selectedKey }}
+      >
+        <Text style={[styles.startBtnText, !selectedKey && styles.startBtnTextDisabled]}>
+          Start Recording
+        </Text>
+        {!isPurchased && (
+          <View style={styles.btnCounter}>
+            <Text style={[styles.btnCounterText, !selectedKey && styles.btnCounterTextDisabled]}>
+              {Math.min(totalRecordingsUsed, effectiveLimit)} / {effectiveLimit} free recordings used
+            </Text>
+          </View>
+        )}
+      </Pressable>
+
+      <View style={styles.uploadRow}>
+        <Pressable
+          disabled
+          style={styles.uploadBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Upload Audio — coming soon"
+          accessibilityState={{ disabled: true }}
+        >
+          <Ionicons name="cloud-upload-outline" size={18} color={theme.textMuted} />
+          <Text style={styles.uploadBtnText}>Upload Audio</Text>
+          <Text style={styles.comingSoon}>Soon</Text>
+        </Pressable>
+        <Pressable
+          disabled
+          style={styles.uploadBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Upload MIDI — coming soon"
+          accessibilityState={{ disabled: true }}
+        >
+          <Ionicons name="musical-note-outline" size={18} color={theme.textMuted} />
+          <Text style={styles.uploadBtnText}>Upload MIDI</Text>
+          <Text style={styles.comingSoon}>Soon</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+
+  const freeCounterLabel = !isPurchased
+    ? `${Math.min(totalRecordingsUsed, effectiveLimit)} / ${effectiveLimit} free recordings used`
+    : null;
+
+  // Store keeps newest-first for future consumers; display oldest-to-newest so the most
+  // recent recording reads as "last".
+  const orderedRecordings = [...recordings].reverse();
+
+  // Only offer keys that actually have a recording, in the harmonica's canonical (circle-
+  // of-fifths-ish) order rather than alphabetical — matches how the key is presented
+  // everywhere else in the app (KeyGrid, the key/type picker, etc).
+  const presentKeys = HARMONICA_KEYS.filter((k) => recordings.some((r) => r.key === k));
+  const keyFilterOptions = [
+    { value: 'all', label: 'All Keys' },
+    ...presentKeys.map((k) => ({ value: k, label: `Key ${k}` })),
+  ];
+
+  const librarySearchTrimmed = librarySearch.trim().toLowerCase();
+  const filteredRecordings = recordings
+    .filter((r) => libraryKeyFilter === 'all' || r.key === libraryKeyFilter)
+    .filter((r) => librarySearchTrimmed === '' || r.title.toLowerCase().includes(librarySearchTrimmed))
+    .sort((a, b) => {
+      switch (librarySort) {
+        case 'recent':  return b.createdAt - a.createdAt;
+        case 'oldest':  return a.createdAt - b.createdAt;
+        case 'title':   return a.title.localeCompare(b.title);
+        case 'longest': return b.duration - a.duration;
+      }
+    });
+  const libraryFiltersActive = libraryKeyFilter !== 'all' || librarySearchTrimmed !== '';
+
+  // Retention stat (web, returning users only) — "look how much you've built" number,
+  // computed from the same recordings array as the list, not tracked separately.
+  const totalNotes = recordings.reduce((sum, r) => sum + r.tabNotes.length, 0);
+
+  // Split button (main = start with current selection, chevron = open the key/type
+  // dropdown) — shared markup between the hero's larger card version and the dashboard
+  // header's compact version below, just with different wrapping styles per caller.
+  // Hero-only now — the sidebar shows the key/type picker permanently instead of behind
+  // this chevron (see the sidebar's own inline picker below).
+  const splitButton = (mainStyle: object, chevronStyle: object, textStyle: object, dotSize: number) => (
+    <View style={styles.splitBtnAnchor}>
+      <View style={styles.splitBtnRow}>
+        <Pressable
+          onPress={handleStart}
+          disabled={!selectedKey}
+          style={({ pressed, hovered }: any) => [
+            mainStyle,
+            !selectedKey && styles.splitBtnMainDisabled,
+            (pressed || hovered) && !!selectedKey && styles.splitBtnMainPressed,
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel="Start Recording"
+          accessibilityState={{ disabled: !selectedKey }}
+        >
+          <View style={[styles.recordDot, { width: dotSize, height: dotSize, borderRadius: dotSize / 2 }]} />
+          <Text style={[textStyle, !selectedKey && styles.splitBtnMainTextDisabled]}>
+            Start Recording
+          </Text>
+        </Pressable>
+        <Pressable
+          onPress={() => setPickerOpen((v) => !v)}
+          style={({ pressed, hovered }: any) => [
+            chevronStyle,
+            (pressed || hovered) && styles.splitBtnChevronPressed,
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel={pickerOpen ? 'Hide key & type picker' : 'Choose key & type'}
+          accessibilityState={{ expanded: pickerOpen }}
+        >
+          <Ionicons name={pickerOpen ? 'chevron-up' : 'chevron-down'} size={13} color="#fff" />
+        </Pressable>
+      </View>
+
+      {pickerOpen && (
+        <View style={styles.splitDropdown}>
+          {harmonicaTypeSection}
+          {keySection}
+        </View>
+      )}
+    </View>
+  );
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -66,11 +430,15 @@ export default function KeySelectionScreen() {
         onClose={() => setShowRatingModal(false)}
         onUpgrade={() => router.push('/paywall')}
       />
-      <View style={styles.container}>
+      <View style={[
+        styles.container,
+        Platform.OS === 'web' && orderedRecordings.length > 0 && styles.containerFlush,
+      ]}>
 
-        {/* Header — TopBar covers logo/gear on web */}
-        <View style={styles.header}>
-          {Platform.OS !== 'web' && (
+        {/* Header — TopBar covers logo/gear on web; on web the hero banner below carries
+            the headline instead of a plain subtitle line. */}
+        {Platform.OS !== 'web' && (
+          <View style={styles.header}>
             <View style={styles.headerTop}>
               <View style={styles.titleRow}>
                 <Image
@@ -88,128 +456,294 @@ export default function KeySelectionScreen() {
                 <Ionicons name="settings-outline" size={28} color={theme.textSub} />
               </Pressable>
             </View>
-          )}
-          <Text style={styles.subtitle}>Pick a key to start recording.</Text>
-        </View>
+            <Text style={styles.subtitle}>Pick a key to start recording.</Text>
+          </View>
+        )}
 
-        <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-        >
-          {/* Recent recordings */}
-          {recordings.length > 0 && (
-            <View style={styles.section}>
-              <Text style={styles.sectionLabel}>RECENT RECORDINGS</Text>
-              <View style={styles.recordingsList}>
-                {/* Store keeps newest-first for future consumers; display oldest-to-newest
-                    top-to-bottom so the most recent recording reads as "last" in the list. */}
-                {[...recordings].reverse().map((recording) => (
-                  <RecordingCard
-                    key={recording.id}
-                    recording={recording}
-                    onPress={handleOpenRecording}
-                    onDelete={deleteRecording}
-                    onRename={renameRecording}
-                  />
-                ))}
-              </View>
-            </View>
-          )}
-
-          {/* Harmonica type */}
-          <View style={styles.section}>
-            <Text style={styles.sectionLabel}>HARMONICA TYPE</Text>
-            <View style={styles.segmented}>
-              {(['diatonic', 'chromatic'] as HarmonicaType[]).map((type) => {
-                const active = harmonicaType === type;
-                return (
-                  <Pressable
-                    key={type}
-                    onPress={() => setHarmonicaType(type)}
-                    style={[styles.segment, active && styles.segmentActive]}
-                    accessibilityRole="radio"
-                    accessibilityState={{ checked: active }}
-                  >
-                    <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
-                      {type === 'chromatic' ? '12-Chromatic' : 'Diatonic'}
+        {Platform.OS === 'web' ? (
+          orderedRecordings.length === 0 ? (
+            // The marketing hero only earns its space for a genuinely new user with
+            // nothing saved yet — a one-time activation pitch, not something a returning
+            // user with a library should see on every visit.
+            <ScrollView
+              style={styles.scroll}
+              contentContainerStyle={styles.webScrollContent}
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={styles.hero}>
+                <View style={styles.heroRow}>
+                  <View style={styles.heroLeft}>
+                    <View style={styles.heroBadge}>
+                      <Ionicons name="sparkles-outline" size={12} color={theme.accent} />
+                      <Text style={styles.heroBadgeText}>Your music. Transcribed.</Text>
+                    </View>
+                    <Text style={styles.heroTitle}>
+                      Turn your harmonica into tabs, <Text style={styles.heroTitleAccent}>instantly.</Text>
                     </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </View>
+                    <Text style={styles.heroSubtitle}>
+                      Record, upload, and let Harp2Tab detect the notes so you can focus on playing.
+                    </Text>
+                  </View>
 
-          {/* Key section */}
-          <View style={[styles.section, { marginTop: 16 }]}>
-            <Text style={styles.sectionLabel}>HARMONICA KEY</Text>
-            <KeyGrid
-              selected={selectedKey}
-              onSelect={(k: HarmonicaKey) => selectKey_(k)}
-            />
-          </View>
+                  <View style={styles.heroRight}>
+                    <View style={styles.heroCard}>
+                      <View style={styles.heroCardIconWrap}>
+                        <Ionicons name="mic-outline" size={20} color={theme.accent} />
+                      </View>
+                      <Text style={styles.heroCardTitle}>New Recording</Text>
+                      <Text style={styles.heroCardDesc}>Record audio from your microphone</Text>
 
-          {/* Tip */}
-          <View style={styles.tip}>
-            <Ionicons name="information-circle-outline" size={15} color={theme.textMuted} />
-            <Text style={styles.tipText}>
-              Tip: quiet environments give the best results. Mic sensitivity can be tuned in{' '}
-              <Text style={styles.tipLink} onPress={() => router.push('/settings')}>Settings</Text>.
-            </Text>
-          </View>
-        </ScrollView>
+                      {splitButton(styles.splitBtnMain, styles.splitBtnChevron, styles.splitBtnMainText, 7)}
 
-        {/* Entry points */}
-        <View style={styles.bottomActions}>
-          <Pressable
-            onPress={handleStart}
-            disabled={!selectedKey}
-            style={({ pressed, hovered }: any) => [
-              styles.startBtn,
-              !selectedKey && styles.startBtnDisabled,
-              (pressed || (Platform.OS === 'web' && hovered)) && !!selectedKey && styles.startBtnPressed,
-            ]}
-            accessibilityRole="button"
-            accessibilityLabel="Start Recording"
-            accessibilityState={{ disabled: !selectedKey }}
-          >
-            <Text style={[styles.startBtnText, !selectedKey && styles.startBtnTextDisabled]}>
-              Start Recording
-            </Text>
-            {!isPurchased && (
-              <View style={styles.btnCounter}>
-                <Text style={[styles.btnCounterText, !selectedKey && styles.btnCounterTextDisabled]}>
-                  {Math.min(totalRecordingsUsed, effectiveLimit)} / {effectiveLimit} free recordings used
-                </Text>
+                      {freeCounterLabel && (
+                        <Text style={styles.heroCardCounter}>{freeCounterLabel}</Text>
+                      )}
+                    </View>
+
+                    {/* Not yet wired to real file handling — audio/MIDI upload is a future
+                        feature (see roadmap). This card just reserves its place so it's
+                        obvious where that flow will live once it exists. */}
+                    <View style={styles.heroCardOutlined}>
+                      <View style={styles.heroCardIconWrapMuted}>
+                        <Ionicons name="cloud-upload-outline" size={20} color={theme.textSub} />
+                      </View>
+                      <Text style={styles.heroCardTitle}>Upload Audio or MIDI</Text>
+                      <Text style={styles.heroCardDesc}>Upload a file and get your tabs in seconds</Text>
+                      <Pressable
+                        disabled
+                        style={styles.chooseFileBtn}
+                        accessibilityRole="button"
+                        accessibilityLabel="Choose File — coming soon"
+                        accessibilityState={{ disabled: true }}
+                      >
+                        <Text style={styles.chooseFileBtnText}>Choose File</Text>
+                      </Pressable>
+                      <Text style={styles.uploadHint}>Supports .wav, .mp3, .m4a, .mid</Text>
+                    </View>
+                  </View>
+                </View>
               </View>
-            )}
-          </Pressable>
 
-          <View style={styles.uploadRow}>
-            <Pressable
-              disabled
-              style={styles.uploadBtn}
-              accessibilityRole="button"
-              accessibilityLabel="Upload Audio — coming soon"
-              accessibilityState={{ disabled: true }}
+              {/* Empty-state: nothing to manage yet, so no sidebar — just the hero above
+                  and the empty-library prompt below, single column throughout. */}
+              <View style={styles.section}>
+                <Text style={styles.sectionLabel}>RECENT RECORDINGS</Text>
+                <View style={styles.recordingsEmpty}>
+                  <Ionicons name="file-tray-outline" size={26} color={theme.textMuted} />
+                  <Text style={styles.recordingsEmptyTitle}>No recordings yet</Text>
+                  <Text style={styles.recordingsEmptyText}>
+                    Record a new song or upload an audio/MIDI file to get started.
+                  </Text>
+                </View>
+              </View>
+            </ScrollView>
+          ) : (
+            // Left panel for quick actions + stats, full page height (not just as tall as
+            // its own content) so it reads as a persistent panel rather than a card that
+            // happens to sit next to the library — sits outside the ScrollView entirely;
+            // only the library side scrolls, same app-shell pattern as GitHub/Linear/etc.
+            <View style={styles.dashboardShell}>
+              <View style={styles.fullSidebar}>
+                <View style={styles.sidebarSection}>
+                  <Text style={styles.sidebarSectionLabel}>QUICK ACTIONS</Text>
+
+                  <Pressable
+                    disabled
+                    style={({ pressed, hovered }: any) => [
+                      styles.sidebarRow,
+                      styles.sidebarRowDisabled,
+                      (pressed || hovered) && styles.sidebarRowPressed,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Upload Audio or MIDI — coming soon"
+                    accessibilityState={{ disabled: true }}
+                  >
+                    <View style={styles.sidebarRowIconWrap}>
+                      <Ionicons name="cloud-upload-outline" size={16} color="rgba(255,255,255,0.85)" />
+                    </View>
+                    <Text style={styles.sidebarRowText}>Upload</Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={handleStart}
+                    disabled={!selectedKey}
+                    style={({ pressed, hovered }: any) => [
+                      styles.sidebarRow,
+                      styles.sidebarRowPrimary,
+                      !selectedKey && styles.sidebarRowDisabled,
+                      (pressed || hovered) && !!selectedKey && styles.sidebarRowPrimaryPressed,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Start Recording"
+                    accessibilityState={{ disabled: !selectedKey }}
+                  >
+                    <View style={styles.sidebarRowIconWrap}>
+                      <View style={styles.recordDot} />
+                    </View>
+                    <Text style={[styles.sidebarRowText, styles.sidebarRowTextPrimary]}>Start Recording</Text>
+                  </Pressable>
+
+                  {/* Permanent, not behind a chevron — the key/type picker is part of the
+                      panel's normal flow so it's always visible, not a toggle to discover.
+                      No card wrapper — sits straight on the panel so the sidebar reads as
+                      one homogeneous blue surface, not a blue frame around a white box. */}
+                  <View style={styles.sidebarInlineDropdown}>
+                    {sidebarTypeSection}
+                    {sidebarKeySection}
+                  </View>
+
+                  {freeCounterLabel && (
+                    <Text style={styles.dashboardCounter}>{freeCounterLabel}</Text>
+                  )}
+                </View>
+
+                <View style={styles.sidebarDivider} />
+
+                <View style={styles.sidebarSection}>
+                  <Text style={styles.sidebarSectionLabel}>YOUR STATS</Text>
+                  <StatTile layout="row" onAccent icon="albums-outline" value={String(recordings.length)} label="Recordings" styles={styles} theme={theme} />
+                  <View style={styles.statRowDividerOnAccent} />
+                  <StatTile layout="row" onAccent icon="musical-notes-outline" value={String(totalNotes)} label="Notes Transcribed" styles={styles} theme={theme} />
+                </View>
+              </View>
+
+              <ScrollView
+                style={styles.dashboardMainScroll}
+                contentContainerStyle={styles.dashboardMainScrollContent}
+                showsVerticalScrollIndicator={false}
+              >
+                <Text style={styles.dashboardTitle}>Welcome back</Text>
+                <Text style={styles.dashboardSubtitle}>Here's where you left off.</Text>
+
+                <View style={[styles.section, styles.dashboardLibrary]}>
+                  <View style={styles.libraryToolbar}>
+                      <Text style={styles.libraryToolbarLabel}>
+                        YOUR LIBRARY · {recordings.length} RECORDING{recordings.length !== 1 ? 'S' : ''}
+                      </Text>
+
+                      <View style={styles.libraryToolbarRight}>
+                        <View style={styles.searchBox}>
+                          <Ionicons name="search" size={14} color={theme.textMuted} />
+                          <TextInput
+                            value={librarySearch}
+                            onChangeText={setLibrarySearch}
+                            placeholder="Search recordings..."
+                            placeholderTextColor={theme.textMuted}
+                            style={styles.searchInput}
+                            accessibilityLabel="Search recordings"
+                          />
+                        </View>
+
+                        <FilterDropdown
+                          value={libraryKeyFilter}
+                          options={keyFilterOptions}
+                          onSelect={(v) => setLibraryKeyFilter(v as 'all' | HarmonicaKey)}
+                          theme={theme}
+                          styles={styles}
+                        />
+
+                        <FilterDropdown
+                          pillPrefix="Sort: "
+                          value={librarySort}
+                          options={SORT_OPTIONS}
+                          onSelect={(v) => setLibrarySort(v as SortOption)}
+                          theme={theme}
+                          styles={styles}
+                        />
+
+                        <View style={styles.viewToggle}>
+                          <Pressable
+                            onPress={() => setLibraryView('list')}
+                            style={[styles.viewToggleSeg, libraryView === 'list' && styles.viewToggleSegActive]}
+                            accessibilityRole="radio"
+                            accessibilityState={{ checked: libraryView === 'list' }}
+                            accessibilityLabel="List view"
+                          >
+                            <Ionicons name="list-outline" size={14} color={libraryView === 'list' ? '#fff' : theme.textSub} />
+                          </Pressable>
+                          <Pressable
+                            onPress={() => setLibraryView('grid')}
+                            style={[styles.viewToggleSeg, libraryView === 'grid' && styles.viewToggleSegActive]}
+                            accessibilityRole="radio"
+                            accessibilityState={{ checked: libraryView === 'grid' }}
+                            accessibilityLabel="Grid view"
+                          >
+                            <Ionicons name="grid-outline" size={14} color={libraryView === 'grid' ? '#fff' : theme.textSub} />
+                          </Pressable>
+                        </View>
+                      </View>
+                    </View>
+
+                    {filteredRecordings.length > 0 ? (
+                      <View style={libraryView === 'grid' ? styles.recordingsGrid : styles.recordingsList}>
+                        {filteredRecordings.map((recording) => (
+                          <View key={recording.id} style={libraryView === 'grid' ? styles.recordingsGridItem : undefined}>
+                            <RecordingCard
+                              recording={recording}
+                              onPress={handleOpenRecording}
+                              onDelete={deleteRecording}
+                              onRename={renameRecording}
+                              onToggleFavorite={toggleFavorite}
+                              isPlaying={previewId === recording.id && preview.isPlaying}
+                              onTogglePlay={handleTogglePreview}
+                            />
+                          </View>
+                        ))}
+                      </View>
+                    ) : (
+                      <View style={styles.recordingsEmpty}>
+                        <Ionicons name="search-outline" size={26} color={theme.textMuted} />
+                        <Text style={styles.recordingsEmptyTitle}>
+                          {libraryFiltersActive ? 'No matching recordings' : 'No recordings yet'}
+                        </Text>
+                        <Text style={styles.recordingsEmptyText}>
+                          {libraryFiltersActive
+                            ? 'Try a different search term or key filter.'
+                            : 'Record a new song or upload an audio/MIDI file to get started.'}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+              </ScrollView>
+            </View>
+          )
+        ) : (
+          <>
+            <ScrollView
+              style={styles.scroll}
+              contentContainerStyle={styles.scrollContent}
+              showsVerticalScrollIndicator={false}
             >
-              <Ionicons name="cloud-upload-outline" size={18} color={theme.textMuted} />
-              <Text style={styles.uploadBtnText}>Upload Audio</Text>
-              <Text style={styles.comingSoon}>Soon</Text>
-            </Pressable>
-            <Pressable
-              disabled
-              style={styles.uploadBtn}
-              accessibilityRole="button"
-              accessibilityLabel="Upload MIDI — coming soon"
-              accessibilityState={{ disabled: true }}
-            >
-              <Ionicons name="musical-note-outline" size={18} color={theme.textMuted} />
-              <Text style={styles.uploadBtnText}>Upload MIDI</Text>
-              <Text style={styles.comingSoon}>Soon</Text>
-            </Pressable>
-          </View>
-        </View>
+              {orderedRecordings.length > 0 && (
+                <View style={styles.section}>
+                  <Text style={styles.sectionLabel}>RECENT RECORDINGS</Text>
+                  <View style={styles.recordingsList}>
+                    {orderedRecordings.map((recording) => (
+                      <RecordingCard
+                        key={recording.id}
+                        recording={recording}
+                        onPress={handleOpenRecording}
+                        onDelete={deleteRecording}
+                        onRename={renameRecording}
+                        onToggleFavorite={toggleFavorite}
+                        isPlaying={previewId === recording.id && preview.isPlaying}
+                        onTogglePlay={handleTogglePreview}
+                      />
+                    ))}
+                  </View>
+                </View>
+              )}
+              {harmonicaTypeSection}
+              {keySection}
+              {tipSection}
+            </ScrollView>
+
+            {/* Entry points */}
+            <View style={styles.bottomActions}>
+              {startAndUpload}
+            </View>
+          </>
+        )}
 
       </View>
     </SafeAreaView>
@@ -219,13 +753,20 @@ export default function KeySelectionScreen() {
 function createStyles(t: Theme) {
   return StyleSheet.create({
     safe:      { flex: 1, backgroundColor: t.bg },
+    // No webMaxWidth cap here on purpose — Home is the one full-bleed, marketing-style
+    // page (hero banner + library), not a readable-column utility screen like Settings/
+    // Edit/Export, so it should actually use the width of a wide monitor instead of
+    // floating in a centered 960px column with dead space on both sides.
     container: {
-      flex: 1,
-      ...webMaxWidth(WEB_CONTENT_WIDTH.compact),
-      paddingHorizontal: 24,
-      paddingTop: Platform.OS === 'web' ? WEB_SCREEN_PADDING_TOP : 36,
-      paddingBottom: Platform.OS === 'web' ? WEB_SCREEN_PADDING_BOTTOM : 24,
+      flex:              1,
+      width:             '100%',
+      paddingHorizontal: Platform.OS === 'web' ? 40 : 24,
+      paddingTop:        Platform.OS === 'web' ? WEB_SCREEN_PADDING_TOP : 36,
+      paddingBottom:     Platform.OS === 'web' ? WEB_SCREEN_PADDING_BOTTOM : 24,
     },
+    // The dashboard shell supplies its own padding per-side (flush sidebar, padded main
+    // content) — the page-level padding above would just add unwanted margins around it.
+    containerFlush: { paddingHorizontal: 0, paddingTop: 0, paddingBottom: 0 },
     header:    { marginBottom: 24 },
     headerTop: {
       flexDirection:  'row',
@@ -258,9 +799,415 @@ function createStyles(t: Theme) {
     scrollContent: { gap: 24, paddingBottom: 16 },
     section: { gap: 12 },
     recordingsList: { gap: 10 },
-    segmented: {
+    recordingsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+    recordingsGridItem: { flexBasis: 320, flexGrow: 1, minWidth: 280 },
+    startAndUpload: { gap: 10 },
+
+    // Library toolbar — label on the left, search/filter/sort/view-toggle cluster on the
+    // right. Wraps onto its own row under the label on a narrower sidebar-shrunk viewport
+    // rather than squeezing every control down to illegibility.
+    libraryToolbar: {
+      flexDirection:  'row',
+      flexWrap:       'wrap',
+      alignItems:     'center',
+      justifyContent: 'space-between',
+      gap:            12,
+      // The key-filter/sort popovers are position:absolute descendants of this row —
+      // as a flex item, this row needs its own explicit z-index (above the recordings
+      // list/grid flex item that follows it) or the popovers stack under the cards
+      // despite their own zIndex, since that only applies within this row's own context.
+      zIndex:         30,
+    } as ViewStyle,
+    libraryToolbarLabel: {
+      fontSize:      FONT.xs,
+      fontFamily:    Poppins.bold,
+      color:         t.textMuted,
+      letterSpacing: 1.2,
+    },
+    libraryToolbarRight: {
+      flexDirection: 'row',
+      alignItems:    'center',
+      flexWrap:      'wrap',
+      gap:           8,
+    },
+    searchBox: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      gap:               8,
+      backgroundColor:   t.surface,
+      borderWidth:       1,
+      borderColor:       t.border,
+      borderRadius:      10,
+      paddingHorizontal: 12,
+      paddingVertical:   8,
+      width:             200,
+    },
+    searchInput: {
+      flex:       1,
+      fontSize:   FONT.sm,
+      fontFamily: Poppins.regular,
+      color:      t.textPrimary,
+      ...(Platform.OS === 'web' ? { outlineStyle: 'none' } as any : null),
+    },
+
+    filterDropdownAnchor: { position: 'relative' } as any,
+    filterPill: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      gap:               6,
+      backgroundColor:   t.surface,
+      borderWidth:       1,
+      borderColor:       t.border,
+      borderRadius:      10,
+      paddingHorizontal: 12,
+      paddingVertical:   8,
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
+    filterPillHovered: { borderColor: t.accent },
+    filterPillText: { fontSize: FONT.sm, fontFamily: Poppins.semiBold, color: t.textSub, maxWidth: 120 },
+    filterDropdownPanel: {
+      position:        'absolute',
+      top:             '100%',
+      left:            0,
+      marginTop:       6,
+      minWidth:        160,
+      backgroundColor: t.surface,
+      borderRadius:    12,
+      borderWidth:     1,
+      borderColor:     t.border,
+      padding:         6,
+      gap:             2,
+      zIndex:          20,
+      ...(Platform.OS === 'web' ? { boxShadow: '0 12px 28px rgba(0,0,0,0.18)' } as any : null),
+    } as any,
+    filterOption: {
+      paddingVertical:   8,
+      paddingHorizontal: 10,
+      borderRadius:      8,
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
+    filterOptionHovered: { backgroundColor: t.surfaceAlt },
+    filterOptionActive:  { backgroundColor: t.accentSoft },
+    filterOptionText:       { fontSize: FONT.sm, fontFamily: Poppins.regular, color: t.textSub },
+    filterOptionTextActive: { fontFamily: Poppins.semiBold, color: t.accent },
+
+    viewToggle: {
       flexDirection:   'row',
       backgroundColor: t.surface,
+      borderWidth:     1,
+      borderColor:     t.border,
+      borderRadius:    10,
+      padding:         3,
+      gap:             2,
+    },
+    viewToggleSeg: {
+      width:            30,
+      height:           28,
+      alignItems:       'center',
+      justifyContent:   'center',
+      borderRadius:     8,
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
+    viewToggleSegActive: { backgroundColor: t.accent },
+
+    webScrollContent: { paddingBottom: 16, gap: 28 },
+
+    // Hero banner — a soft accent-tinted gradient (web supports arbitrary CSS through
+    // style, unlike native) fading into the page background, framing the headline and the
+    // two entry-point cards.
+    hero: {
+      borderRadius: 24,
+      padding:      32,
+      borderWidth:  1,
+      borderColor:  t.border,
+      overflow:     'visible',
+      ...(Platform.OS === 'web'
+        ? { backgroundImage: `linear-gradient(135deg, ${t.accentSoft} 0%, ${t.bg} 75%)` } as any
+        : { backgroundColor: t.surface }),
+    },
+    heroRow: {
+      flexDirection: 'row',
+      flexWrap:      'wrap',
+      alignItems:    'center',
+      gap:           32,
+    },
+    heroLeft: { flex: 1, minWidth: 280, gap: 16 },
+    heroBadge: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      alignSelf:         'flex-start',
+      gap:               6,
+      backgroundColor:   t.accentSoft,
+      borderRadius:      20,
+      borderWidth:        1,
+      borderColor:       t.accent,
+      paddingHorizontal: 12,
+      paddingVertical:   6,
+    },
+    heroBadgeText: { fontSize: FONT.xs, fontFamily: Poppins.semiBold, color: t.accent },
+    heroTitle: {
+      fontSize:      36,
+      lineHeight:    42,
+      fontFamily:    SpaceGrotesk.bold,
+      color:         t.textPrimary,
+      letterSpacing: -0.5,
+    },
+    heroTitleAccent: { color: t.accent },
+    heroSubtitle: {
+      fontSize:   FONT.base,
+      fontFamily: Poppins.regular,
+      color:      t.textSub,
+      lineHeight: 22,
+      maxWidth:   420,
+    },
+
+    heroRight: { flexDirection: 'row', flexWrap: 'wrap', gap: 16 },
+    heroCard: {
+      width:           240,
+      borderRadius:    16,
+      padding:         18,
+      gap:             10,
+      backgroundColor: t.accentSoft,
+      borderWidth:     1,
+      borderColor:     t.accent,
+    },
+    heroCardOutlined: {
+      width:              240,
+      borderRadius:       16,
+      padding:            18,
+      gap:                10,
+      backgroundColor:    t.bg,
+      borderWidth:        1.5,
+      borderStyle:        'dashed',
+      borderColor:        t.border,
+    },
+    heroCardIconWrap: {
+      width:            40,
+      height:           40,
+      borderRadius:     20,
+      backgroundColor:  t.bg,
+      alignItems:       'center',
+      justifyContent:   'center',
+    },
+    heroCardIconWrapMuted: {
+      width:            40,
+      height:           40,
+      borderRadius:     20,
+      backgroundColor:  t.surfaceAlt,
+      alignItems:       'center',
+      justifyContent:   'center',
+    },
+    heroCardTitle: { fontSize: FONT.md, fontFamily: Poppins.bold, color: t.textPrimary },
+    heroCardDesc: {
+      fontSize:   FONT.xs,
+      fontFamily: Poppins.regular,
+      color:      t.textMuted,
+      lineHeight: 16,
+    },
+    heroCardCounter: {
+      fontSize:   10,
+      fontFamily: Poppins.regular,
+      color:      t.textMuted,
+      textAlign:  'center',
+    },
+
+    // Split button — main half starts recording with whatever's already selected, the
+    // chevron half opens the picker dropdown below it without navigating away.
+    splitBtnAnchor: { position: 'relative' } as any,
+    splitBtnRow: { flexDirection: 'row', borderRadius: 10, overflow: 'hidden' },
+    splitBtnMain: {
+      flex:            1,
+      flexDirection:   'row',
+      alignItems:      'center',
+      justifyContent:  'center',
+      gap:             8,
+      backgroundColor: t.accent,
+      paddingVertical: 11,
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
+    splitBtnMainDisabled: { backgroundColor: t.surfaceAlt },
+    splitBtnMainPressed:  { backgroundColor: t.accentDim },
+    splitBtnMainText:  { fontSize: FONT.sm, fontFamily: Poppins.bold, color: '#fff' },
+    splitBtnMainTextDisabled: { color: t.textMuted },
+    recordDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: t.record },
+    splitBtnChevron: {
+      width:            34,
+      alignItems:       'center',
+      justifyContent:   'center',
+      backgroundColor:  t.accentDim,
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
+    splitBtnChevronPressed: { opacity: 0.85 },
+
+    splitDropdown: {
+      position:        'absolute',
+      top:             '100%',
+      left:            0,
+      right:           0,
+      marginTop:       10,
+      backgroundColor: t.surface,
+      borderRadius:    14,
+      borderWidth:     1,
+      borderColor:     t.border,
+      padding:         16,
+      gap:             16,
+      zIndex:          20,
+      ...(Platform.OS === 'web' ? { boxShadow: '0 12px 28px rgba(0,0,0,0.18)' } as any : null),
+    } as any,
+    // No card here — sits straight on the accent panel (rows use their own onAccent
+    // colors) so the whole sidebar reads as one homogeneous surface, not a blue frame
+    // wrapped around a white box.
+    sidebarInlineDropdown: { marginTop: 10, gap: 16 },
+
+    // Dashboard shell — sidebar and main content as direct flex-row siblings, neither one
+    // wrapped in the page ScrollView. That's what makes the sidebar genuinely full page
+    // height (it stretches to match dashboardShell's own height, which is the full
+    // viewport height via the flex:1 chain from `safe`/`container`) instead of just being
+    // as tall as its own content — only dashboardMainScroll scrolls internally.
+    dashboardShell: { flexDirection: 'row', flex: 1 },
+    // Accent-filled, flush to the true viewport edges (no radius, no margin) — clearly its
+    // own persistent region, not a card floating in the page. The white/near-black widget
+    // cards inside (Reddit-sidebar-style: distinct titled blocks, no border, just a soft
+    // shadow lifting them off the colored background) are what read as "division" from the
+    // rest of the page, not a hairline.
+    fullSidebar: {
+      width:              300,
+      flexShrink:         0,
+      gap:                16,
+      backgroundColor:    t.accent,
+      paddingHorizontal:  20,
+      paddingVertical:    28,
+      // The literal top-to-bottom division line the color contrast alone wasn't enough of.
+      borderRightWidth:   1,
+      borderRightColor:   'rgba(0,0,0,0.18)',
+    },
+    dashboardMainScroll: { flex: 1 },
+    dashboardMainScrollContent: {
+      paddingHorizontal: 40,
+      paddingTop:        WEB_SCREEN_PADDING_TOP,
+      paddingBottom:     WEB_SCREEN_PADDING_BOTTOM,
+      gap:               16,
+    },
+    dashboardLibrary: { marginTop: 8 },
+    dashboardTitle: {
+      fontSize:      FONT.xl,
+      fontFamily:    SpaceGrotesk.bold,
+      color:         t.textPrimary,
+      letterSpacing: -0.3,
+    },
+    dashboardSubtitle: { fontSize: FONT.sm, fontFamily: Poppins.regular, color: t.textMuted },
+
+    // Plain row content directly on the accent panel — no card, no pill, no shadow.
+    sidebarSection: { gap: 8 },
+    sidebarSectionLabel: {
+      fontSize:      FONT.xs,
+      fontFamily:    Poppins.bold,
+      color:         '#fff',
+      letterSpacing: 1,
+      marginBottom:  6,
+    },
+    // Hairline between the two sections — the only divider *inside* the panel; the panel's
+    // own right edge (fullSidebar below) carries the line separating it from the library.
+    sidebarDivider: { height: 1, backgroundColor: 'rgba(255,255,255,0.18)', marginVertical: 18 },
+    dashboardCounter: { fontSize: 10, fontFamily: Poppins.regular, color: 'rgba(255,255,255,0.65)', marginTop: 4 },
+
+    sidebarRow: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      gap:               10,
+      paddingVertical:   10,
+      paddingHorizontal: 12,
+      borderRadius:      10,
+      backgroundColor:   'rgba(255,255,255,0.14)',
+      borderWidth:       1,
+      borderColor:       'rgba(255,255,255,0.22)',
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
+    // Start Recording — the primary action, so it gets a solid white pill that pops off
+    // the accent panel instead of the translucent chrome every other row uses.
+    sidebarRowPrimary: {
+      backgroundColor: '#fff',
+      borderColor:     '#fff',
+    },
+    sidebarRowPrimaryPressed: { backgroundColor: t.accentSoft },
+    sidebarRowPressed:  { backgroundColor: 'rgba(255,255,255,0.22)' },
+    sidebarRowDisabled: { opacity: 0.55 },
+    sidebarRowIconWrap: { width: 22, alignItems: 'center', justifyContent: 'center' },
+    // Row-level opacity (sidebarRowDisabled) handles the disabled dimming — no separate
+    // text-color override needed on top of it.
+    sidebarRowText: { flex: 1, fontSize: FONT.sm, fontFamily: Poppins.semiBold, color: '#fff' },
+    sidebarRowTextPrimary: { color: t.accent },
+
+    // Column-layout stat tile — currently unused (the sidebar uses the "row" layout below)
+    // but kept as the StatTile component's other supported form for a future full-width
+    // band, so it isn't reinvented from scratch if one ever gets built again.
+    statTile: { flex: 1, alignItems: 'center', paddingVertical: 20, gap: 6 },
+    statValue: { fontSize: FONT.xl, fontFamily: SpaceGrotesk.bold, color: t.textPrimary },
+    statLabel: {
+      fontSize:      FONT.xs,
+      fontFamily:    Poppins.regular,
+      color:         t.textMuted,
+      letterSpacing: 0.3,
+    },
+
+    // Sidebar's compact "row" stat form — icon chip + two-line value/label stack, sitting
+    // straight on the accent panel (see StatTile's onAccent variant) instead of a card.
+    statRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8 },
+    statRowIconWrap: {
+      width:            34,
+      height:           34,
+      borderRadius:     10,
+      backgroundColor:  t.accentSoft,
+      alignItems:       'center',
+      justifyContent:   'center',
+    },
+    statRowIconWrapWarning:  { backgroundColor: t.warningSoft },
+    statRowIconWrapOnAccent: { backgroundColor: 'rgba(255,255,255,0.18)' },
+    statRowText: { gap: 1 },
+    statRowValue: { fontSize: FONT.md, fontFamily: SpaceGrotesk.bold, color: t.textPrimary },
+    statRowValueOnAccent: { color: '#fff' },
+    statRowLabel: { fontSize: FONT.xs, fontFamily: Poppins.regular, color: t.textMuted },
+    statRowLabelOnAccent: { color: 'rgba(255,255,255,0.75)' },
+    statRowDividerOnAccent: { height: 1, backgroundColor: 'rgba(255,255,255,0.16)' },
+
+    chooseFileBtn: {
+      borderWidth:     1.5,
+      borderColor:     t.accent,
+      borderRadius:    10,
+      paddingVertical: 10,
+      alignItems:      'center',
+      opacity:         0.6,
+    },
+    chooseFileBtnText: { fontSize: FONT.sm, fontFamily: Poppins.bold, color: t.accent },
+    uploadHint: {
+      fontSize:   10,
+      fontFamily: Poppins.regular,
+      color:      t.textMuted,
+      textAlign:  'center',
+    },
+
+    recordingsEmpty: {
+      alignItems:        'center',
+      justifyContent:    'center',
+      gap:               8,
+      borderRadius:      14,
+      borderWidth:       1,
+      borderStyle:       'dashed',
+      borderColor:       t.border,
+      paddingVertical:   56,
+      paddingHorizontal: 24,
+    },
+    recordingsEmptyTitle: { fontSize: FONT.md, fontFamily: Poppins.bold, color: t.textPrimary },
+    recordingsEmptyText: {
+      fontSize:   FONT.sm,
+      fontFamily: Poppins.regular,
+      color:      t.textMuted,
+      textAlign:  'center',
+      maxWidth:   320,
+    },
+    segmented: {
+      flexDirection:   'row',
+      backgroundColor: t.surfaceAlt,
       borderRadius:    12,
       padding:         3,
     },
@@ -277,6 +1224,27 @@ function createStyles(t: Theme) {
       color:      t.textSub,
     },
     segmentTextActive: { color: '#fff' },
+
+    // Sidebar-only alternative to the segmented pill above — plain selectable rows on the
+    // inline dropdown's white card background.
+    sidebarTypeRow: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      justifyContent:    'space-between',
+      paddingVertical:   10,
+      paddingHorizontal: 10,
+      borderRadius:      8,
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
+    sidebarTypeRowActive:  { backgroundColor: 'rgba(255,255,255,0.18)' },
+    sidebarTypeRowHovered: { backgroundColor: 'rgba(255,255,255,0.08)' },
+    sidebarTypeRowText: {
+      fontSize:   FONT.sm,
+      fontFamily: Poppins.semiBold,
+      color:      'rgba(255,255,255,0.85)',
+    },
+    sidebarTypeRowTextActive: { color: '#fff' },
+
     sectionLabel: {
       fontSize:      FONT.xs,
       fontFamily:    Poppins.bold,

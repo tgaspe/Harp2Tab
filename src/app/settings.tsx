@@ -108,7 +108,8 @@ export default function SettingsScreen() {
                   style={({ pressed, hovered }: any) => [
                     styles.cardRow,
                     styles.cardRowCursor,
-                    (pressed || (Platform.OS === 'web' && hovered)) && { opacity: 0.6 },
+                    Platform.OS === 'web' && hovered && styles.cardRowHover,
+                    pressed && { opacity: 0.6 },
                   ]}
                   accessibilityRole="button"
                   accessibilityLabel="Recalibrate microphone"
@@ -187,7 +188,8 @@ export default function SettingsScreen() {
                   style={({ pressed, hovered }: any) => [
                     styles.cardRow,
                     styles.cardRowCursor,
-                    (pressed || (Platform.OS === 'web' && hovered)) && { opacity: 0.6 },
+                    Platform.OS === 'web' && hovered && styles.cardRowHover,
+                    pressed && { opacity: 0.6 },
                   ]}
                   accessibilityRole="link"
                   accessibilityLabel="Privacy Policy"
@@ -288,6 +290,10 @@ function createStyles(t: Theme) {
     // View rows like Mic Sensitivity) — keeps cursor:pointer semantically
     // accurate.
     cardRowCursor: Platform.OS === 'web' ? ({ cursor: 'pointer' } as ViewStyle) : {},
+    // Real hover tint on web instead of dimming with opacity — matches the edit screen's
+    // toolbar language (state = color change, not fade), and reads clearly against a row
+    // that otherwise looks static.
+    cardRowHover: { backgroundColor: t.surfaceAlt },
     rowIcon:   { marginTop: 2 },
     rowBody:   { flex: 1, gap: 4 },
     rowLabel: {

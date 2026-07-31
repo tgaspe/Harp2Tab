@@ -47,4 +47,7 @@ export interface TabRecording {
   /** Beats per minute — optional for the same reason (recordings saved before the
    *  piano-roll's tempo feature existed). Consumers should fall back to a default. */
   bpm?: number;
+  /** Starred in the recordings list — optional, absent/false for every recording saved
+   *  before this existed. */
+  favorite?: boolean;
 }

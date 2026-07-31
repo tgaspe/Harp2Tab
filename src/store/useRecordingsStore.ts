@@ -8,6 +8,7 @@ interface RecordingsState {
   saveRecording:   (recording: TabRecording) => void;
   deleteRecording: (id: string) => void;
   renameRecording: (id: string, title: string) => void;
+  toggleFavorite:  (id: string) => void;
 }
 
 export const useRecordingsStore = create<RecordingsState>()(
@@ -27,6 +28,11 @@ export const useRecordingsStore = create<RecordingsState>()(
       renameRecording: (id, title) =>
         set((s) => ({
           recordings: s.recordings.map((r) => (r.id === id ? { ...r, title } : r)),
+        })),
+
+      toggleFavorite: (id) =>
+        set((s) => ({
+          recordings: s.recordings.map((r) => (r.id === id ? { ...r, favorite: !r.favorite } : r)),
         })),
     }),
     {

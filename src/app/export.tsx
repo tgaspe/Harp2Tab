@@ -13,26 +13,12 @@ import { useTheme } from '@/hooks/useTheme';
 import { useAppStore, selectKey, selectTabNotes, selectExportFmt, selectHarmonicaType } from '@/store/useAppStore';
 import { saveCurrentSessionToLibrary, getDefaultRecordingTitle, startNewRecordingSession } from '@/store/sessionSnapshot';
 import { generateForFormat } from '@/export/generators';
+import { contentToBlob, triggerWebDownload } from '@/export/webDownload';
 import { EXPORT_FORMATS, FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_TOP, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
 import type { Theme } from '@/theme';
 import type { ExportFormat } from '@/types';
-
-function contentToBlob(content: string, encoding: 'utf8' | 'base64', mimeType: string): Blob {
-  return encoding === 'base64'
-    ? new Blob([Uint8Array.from(atob(content), (c) => c.charCodeAt(0))], { type: mimeType })
-    : new Blob([content], { type: mimeType });
-}
-
-function triggerWebDownload(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
 
 export default function ExportScreen() {
   const router          = useRouter();
@@ -376,12 +362,15 @@ function createStyles(t: Theme) {
       gap: 6,
       backgroundColor: t.surface,
       borderRadius: 14,
-      paddingVertical: 18,
+      paddingVertical: Platform.OS === 'web' ? 14 : 18,
       borderWidth: 1,
       borderColor: t.accent,
       ...(Platform.OS === 'web' ? { flex: 1, cursor: 'pointer' } : null),
     } as ViewStyle,
-    saveBtnPressed:  { opacity: 0.7 },
+    // Real hover tint on web (matches the edit screen's toolbar language) instead of a
+    // flat opacity dim — this button is outlined, not filled, so a color shift reads
+    // clearly as "hovered" where a dim would barely register.
+    saveBtnPressed: Platform.OS === 'web' ? { backgroundColor: t.accentSoft } : { opacity: 0.7 },
     saveBtnText:     { fontSize: FONT.md, fontFamily: Poppins.bold, color: t.accent },
     shareBtn: {
       flexDirection: 'row',
@@ -390,7 +379,7 @@ function createStyles(t: Theme) {
       gap: 6,
       backgroundColor: t.accent,
       borderRadius: 14,
-      paddingVertical: 18,
+      paddingVertical: Platform.OS === 'web' ? 14 : 18,
       ...(Platform.OS === 'web' ? { flex: 1, cursor: 'pointer' } : null),
     } as ViewStyle,
     shareBtnPressed:  { backgroundColor: t.accentDim },

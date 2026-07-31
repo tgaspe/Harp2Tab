@@ -30,6 +30,10 @@ interface AppState {
    *  drives the piano-roll's bar ruler, its snap-to-grid dragging, and the metronome. */
   bpm:                number;
   metronomeEnabled:   boolean;
+  /** User-entered name for the in-progress session, editable inline in the editor.
+   *  Empty means untitled — save falls back to a timestamp (see saveCurrentSessionToLibrary).
+   *  Not undo-tracked: it's metadata, not part of the musical content being edited. */
+  recordingTitle:     string;
 }
 
 function pushHistory(s: {
@@ -71,6 +75,7 @@ interface AppActions {
   setExportFormat:(format: ExportFormat) => void;
   setBpm:              (bpm: number) => void;
   setMetronomeEnabled: (enabled: boolean) => void;
+  setRecordingTitle:   (title: string) => void;
   loadRecording:  (recording: TabRecording) => void;
   reset:          () => void;
 }
@@ -79,7 +84,7 @@ export const DEFAULT_BPM = 100;
 
 const initialState: AppState = {
   harmonicaType:      'diatonic',
-  selectedKey:        null,
+  selectedKey:        'C',
   isRecording:        false,
   isPaused:           false,
   recordingStartTime: null,
@@ -90,6 +95,7 @@ const initialState: AppState = {
   exportFormat:       'TXT',
   bpm:                DEFAULT_BPM,
   metronomeEnabled:   false,
+  recordingTitle:     '',
 };
 
 export const useAppStore = create<AppState & AppActions>()(
@@ -111,6 +117,7 @@ export const useAppStore = create<AppState & AppActions>()(
         s.tabNotes           = [];
         s.history            = [];
         s.future             = [];
+        s.recordingTitle     = '';
       }),
 
     stopRecording: () =>
@@ -275,6 +282,9 @@ export const useAppStore = create<AppState & AppActions>()(
     setMetronomeEnabled: (enabled) =>
       set((s) => { s.metronomeEnabled = enabled; }),
 
+    setRecordingTitle: (title) =>
+      set((s) => { s.recordingTitle = title; }),
+
     // Reopens a saved recording for editing — distinct from startRecording()
     // since it's not a new session (no gate check, no fresh recordingStartTime
     // for elapsed-time purposes), just loading past notes back into the working state.
@@ -290,6 +300,7 @@ export const useAppStore = create<AppState & AppActions>()(
         s.isRecording         = false;
         s.isPaused            = false;
         s.bpm                 = recording.bpm ?? DEFAULT_BPM;
+        s.recordingTitle      = recording.title;
       }),
 
     reset: () =>
@@ -309,3 +320,4 @@ export const selectCanRedo    = (s: AppState & AppActions) => s.future.length > 
 export const selectExportFmt  = (s: AppState & AppActions) => s.exportFormat;
 export const selectBpm              = (s: AppState & AppActions) => s.bpm;
 export const selectMetronomeEnabled = (s: AppState & AppActions) => s.metronomeEnabled;
+export const selectRecordingTitle   = (s: AppState & AppActions) => s.recordingTitle;
