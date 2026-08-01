@@ -20,6 +20,9 @@ import { selectHarmonicaType, selectKey, selectRecordingId, selectTabNotes, useA
 import { selectRecordings, useRecordingsStore } from '@/store/useRecordingsStore';
 import { getFrames, type RawFrame } from '@/audio/frameBuffer';
 import { frequencyToTab } from '@/audio/HarmonicaMapper';
+import {
+  noteColor, midiOf, maxOf, minOf, splitValidRuns, buildRawSegments, SILENCE_COLOR,
+} from '@/audio/frameVisualization';
 import { createNoteDetector, DEFAULT_NOTE_DETECTOR_CONFIG } from '@/audio/NoteDetector';
 import { createAubioNotesSegmenter, DEFAULT_AUBIO_NOTES_CONFIG } from '@/audio/segmenters/aubioNotesSegmenter';
 import { createEnvelopeGate, type EnvelopeConfig } from '@/audio/segmenters/envelope';
@@ -46,44 +49,6 @@ const MIN_ZOOM = 1;
 const MAX_ZOOM = 200;
 const ZOOM_BUTTON_STEP = 1.4;    // multiplicative step per +/- button tap
 const ZOOM_WHEEL_SENSITIVITY = 0.0018; // tuned so a normal mouse-wheel notch (~100 deltaY) feels like one button step
-
-const NOTE_ORDER = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-
-function noteColor(note: string): string {
-  const name = note.replace(/\d+$/, '');
-  const idx = NOTE_ORDER.indexOf(name);
-  if (idx === -1) return '#8a8a92';
-  const hue = Math.round((idx * 360) / 12);
-  return `hsl(${hue}, 58%, 56%)`;
-}
-
-function midiOf(frequency: number): number {
-  return 69 + 12 * Math.log2(frequency / 440);
-}
-
-// Math.max(...arr)/Math.min(...arr) risk a call-stack overflow once `arr` has
-// thousands of elements (a long recording's frame array) — reduce instead.
-function maxOf(nums: number[], floor: number): number {
-  return nums.reduce((m, n) => (n > m ? n : m), floor);
-}
-function minOf(nums: number[], ceiling: number): number {
-  return nums.reduce((m, n) => (n < m ? n : m), ceiling);
-}
-
-function splitValidRuns(frames: RawFrame[]): RawFrame[][] {
-  const runs: RawFrame[][] = [];
-  let current: RawFrame[] = [];
-  for (const f of frames) {
-    if (isFinite(f.frequency) && f.frequency > 0) {
-      current.push(f);
-    } else if (current.length) {
-      runs.push(current);
-      current = [];
-    }
-  }
-  if (current.length) runs.push(current);
-  return runs;
-}
 
 // Common shape all three segmenters (NoteDetector + the two envelope-first candidates)
 // expose — lets Frame Inspector replay any of them over the same frozen frame array for
@@ -931,38 +896,6 @@ function NotesTrack({ notes, height, pxPerSecond, theme }: {
   );
 }
 
-interface RawSegment {
-  startT: number;
-  endT:   number;
-  note:   string | null; // scientific pitch name, e.g. "C4" — null means no pitch detected
-}
-
-// Merge consecutive frames that resolve to the same note into one segment — matches
-// the "[C4C4C4C4C4C5...]" run-length pattern this track was designed around, and gives
-// each run enough width to actually show its note name instead of one sliver per frame.
-function buildRawSegments(
-  frames: RawFrame[],
-  harmonicaKey: HarmonicaKey,
-  harmonicaType: HarmonicaType,
-): RawSegment[] {
-  const segments: RawSegment[] = [];
-  let current: RawSegment | null = null;
-  for (let i = 0; i < frames.length; i++) {
-    const f      = frames[i];
-    const result = frequencyToTab(f.frequency, harmonicaKey, harmonicaType);
-    const note   = result?.note ?? null;
-    const nextT  = frames[i + 1]?.t ?? f.t + 40;
-    if (current && current.note === note) {
-      current.endT = nextT;
-    } else {
-      if (current) segments.push(current);
-      current = { startT: f.t, endT: nextT, note };
-    }
-  }
-  if (current) segments.push(current);
-  return segments;
-}
-
 function RawNotesTrack({ frames, height, pxPerSecond, harmonicaKey, harmonicaType }: {
   frames: RawFrame[]; height: number; pxPerSecond: number;
   harmonicaKey: HarmonicaKey | null; harmonicaType: HarmonicaType;
@@ -1005,9 +938,6 @@ function RawNotesTrack({ frames, height, pxPerSecond, harmonicaKey, harmonicaTyp
     </View>
   );
 }
-
-// Neutral filler color for silent/unmapped frames in the raw track.
-const SILENCE_COLOR = '#8a8a92';
 
 function createStyles(t: Theme) {
   return StyleSheet.create({

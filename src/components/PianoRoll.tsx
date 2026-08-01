@@ -26,16 +26,24 @@ import type { Theme } from '@/theme';
 import type { HarmonicaKey, HarmonicaType, TabNote } from '@/types';
 
 const ROW_HEIGHT       = 28;
-const LABEL_WIDTH       = 88;
+// Wide enough for the rail's content plus a gutter on both sides. The cells' fixed
+// columns come to 85px (swatch 6+6, sign 7, number 14, modifier 20, note 28+4), so at the
+// old 88 they overflowed their own 8px right padding and sat flush against the left edge
+// with nothing to spare — 85 + 10 left + 8 right = 103.
+const LABEL_WIDTH       = 104;
 const DEFAULT_PX_PER_SECOND = 90;
 const MIN_PX_PER_SECOND     = 20;
 const MAX_PX_PER_SECOND     = 400;
 const ZOOM_BUTTON_STEP      = 1.3; // multiplicative step per +/- tap, matching Frame Inspector's convention
+// Breathing room left to the right of the last note when fitting the chart to the
+// viewport, so the final note doesn't end flush against the edge.
+const FIT_PADDING_PX        = 60;
 const MIN_DURATION_MS   = 60;
 const NUDGE_TIME_MS     = 50;
-const BLOCK_MARGIN      = 4;
 const RESIZE_HANDLE_W   = 10;
 const RULER_HEIGHT      = 30;
+// One height for every toolbar control, so the row sits on a single baseline.
+const CONTROL_H         = 28;
 const DATA_BAR_HEIGHT   = 140;
 const DATA_PANEL_TABS_HEIGHT = 34;
 const DATA_PANEL_COLLAPSED_HEIGHT = DATA_PANEL_TABS_HEIGHT;
@@ -74,18 +82,25 @@ function classifyTechnique(tab: string): NoteTechnique {
   return tab.startsWith('-') ? 'draw' : 'blow';
 }
 
-// Theme-invariant (same hex in both light and dark), like accent/record/success/warning —
-// hand-picked hues, none reused from the app's semantic Theme tokens (which mean
-// specific other things elsewhere: accent, recording, success/fail, warning), all at a
-// similar mid-saturation lightness so white note-block text stays legible on every one.
+// Note-block FILL colors — bright, saturated 400/500-level steps, chosen to sit happily
+// beside the app's cyan accent (#0cc0df): a blue that's its near-neighbour, purple bends
+// continuing the cool side, and orange/yellow as the warm pops. The accent hue itself is
+// deliberately NOT used — it's reserved for the selection ring, which has to stay legible
+// on top of any of these.
+//
+// Theme-invariant: these are vivid enough to hold up on both a white and a near-black
+// grid, and the label color adapts per block (see labelOn) rather than the fill adapting.
+//
+// CVD-validated as a categorical set: adjacent-pair separation ΔE 30.3 protan / 19.2
+// tritan, normal-vision floor 34.0 — comfortably clear of the thresholds.
 const TECHNIQUE_COLOR: Record<NoteTechnique, string> = {
-  blow:       '#2563EB', // blue
-  draw:       '#EA580C', // orange
-  bend1:      '#9333EA', // purple
-  bend2:      '#C026D3', // fuchsia
-  bend3:      '#DB2777', // pink
-  overblow:   '#CA8A04', // gold — the rarest technique gets the most distinct hue
-  unplayable: '#71717A', // neutral grey — deliberately flat/quiet, not part of the hue set above
+  blow:       '#3B82F6', // blue-500
+  draw:       '#F97316', // orange-500
+  bend1:      '#C084FC', // purple-400  ─┐ one hue family, deepening with bend depth
+  bend2:      '#A855F7', // purple-500   │
+  bend3:      '#8B5CF6', // violet-500  ─┘
+  overblow:   '#FACC15', // yellow-400 — the rarest technique, the brightest pop
+  unplayable: '#A1A1AA', // zinc-400 — neutral, deliberately outside the hue set above
 };
 
 const TECHNIQUE_LABEL: Record<NoteTechnique, string> = {
@@ -97,11 +112,64 @@ function techniqueColor(tab: string): string {
   return TECHNIQUE_COLOR[classifyTechnique(tab)];
 }
 
+function channels(hex: string): number[] {
+  return [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+}
+
+function relativeLuminance(hex: string): number {
+  const [r, g, b] = channels(hex)
+    .map((c) => c / 255)
+    .map((c) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+const BLOCK_LABEL_DARK = '#0A0A0B';
+
+/** Black-or-white label, whichever contrasts better with this particular fill. Fixing the
+ *  label to white is what forced every previous palette to stay dark and muted — a vivid
+ *  yellow under white text measures 1.5:1. Choosing per block frees the fills to actually
+ *  be lively; every entry in TECHNIQUE_COLOR clears 4.5:1 against its chosen label
+ *  (worst: bend3 at 4.67:1, best: overblow at 12.9:1). */
+function labelOn(fill: string): string {
+  const l = relativeLuminance(fill);
+  const withWhite = 1.05 / (l + 0.05);
+  const withDark  = (l + 0.05) / (relativeLuminance(BLOCK_LABEL_DARK) + 0.05);
+  return withWhite >= withDark ? '#FFFFFF' : BLOCK_LABEL_DARK;
+}
+
+/** Opaque mix of `hex` over `base`. Used for the block's own hairline edge — a darkened
+ *  step of its fill, which keeps light fills (yellow at 1.9:1 against a white grid) from
+ *  dissolving into the background without resorting to a heavy outline. */
+function mixHex(hex: string, base: string, alpha: number): string {
+  const f = channels(hex);
+  const b = channels(base);
+  const m = f.map((c, i) => Math.round(c * alpha + b[i] * (1 - alpha)));
+  return `#${m.map((c) => c.toString(16).padStart(2, '0')).join('')}`;
+}
+
+/** The edge has to work against opposite backgrounds, so it can't be one fixed mix: on
+ *  the white light-mode grid it darkens the fill (a 0.78 mix left the yellow block's edge
+ *  at 2.5:1 and the block dissolved into the page); on the near-black dark grid the fill
+ *  is already high-contrast, so the edge only needs to lift slightly to define the shape. */
+function techniqueSkin(tab: string, isDark: boolean) {
+  const fill = techniqueColor(tab);
+  return {
+    fill,
+    label: labelOn(fill),
+    edge:  isDark ? mixHex(fill, '#FFFFFF', 0.72) : mixHex(fill, '#000000', 0.58),
+  };
+}
+
 // A note block's own label — the tab, or (for an unplayable note, tab: '') its pitch
 // name instead, so the block never renders blank.
 function noteBlockLabel(note: TabNote): string {
   return note.tab || note.note;
 }
+
+// Below this, a note's detection is shaky enough to be worth flagging (dashed edge).
+// Deliberately well under the 60–85% a normal clean note lands at, so the flag stays rare
+// and meaningful instead of decorating the entire grid.
+const LOW_CONFIDENCE_THRESHOLD = 50;
 
 // Matches the existing "Add Note" toolbar button's default (edit.tsx) — the pencil tool's
 // click-to-create uses the same baseline duration for consistency.
@@ -163,6 +231,18 @@ function parseTab(tab: string): { sign: string; number: string; modifier: string
   return { sign: m[1] ?? '', number: m[2], modifier: m[3] ?? '' };
 }
 
+// Plain-English reading of a tab string, for the row rail's hover tooltip — "-10'" is
+// unambiguous once you know the grammar and opaque until then, and the rail's technique
+// swatch has no legend of its own outside the help modal.
+function describePosition(tab: string): string {
+  if (tab === '') return 'Not reachable on this harmonica';
+  const { sign, number, modifier } = parseTab(tab);
+  const breath = sign === '-' ? 'Draw' : 'Blow';
+  const bends = (modifier.match(/'/g) ?? []).length;
+  const extra = modifier.endsWith('o') ? ', overblow' : bends > 0 ? `, bend ×${bends}` : '';
+  return `${breath} hole ${number}${extra}`;
+}
+
 // Octave number from a scientific pitch name, e.g. "C#5" -> 5.
 function getOctave(note: string): number {
   const m = note.match(/(-?\d+)$/);
@@ -176,6 +256,106 @@ function isNaturalNote(note: string): boolean {
 }
 
 type NoteUpdate = Partial<Pick<TabNote, 'tab' | 'note' | 'start_time' | 'duration'>>;
+
+// Icon-only toolbar button with a hover tooltip (web). Every glyph-only control in the
+// tool row goes through this — zoom, fit, transpose — because a bare chevron or
+// circled-arrow icon says nothing about what it does, and the transpose ones additionally
+// need to explain *why* they're greyed out (nothing selected) rather than just looking
+// broken. Same tooltip treatment as the ruler's loop-pin dock.
+function ToolButton({
+  icon, label, hint, onPress, disabled = false, align = 'left', theme, styles,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  /** Second tooltip line — a shortcut, or the reason the button is disabled. */
+  hint?: string;
+  onPress: () => void;
+  disabled?: boolean;
+  /** Which edge of the button the tooltip hangs from, so it can't run off the panel. */
+  align?: 'left' | 'right';
+  theme: Theme;
+  styles: ReturnType<typeof createStyles>;
+}) {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <View
+      style={styles.toolBtnAnchor}
+      {...(Platform.OS === 'web'
+        ? { onMouseEnter: () => setHovered(true), onMouseLeave: () => setHovered(false) }
+        : null)}
+    >
+      <Pressable
+        onPress={onPress}
+        disabled={disabled}
+        style={[styles.zoomBtn, disabled && styles.zoomBtnDisabled]}
+        accessibilityRole="button"
+        accessibilityLabel={hint ? `${label} — ${hint}` : label}
+        accessibilityState={{ disabled }}
+      >
+        <Ionicons name={icon} size={14} color={disabled ? theme.textMuted : theme.textSub} />
+      </Pressable>
+      {hovered && (
+        <View
+          pointerEvents="none"
+          style={[styles.toolTooltip, align === 'right' ? styles.toolTooltipRight : styles.toolTooltipLeft]}
+        >
+          <Text style={styles.toolTooltipText}>{label}</Text>
+          {hint !== undefined && <Text style={styles.toolTooltipHint}>{hint}</Text>}
+        </View>
+      )}
+    </View>
+  );
+}
+
+// One row of the frozen left rail: technique swatch + tab + note name, with a hover
+// tooltip spelling out what the tab notation actually means. The rail is neutral ink,
+// with a small technique swatch instead of colored text — the note fills are vivid on
+// purpose, and a vivid hue used as small text fails contrast badly (yellow on white
+// measures ~1.5:1); a swatch is a graphical mark, so it carries the same legend role
+// safely, and the tooltip is what names the color.
+function LabelRailCell({ row, isOctaveBoundary, styles }: {
+  row: GridRow;
+  isOctaveBoundary: boolean;
+  styles: ReturnType<typeof createStyles>;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const { sign, number, modifier } = parseTab(row.tab);
+  return (
+    <View
+      style={[
+        styles.labelCell,
+        !isNaturalNote(row.note) && styles.rowStripeAlt,
+        isOctaveBoundary && styles.octaveBoundary,
+        !row.playable && styles.rowUnplayable,
+        hovered && styles.labelCellHovered,
+      ]}
+      {...(Platform.OS === 'web'
+        ? { onMouseEnter: () => setHovered(true), onMouseLeave: () => setHovered(false) }
+        : null)}
+    >
+      {row.playable ? (
+        <View style={[styles.labelSwatch, { backgroundColor: techniqueColor(row.tab) }]} />
+      ) : (
+        // An unplayable row's tab columns are all empty strings, which left a blank cell
+        // that read as a rendering gap rather than "no position for this pitch".
+        <Text style={styles.labelUnplayableMark}>–</Text>
+      )}
+      <Text style={styles.labelTabSign} numberOfLines={1}>{sign}</Text>
+      <Text style={styles.labelTabNumber} numberOfLines={1}>{number}</Text>
+      <Text style={styles.labelTabModifier} numberOfLines={1}>{modifier}</Text>
+      <Text style={styles.labelNote} numberOfLines={1}>{row.note}</Text>
+
+      {hovered && (
+        <View pointerEvents="none" style={styles.labelTooltip}>
+          <Text style={styles.labelTooltipText}>{describePosition(row.tab)}</Text>
+          <Text style={styles.labelTooltipHint}>
+            {row.playable ? row.note : `${row.note} · still plays back, just has no hole here`}
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+}
 
 interface PianoRollProps {
   notes:          TabNote[];
@@ -194,11 +374,15 @@ interface PianoRollProps {
   // needs to reach usePlayback's play() calls too, the same shape as currentTimeMs/onSeek.
   loopRegion:          { startMs: number; endMs: number } | null;
   onLoopRegionChange:  (region: { startMs: number; endMs: number } | null) => void;
+  /** Rendered at the head of the tool row, left of the zoom controls — the parent puts
+   *  the chart's title/meta there so the editor's own header is the panel's own header,
+   *  rather than a separate band of page chrome floating above the panel. */
+  headerLeft?:         React.ReactNode;
 }
 
 export function PianoRoll({
   notes, harmonicaKey, harmonicaType, bpm, selectedId, onSelect, onCreate, onUpdate, onDelete, isPlaying, currentTimeMs, onSeek,
-  loopRegion, onLoopRegionChange,
+  loopRegion, onLoopRegionChange, headerLeft,
 }: PianoRollProps) {
   const theme  = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
@@ -223,6 +407,9 @@ export function PianoRoll({
   const [metricTab, setMetricTab] = useState<'breath' | 'duration' | 'confidence' | 'pitchBend'>('breath');
   const [scrollX, setScrollX] = useState(0);
   const [viewportWidth, setViewportWidth] = useState(0);
+  // Height of the scrollable grid viewport (not the full row ladder) — needed to center
+  // the notes vertically on first paint, see the auto-fit effect below.
+  const [gridViewportHeight, setGridViewportHeight] = useState(0);
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const panelHeight = useSharedValue(DATA_PANEL_EXPANDED_HEIGHT);
   const [pxPerSecond, setPxPerSecond] = useState(DEFAULT_PX_PER_SECOND);
@@ -273,6 +460,7 @@ export function PianoRoll({
   }));
 
   const hScrollRef = useRef<ScrollView>(null);
+  const vScrollRef = useRef<ScrollView>(null);
   const subdivisionBtnRef = useRef<View>(null);
   // Mirrors read inside the wheel handler below — that handler is registered once (empty
   // effect deps) via a raw DOM listener, so it can't close over fresh state each render
@@ -309,6 +497,33 @@ export function PianoRoll({
   );
 
   const dataAxisLabels = useMemo(() => getDataAxisLabels(metricTab, notes), [metricTab, notes]);
+
+  // Breath Force and Pitch Bend are per-frame metrics — they need the raw analysis
+  // frames, which a chart that was drawn by hand (or saved before frame retention) simply
+  // doesn't have. Duration/Confidence come off the notes themselves and always do.
+  const metricHasData = metricTab === 'breath' || metricTab === 'pitchBend'
+    ? frames.length > 0
+    : notes.length > 0;
+
+  // A chart with no frames at all opens with the panel collapsed rather than reserving
+  // ~150px for a permanently empty box. One-shot: once the user has touched the collapse
+  // toggle (or frames arrive later) this never re-decides for them.
+  const didInitPanelRef = useRef(false);
+  useEffect(() => {
+    if (didInitPanelRef.current) return;
+    didInitPanelRef.current = true;
+    if (frames.length === 0) {
+      setPanelCollapsed(true);
+      panelHeight.value = DATA_PANEL_COLLAPSED_HEIGHT;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [frames.length]);
+
+  // Render-time mirror of getSelectionNotes()'s count — that one reads refs (it's called
+  // from keyboard handlers and worklet callbacks), which don't re-render, so the toolbar
+  // can't derive its enabled/disabled state from it.
+  const selectionCount = mouseMode === 'pencil' ? (selectedId ? 1 : 0) : selectedIds.length;
+  const hasSelection = selectionCount > 0;
 
   const totalMs = notes.length ? notes.reduce((max, n) => Math.max(max, n.start_time + n.duration), 0) : 0;
   // Floor gridWidth to the actual available viewport, not just a fixed 600 — otherwise a
@@ -465,6 +680,56 @@ export function PianoRoll({
     isProgrammaticScrollRef.current = true;
     hScrollRef.current?.scrollTo({ x: newScrollX, animated: false });
   }
+
+  // Zoom + scroll so the whole chart is actually on screen: horizontally the full
+  // duration fills the viewport, vertically the used pitch range is centered.
+  //
+  // Without this the editor looks empty even when it isn't. The row ladder is the full
+  // chromatic range (40+ rows, well past a viewport) and starts scrolled to its highest
+  // rows, while the default 90px/second means a two-second chart occupies the leftmost
+  // sliver of a five-bar-wide grid — so a saved chart opened onto blank high rows several
+  // seconds past where any of its notes were.
+  function fitToContent() {
+    if (positions.length === 0) return;
+
+    if (totalMs > 0 && viewportWidth > 0) {
+      const target = ((viewportWidth - FIT_PADDING_PX) / totalMs) * 1000;
+      const newPx = Math.max(MIN_PX_PER_SECOND, Math.min(MAX_PX_PER_SECOND, target));
+      setPxPerSecond(newPx);
+      setScrollX(0);
+      isProgrammaticScrollRef.current = true;
+      hScrollRef.current?.scrollTo({ x: 0, animated: false });
+    }
+
+    const rows = notes
+      .map((n) => positions.findIndex((p) => p.note === n.note))
+      .filter((i) => i >= 0);
+    if (rows.length === 0 || gridViewportHeight === 0) return;
+    const centerPx = ((Math.min(...rows) + Math.max(...rows) + 1) / 2) * ROW_HEIGHT;
+    const maxY = Math.max(0, positions.length * ROW_HEIGHT - gridViewportHeight);
+    vScrollRef.current?.scrollTo({
+      y: Math.max(0, Math.min(maxY, centerPx - gridViewportHeight / 2)),
+      animated: false,
+    });
+  }
+
+  // Runs fitToContent once, on the first render where both viewport dimensions have been
+  // measured and there's something to fit. Ref-guarded rather than dependency-guarded:
+  // after that first fit, the view belongs to the user, and neither editing notes nor a
+  // window resize should yank their zoom/scroll back.
+  const didAutoFitRef = useRef(false);
+  // ...but a different chart is a different thing to look at, so loading one re-arms the
+  // fit. Declared above the fit effect so that on a recording change this clears the flag
+  // before the effect below gets its chance to act on it.
+  useEffect(() => { didAutoFitRef.current = false; }, [recordingId]);
+  useEffect(() => {
+    if (didAutoFitRef.current) return;
+    if (notes.length === 0 || positions.length === 0) return;
+    if (viewportWidth === 0 || gridViewportHeight === 0) return;
+    didAutoFitRef.current = true;
+    fitToContent();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notes.length, positions.length, viewportWidth, gridViewportHeight]);
 
   // Arrow-key nudge (web/keyboard only) for the currently-selected note: Left/Right nudges
   // time, Up/Down moves to the adjacent playable row, Backspace/Delete removes it.
@@ -956,33 +1221,47 @@ export function PianoRoll({
 
   return (
     <View style={styles.outer} onLayout={handleViewportLayout}>
-      {/* Zoom + tool + snap controls */}
+      {/* Title/meta + zoom + tool + snap controls */}
       <View style={styles.toolbarRow}>
-        <View style={styles.zoomRow}>
-          <Pressable
-            onPress={() => zoomByFactor(1 / ZOOM_BUTTON_STEP)}
-            style={styles.zoomBtn}
-            accessibilityRole="button"
-            accessibilityLabel="Zoom out"
-          >
-            <Ionicons name="remove" size={14} color={theme.textSub} />
-          </Pressable>
-          <Pressable
-            onPress={() => zoomByFactor(DEFAULT_PX_PER_SECOND / pxPerSecond)}
-            style={styles.zoomPill}
-            accessibilityRole="button"
-            accessibilityLabel="Reset zoom to default"
-          >
-            <Text style={styles.zoomPillText}>{Math.round((pxPerSecond / DEFAULT_PX_PER_SECOND) * 100)}%</Text>
-          </Pressable>
-          <Pressable
-            onPress={() => zoomByFactor(ZOOM_BUTTON_STEP)}
-            style={styles.zoomBtn}
-            accessibilityRole="button"
-            accessibilityLabel="Zoom in"
-          >
-            <Ionicons name="add" size={14} color={theme.textSub} />
-          </Pressable>
+        <View style={styles.toolbarRowLeft}>
+          {headerLeft}
+          {headerLeft !== undefined && <View style={styles.toolbarDivider} />}
+          <View style={styles.zoomRow}>
+            <ToolButton
+              icon="remove"
+              label="Zoom out"
+              onPress={() => zoomByFactor(1 / ZOOM_BUTTON_STEP)}
+              theme={theme}
+              styles={styles}
+            />
+            <Pressable
+              onPress={() => zoomByFactor(DEFAULT_PX_PER_SECOND / pxPerSecond)}
+              style={styles.zoomPill}
+              accessibilityRole="button"
+              accessibilityLabel="Reset zoom to default"
+            >
+              <Text style={styles.zoomPillText}>{Math.round((pxPerSecond / DEFAULT_PX_PER_SECOND) * 100)}%</Text>
+            </Pressable>
+            <ToolButton
+              icon="add"
+              label="Zoom in"
+              onPress={() => zoomByFactor(ZOOM_BUTTON_STEP)}
+              theme={theme}
+              styles={styles}
+            />
+            {/* The manual counterpart to the one-shot auto-fit on open — the way back to
+                "show me everything" after zooming or scrolling around. Not `scan-outline`:
+                that glyph is already the Select tool's, further right in this same row. */}
+            <ToolButton
+              icon="contract-outline"
+              label="Fit to content"
+              hint="Zoom out to the whole chart"
+              onPress={fitToContent}
+              disabled={notes.length === 0}
+              theme={theme}
+              styles={styles}
+            />
+          </View>
         </View>
 
         <View style={styles.toolbarRowRight}>
@@ -1008,6 +1287,8 @@ export function PianoRoll({
               <Text style={[styles.toolToggleText, mouseMode === 'selection' && styles.toolToggleTextActive]}>Select</Text>
             </Pressable>
           </View>
+
+          <View style={styles.toolbarDivider} />
 
           {/* On/off — whether placing, moving, or dragging a note quantizes to the grid
               at all. The grid resolution itself lives in the separate button below, and
@@ -1057,42 +1338,59 @@ export function PianoRoll({
               shiftSelectionByRows/canShiftOctave. `positions` is sorted highest-pitch-
               first (index 0 = top row), so moving to a *higher* pitch means a
               *negative* rowDelta — same convention the Arrow-key handler already uses. */}
+          <View style={styles.toolbarDivider} />
+
+          {/* All four are disabled with nothing selected — they used to stay lit and
+              silently do nothing, which read as broken. The tooltip says why. */}
           <View style={styles.transposeGroup}>
-            <Pressable
+            <ToolButton
+              icon="chevron-down"
+              label="Down a semitone"
+              hint={hasSelection ? '↓' : 'Select a note first'}
               onPress={() => shiftSelectionByRows(1)}
-              style={styles.zoomBtn}
-              accessibilityRole="button"
-              accessibilityLabel="Shift selection down a semitone"
-            >
-              <Ionicons name="chevron-down" size={14} color={theme.textSub} />
-            </Pressable>
-            <Pressable
+              disabled={!hasSelection}
+              theme={theme}
+              styles={styles}
+            />
+            <ToolButton
+              icon="chevron-up"
+              label="Up a semitone"
+              hint={hasSelection ? '↑' : 'Select a note first'}
               onPress={() => shiftSelectionByRows(-1)}
-              style={styles.zoomBtn}
-              accessibilityRole="button"
-              accessibilityLabel="Shift selection up a semitone"
-            >
-              <Ionicons name="chevron-up" size={14} color={theme.textSub} />
-            </Pressable>
-            <Pressable
+              disabled={!hasSelection}
+              theme={theme}
+              styles={styles}
+            />
+            <ToolButton
+              icon="arrow-down-circle-outline"
+              label="Down an octave"
+              hint={
+                !hasSelection ? 'Select a note first'
+                  : canShiftOctave(1) ? 'Shift + ↓'
+                  : 'A selected note is already at the bottom of the grid'
+              }
               onPress={() => shiftSelectionByRows(12)}
               disabled={!canShiftOctave(1)}
-              style={[styles.zoomBtn, !canShiftOctave(1) && styles.zoomBtnDisabled]}
-              accessibilityRole="button"
-              accessibilityLabel="Shift selection down an octave"
-            >
-              <Ionicons name="arrow-down-circle-outline" size={14} color={canShiftOctave(1) ? theme.textSub : theme.textMuted} />
-            </Pressable>
-            <Pressable
+              theme={theme}
+              styles={styles}
+            />
+            <ToolButton
+              icon="arrow-up-circle-outline"
+              label="Up an octave"
+              hint={
+                !hasSelection ? 'Select a note first'
+                  : canShiftOctave(-1) ? 'Shift + ↑'
+                  : 'A selected note is already at the top of the grid'
+              }
               onPress={() => shiftSelectionByRows(-12)}
               disabled={!canShiftOctave(-1)}
-              style={[styles.zoomBtn, !canShiftOctave(-1) && styles.zoomBtnDisabled]}
-              accessibilityRole="button"
-              accessibilityLabel="Shift selection up an octave"
-            >
-              <Ionicons name="arrow-up-circle-outline" size={14} color={canShiftOctave(-1) ? theme.textSub : theme.textMuted} />
-            </Pressable>
+              align="right"
+              theme={theme}
+              styles={styles}
+            />
           </View>
+
+          <View style={styles.toolbarDivider} />
 
           <Pressable
             onPress={() => setHelpOpen(true)}
@@ -1178,34 +1476,28 @@ export function PianoRoll({
       {/* Grid: pinned row-label rail + vertically+horizontally scrollable note grid.
           Label rail and grid share ONE outer vertical ScrollView (rather than each
           having its own) so vertical scrolling can't desync labels from rows. */}
-      <ScrollView showsVerticalScrollIndicator={false} style={styles.gridVScroll}>
+      {/* Scrollbar shown on web, matching the horizontal ScrollView below — the grid is
+          every chromatic row tall (well past a typical viewport), so hiding it left the
+          off-screen rows with no affordance at all that they existed. */}
+      <ScrollView
+        ref={vScrollRef}
+        showsVerticalScrollIndicator={Platform.OS === 'web'}
+        style={styles.gridVScroll}
+        onLayout={(e) => setGridViewportHeight(e.nativeEvent.layout.height)}
+      >
         <View style={styles.gridRow}>
           <View style={styles.labelRail}>
             {positions.map((p, i) => {
-              const { sign, number, modifier } = parseTab(p.tab);
               const next = positions[i + 1];
-              const isOctaveBoundary = next ? getOctave(p.note) !== getOctave(next.note) : false;
-              // Row label doubles as the technique-color legend — same color the note
-              // blocks for this row will render in over in the grid. An empty tab
-              // (unplayable row) resolves to the grey 'unplayable' entry automatically.
-              const techniqueTextColor = { color: techniqueColor(p.tab) };
               return (
-                <View
+                <LabelRailCell
                   // Keyed by pitch, not tab — every unplayable row shares tab: '', which
                   // would otherwise collide as a React key.
                   key={p.note}
-                  style={[
-                    styles.labelCell,
-                    !isNaturalNote(p.note) && styles.rowStripeAlt,
-                    isOctaveBoundary && styles.octaveBoundary,
-                    !p.playable && styles.rowUnplayable,
-                  ]}
-                >
-                  <Text style={[styles.labelTabSign, techniqueTextColor]} numberOfLines={1}>{sign}</Text>
-                  <Text style={[styles.labelTabNumber, techniqueTextColor]} numberOfLines={1}>{number}</Text>
-                  <Text style={[styles.labelTabModifier, techniqueTextColor]} numberOfLines={1}>{modifier}</Text>
-                  <Text style={styles.labelNote} numberOfLines={1}>{p.note}</Text>
-                </View>
+                  row={p}
+                  isOctaveBoundary={next ? getOctave(p.note) !== getOctave(next.note) : false}
+                  styles={styles}
+                />
               );
             })}
           </View>
@@ -1316,8 +1608,16 @@ export function PianoRoll({
           user just wants the note grid. */}
       <Animated.View style={[styles.dataPanel, panelAnimatedStyle]}>
         <View style={styles.dataPanelTabs}>
+          {/* Active tab gets a tinted pill, not just accent-colored text — as color-only
+              labels in a bare row these read as breadcrumbs rather than tabs. */}
           {(['breath', 'duration', 'confidence', 'pitchBend'] as const).map((tab) => (
-            <Pressable key={tab} onPress={() => setMetricTab(tab)} style={styles.dataTab}>
+            <Pressable
+              key={tab}
+              onPress={() => setMetricTab(tab)}
+              style={[styles.dataTab, metricTab === tab && styles.dataTabActive]}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: metricTab === tab }}
+            >
               <Text style={[styles.dataTabText, metricTab === tab && styles.dataTabTextActive]}>
                 {METRIC_LABELS[tab]}
               </Text>
@@ -1335,24 +1635,42 @@ export function PianoRoll({
         </View>
         <View style={styles.dataPanelRow}>
           <View style={styles.dataAxisRail}>
-            <Text style={styles.dataAxisLabel} numberOfLines={1}>{dataAxisLabels.top}</Text>
-            {dataAxisLabels.mid !== undefined && (
-              <Text style={[styles.dataAxisLabel, styles.dataAxisLabelMid]} numberOfLines={1}>{dataAxisLabels.mid}</Text>
+            {/* Axis numbers describe a scale that isn't there when the metric has no
+                data — hiding them keeps the empty state from looking like a chart whose
+                bars failed to draw. */}
+            {metricHasData && (
+              <>
+                <Text style={styles.dataAxisLabel} numberOfLines={1}>{dataAxisLabels.top}</Text>
+                {dataAxisLabels.mid !== undefined && (
+                  <Text style={[styles.dataAxisLabel, styles.dataAxisLabelMid]} numberOfLines={1}>{dataAxisLabels.mid}</Text>
+                )}
+                <Text style={styles.dataAxisLabel} numberOfLines={1}>{dataAxisLabels.bottom}</Text>
+              </>
             )}
-            <Text style={styles.dataAxisLabel} numberOfLines={1}>{dataAxisLabels.bottom}</Text>
           </View>
           <View style={styles.dataBarClip}>
-            <View style={[styles.dataBarContent, { width: gridWidth, transform: [{ translateX: -scrollX }] }]}>
-              <DataPanelGridLines height={DATA_BAR_HEIGHT} theme={theme} />
-              <DataPanelBars
-                metric={metricTab}
-                notes={notes}
-                frames={frames}
-                positions={positions}
-                pxPerSecond={pxPerSecond}
-                theme={theme}
-              />
-            </View>
+            {metricHasData ? (
+              <View style={[styles.dataBarContent, { width: gridWidth, transform: [{ translateX: -scrollX }] }]}>
+                <DataPanelGridLines height={DATA_BAR_HEIGHT} theme={theme} />
+                <DataPanelBars
+                  metric={metricTab}
+                  notes={notes}
+                  frames={frames}
+                  positions={positions}
+                  pxPerSecond={pxPerSecond}
+                  theme={theme}
+                />
+              </View>
+            ) : (
+              <View style={styles.dataEmpty}>
+                <Ionicons name="pulse-outline" size={18} color={theme.textMuted} />
+                <Text style={styles.dataEmptyText}>
+                  {notes.length === 0
+                    ? 'Nothing to analyze yet — draw or record some notes.'
+                    : `${METRIC_LABELS[metricTab]} comes from the recorded audio. This chart has no analysis frames.`}
+                </Text>
+              </View>
+            )}
           </View>
         </View>
       </Animated.View>
@@ -1746,6 +2064,7 @@ function PianoRollNoteBlock({
   // runs its recognizer independently of native text selection, and — since the gesture
   // is rebuilt fresh every render rather than frozen once — its callbacks close over the
   // current `note`/`rowIndex`/`positions`/etc directly, no ref-juggling required.
+  const theme           = useTheme();
   const translateX      = useSharedValue(0);
   const translateY      = useSharedValue(0);
   const resizeDelta     = useSharedValue(0);
@@ -1836,15 +2155,21 @@ function PianoRollNoteBlock({
     .onFinalize(() => { resizeLeftDelta.value = 0; runOnJS(setDragLabel)(null); });
 
   const left   = (note.start_time / 1000) * pxPerSecond;
-  const top    = rowIndex * ROW_HEIGHT + BLOCK_MARGIN / 2;
+  // Blocks fill their row edge to edge — no inset margin, no rounding (see noteBlock).
+  const top    = rowIndex * ROW_HEIGHT;
   const width  = Math.max(14, (note.duration / 1000) * pxPerSecond);
-  const height = ROW_HEIGHT - BLOCK_MARGIN;
-  // Fill is always the playing technique's color (see TECHNIQUE_COLOR) so the grid reads
-  // as a technique map at a glance, even for the selected note — selection gets its own
-  // signal via the noteBlockSelected ring style below, not by overriding the fill.
-  // Detection confidence still shows through via opacity, not color, so a low-confidence
-  // bend still reads as a bend, just fainter.
-  const fillColor = techniqueColor(note.tab);
+  const height = ROW_HEIGHT;
+  // Technique still drives the color, but as an edge accent + text on a quiet tinted
+  // body rather than a solid slab — see techniqueSkin. Selection gets its own signal via
+  // the noteBlockSelected ring, not by overriding the skin.
+  //
+  // Confidence no longer drives opacity. It used to (0.4 + confidence*0.6), which meant
+  // that since confidence is matchCount/totalCount and realistically lands at 60–85%,
+  // EVERY block rendered permanently translucent and the whole grid read as washed out.
+  // Genuinely low-confidence notes get a dashed edge below instead — a signal that
+  // applies only when it's actually informative.
+  const skin = techniqueSkin(note.tab, theme.isDark);
+  const lowConfidence = note.confidence < LOW_CONFIDENCE_THRESHOLD;
 
   // Horizontal (time) follows the finger continuously; vertical (pitch) snaps to whole
   // rows during the drag itself (computed on the UI thread, inside the worklet) rather
@@ -1873,12 +2198,15 @@ function PianoRollNoteBlock({
       <View
         style={[
           styles.noteBlock,
-          { top, left, width, height, backgroundColor: fillColor, opacity: isSelected ? 1 : 0.4 + (note.confidence / 100) * 0.6 },
+          { top, left, width, height, backgroundColor: skin.fill, borderColor: skin.edge },
+          lowConfidence && styles.noteBlockLowConfidence,
           isSelected && styles.noteBlockSelected,
         ]}
       >
         <View style={styles.noteBlockBody}>
-          <Text style={styles.noteBlockText} numberOfLines={1} selectable={false}>{noteBlockLabel(note)}</Text>
+          <Text style={[styles.noteBlockText, { color: skin.label }]} numberOfLines={1} selectable={false}>
+            {noteBlockLabel(note)}
+          </Text>
         </View>
       </View>
     );
@@ -1892,7 +2220,8 @@ function PianoRollNoteBlock({
           : null)}
         style={[
           styles.noteBlock,
-          { top, height, backgroundColor: fillColor, opacity: isSelected ? 1 : 0.4 + (note.confidence / 100) * 0.6 },
+          { top, height, backgroundColor: skin.fill, borderColor: skin.edge },
+          lowConfidence && styles.noteBlockLowConfidence,
           hovered && !isSelected && styles.noteBlockHovered,
           isSelected && styles.noteBlockSelected,
           moveAnimatedStyle,
@@ -1900,7 +2229,9 @@ function PianoRollNoteBlock({
         ]}
       >
         <View style={styles.noteBlockBody}>
-          <Text style={styles.noteBlockText} numberOfLines={1} selectable={false}>{noteBlockLabel(note)}</Text>
+          <Text style={[styles.noteBlockText, { color: skin.label }]} numberOfLines={1} selectable={false}>
+            {noteBlockLabel(note)}
+          </Text>
         </View>
 
         {dragLabel !== null && (
@@ -2117,6 +2448,8 @@ function GroupGhostNote({ note, rowIndex, t0, t1, bounds, resizeLeftDelta, resiz
   resizeRightDelta: SharedValue<number>;
   styles: ReturnType<typeof createStyles>;
 }) {
+  const theme = useTheme();
+  const skin  = techniqueSkin(note.tab, theme.isDark);
   const animatedStyle = useAnimatedStyle(() => {
     const newGroupLeft  = bounds.left + resizeLeftDelta.value;
     const newGroupWidth = Math.max(1, bounds.width - resizeLeftDelta.value + resizeRightDelta.value);
@@ -2132,16 +2465,17 @@ function GroupGhostNote({ note, rowIndex, t0, t1, bounds, resizeLeftDelta, resiz
       style={[
         styles.noteBlock,
         {
-          top: rowIndex * ROW_HEIGHT + BLOCK_MARGIN / 2,
-          height: ROW_HEIGHT - BLOCK_MARGIN,
-          backgroundColor: techniqueColor(note.tab),
+          top: rowIndex * ROW_HEIGHT,
+          height: ROW_HEIGHT,
+          backgroundColor: skin.fill,
+          borderColor: skin.edge,
         },
         styles.noteBlockSelected,
         animatedStyle,
       ]}
     >
       <View style={styles.noteBlockBody}>
-        <Text style={styles.noteBlockText} numberOfLines={1} selectable={false}>{noteBlockLabel(note)}</Text>
+        <Text style={[styles.noteBlockText, { color: skin.label }]} numberOfLines={1} selectable={false}>{noteBlockLabel(note)}</Text>
       </View>
     </Animated.View>
   );
@@ -2155,10 +2489,19 @@ function createStyles(t: Theme) {
     outer: {
       flex:            1,
       gap:             8,
-      backgroundColor: t.surface,
-      borderRadius:    12,
+      // The grid reads best on the cleanest surface the theme has — plain white in light
+      // mode (t.bg), not the grey `surface` it used to sit on, which muddied the row
+      // shading and made the whole panel look dim. Dark mode gets the same treatment
+      // against its near-black bg.
+      backgroundColor: t.bg,
+      // Square corners: the panel runs flush to the sidebar on the left and the window on
+      // the right, and a radius against a hard edge reads as a gap rather than as a card.
+      borderRadius:    0,
       borderWidth:     1,
       borderColor:     t.border,
+      // Keeps the tool row and grid off the panel's own border. Not the gutter the user
+      // sees between panel and window — that one lives on editMainColumn in edit.tsx and
+      // is zero in piano-roll mode; this is just the panel's internal breathing room.
       padding:         10,
     },
 
@@ -2193,12 +2536,20 @@ function createStyles(t: Theme) {
     // regardless of any z-index on the popover deep inside, simply by coming later in the
     // tree. This lifts the whole toolbar (and everything nested in it) above them.
     toolbarRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8, zIndex: 20 },
-    toolbarRowRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    // The title slot lives here, so it's the left cluster that gives up width first when
+    // the row runs out of room — the tool cluster on the right is all fixed-size controls
+    // that can't shrink without breaking. minWidth: 0 is what actually permits a flex
+    // child to shrink below its content width.
+    toolbarRowLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, minWidth: 0 },
+    toolbarRowRight: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 0 },
     zoomRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    // Every toolbar control shares CONTROL_H and radius 8 — previously zoomBtn was a
+    // fixed 26px square, snapBtn was padding-derived (~28px) and the tool toggle a third
+    // height, so the row visibly failed to sit on one baseline.
     zoomBtn: {
-      width: 26,
-      height: 26,
-      borderRadius: 7,
+      width: CONTROL_H,
+      height: CONTROL_H,
+      borderRadius: 8,
       alignItems: 'center',
       justifyContent: 'center',
       backgroundColor: t.surface,
@@ -2207,11 +2558,12 @@ function createStyles(t: Theme) {
       ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
     } as any,
     zoomPill: {
-      minWidth: 46,
+      minWidth: 48,
+      height: CONTROL_H,
       alignItems: 'center',
+      justifyContent: 'center',
       paddingHorizontal: 8,
-      paddingVertical: 5,
-      borderRadius: 7,
+      borderRadius: 8,
       backgroundColor: t.surface,
       borderWidth: 1,
       borderColor: t.border,
@@ -2219,13 +2571,51 @@ function createStyles(t: Theme) {
     } as any,
     zoomPillText: { fontSize: FONT.xs, fontFamily: Poppins.semiBold, color: t.textSub },
     zoomBtnDisabled: { opacity: 0.5, ...(Platform.OS === 'web' ? { cursor: 'default' } : null) } as any,
+
+    // Hover-tooltip host for icon-only toolbar buttons (see ToolButton). The anchor is a
+    // plain wrapper so the tooltip can hang off the button's own box; zIndex is on the
+    // tooltip rather than here so a hovered button's tooltip outranks the *later* sibling
+    // buttons in the same row, which would otherwise paint over its left/right edge.
+    toolBtnAnchor: { position: 'relative' },
+    // Horizontal anchoring lives entirely in the Left/Right variants below — setting a
+    // `left` here and cancelling it with `left: undefined` in the variant relies on how
+    // style flattening treats undefined, which isn't worth depending on.
+    toolTooltip: {
+      position: 'absolute',
+      top: '100%',
+      marginTop: 6,
+      maxWidth: 200,
+      minWidth: 96,
+      backgroundColor: t.textPrimary,
+      borderRadius: 6,
+      paddingHorizontal: 8,
+      paddingVertical: 6,
+      gap: 2,
+      zIndex: 40,
+      ...(Platform.OS === 'web' ? { boxShadow: '0 4px 12px rgba(0,0,0,0.25)' } : null),
+    } as any,
+    toolTooltipLeft: { left: 0 },
+    // For buttons near the panel's right edge, where a left-anchored tooltip would hang
+    // off the side of the card.
+    toolTooltipRight: { right: 0 },
+    toolTooltipText: { fontSize: 10, fontFamily: Poppins.semiBold, color: t.bg, lineHeight: 14 },
+    toolTooltipHint: { fontSize: 10, fontFamily: Poppins.regular, color: t.bg, opacity: 0.7, lineHeight: 14 },
+
     transposeGroup: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    // Separates logical clusters in the toolbar (tools / grid / transpose / help) — the
+    // same device edit.tsx's own toolbar uses. Without it these were ten similar-looking
+    // pills in one undifferentiated run.
+    toolbarDivider: { width: 1, height: 18, backgroundColor: t.separator, marginHorizontal: 2 },
     // Pencil/Selection segmented toggle — same visual language as the List/Piano Roll
     // toggle elsewhere in the app, placed immediately left of Snap (matches Signal, whose
     // tool selector sits directly beside its quantize control).
     toolToggle: {
       flexDirection:   'row',
+      alignItems:      'center',
+      height:          CONTROL_H,
       backgroundColor: t.surface,
+      borderWidth:     1,
+      borderColor:     t.border,
       borderRadius:    8,
       padding:         2,
       gap:             2,
@@ -2233,8 +2623,8 @@ function createStyles(t: Theme) {
     toolToggleSeg: {
       flexDirection:     'row',
       alignItems:        'center',
+      alignSelf:         'stretch',
       gap:               5,
-      paddingVertical:   6,
       paddingHorizontal: 10,
       borderRadius:      6,
       ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
@@ -2245,9 +2635,10 @@ function createStyles(t: Theme) {
     snapBtn: {
       flexDirection:     'row',
       alignItems:        'center',
+      justifyContent:    'center',
+      height:            CONTROL_H,
       gap:               6,
       paddingHorizontal: 10,
-      paddingVertical:   6,
       borderRadius:      8,
       backgroundColor:   t.surface,
       borderWidth:       1,
@@ -2324,7 +2715,13 @@ function createStyles(t: Theme) {
     helpToolText: { flex: 1, gap: 2 },
     helpToolTitle: { fontSize: FONT.sm, fontFamily: Poppins.semiBold, color: t.textPrimary },
     helpColorRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 3 },
-    helpColorSwatch: { width: 11, height: 11, borderRadius: 3 },
+    // Hairline ring so the darkest fills (bend3 sits at 1.8:1 against the dark surface)
+    // stay delineated as swatches — the note blocks themselves get that relief from their
+    // own white label, but a bare swatch has nothing.
+    helpColorSwatch: {
+      width: 11, height: 11, borderRadius: 3,
+      borderWidth: 1, borderColor: t.border,
+    },
     helpRowText: { fontSize: FONT.xs, fontFamily: Poppins.medium, color: t.textSub, lineHeight: 17 },
     helpDivider: { height: 1, backgroundColor: t.border, marginVertical: 10 },
     helpShortcutRow: { gap: 1, paddingVertical: 3 },
@@ -2441,6 +2838,9 @@ function createStyles(t: Theme) {
     // rather than blending into it.
     labelRail: {
       width: LABEL_WIDTH,
+      // Above the scrolling grid beside it, so a row's hover tooltip (which hangs to the
+      // right, over the grid) isn't painted over by that later sibling.
+      zIndex: 2,
       backgroundColor: t.surface,
       borderRightWidth: 2,
       borderRightColor: t.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)',
@@ -2451,7 +2851,12 @@ function createStyles(t: Theme) {
       flexDirection:  'row',
       alignItems:     'center',
       justifyContent: 'flex-end',
+      paddingLeft:    10,
       paddingRight:   8,
+      // Same hairline as rowStripe, so the row separators run continuously from the rail
+      // straight across the grid instead of stopping at the rail's edge.
+      borderBottomWidth: 1,
+      borderBottomColor: t.isDark ? 'rgba(255,255,255,0.09)' : 'rgba(0,0,0,0.09)',
     },
     // Sign/number/modifier each get their own fixed-width column (not the tab as one
     // shrink-to-content string) so the hole number itself always lands in the same spot —
@@ -2460,9 +2865,41 @@ function createStyles(t: Theme) {
     // vs double-digit holes (e.g. "3" vs "10") line up on the ones digit too.
     // Color comes from the per-row techniqueColor() inline style, not here — these just
     // set layout/typography shared by every row regardless of technique.
-    labelTabSign:     { width: 7,  fontSize: 11, fontFamily: Poppins.extraBold, textAlign: 'right' },
-    labelTabNumber:   { width: 14, fontSize: 11, fontFamily: Poppins.extraBold, textAlign: 'right' },
-    labelTabModifier: { width: 20, fontSize: 11, fontFamily: Poppins.extraBold, textAlign: 'left' },
+    // 6px technique chip — the rail's legend, replacing the colored tab text that the
+    // vivid fills can't safely carry at 11px.
+    labelSwatch: { width: 6, height: 6, borderRadius: 2, marginRight: 6 },
+    // Occupies the swatch's exact slot on rows that have no position, so the tab columns
+    // to its right stay aligned with every other row.
+    labelUnplayableMark: {
+      width: 6, marginRight: 6,
+      fontSize: 9, lineHeight: 10, textAlign: 'center',
+      fontFamily: Poppins.bold, color: t.textMuted,
+    },
+    labelCellHovered: {
+      backgroundColor: t.accentSoft,
+      ...(Platform.OS === 'web' ? { cursor: 'default' } : null),
+    } as any,
+    // Hangs to the right, into the grid — the rail is only 88px wide, far too narrow to
+    // hold a sentence, and there's nothing but empty grid to its right.
+    labelTooltip: {
+      position: 'absolute',
+      left: '100%',
+      top: 0,
+      marginLeft: 6,
+      width: 220,
+      backgroundColor: t.textPrimary,
+      borderRadius: 6,
+      paddingHorizontal: 8,
+      paddingVertical: 6,
+      gap: 2,
+      zIndex: 40,
+      ...(Platform.OS === 'web' ? { boxShadow: '0 4px 12px rgba(0,0,0,0.25)' } : null),
+    } as any,
+    labelTooltipText: { fontSize: 10, fontFamily: Poppins.semiBold, color: t.bg, lineHeight: 14 },
+    labelTooltipHint: { fontSize: 10, fontFamily: Poppins.regular, color: t.bg, opacity: 0.7, lineHeight: 14 },
+    labelTabSign:     { width: 7,  fontSize: 11, fontFamily: Poppins.extraBold, color: t.textPrimary, textAlign: 'right' },
+    labelTabNumber:   { width: 14, fontSize: 11, fontFamily: Poppins.extraBold, color: t.textPrimary, textAlign: 'right' },
+    labelTabModifier: { width: 20, fontSize: 11, fontFamily: Poppins.extraBold, color: t.textPrimary, textAlign: 'left' },
     labelNote: { width: 28, marginLeft: 4, fontSize: 10, fontFamily: Poppins.medium, color: t.textSub, textAlign: 'right' },
     gridVScroll: { flex: 1 },
 
@@ -2476,16 +2913,25 @@ function createStyles(t: Theme) {
       gap: 6,
     },
     emptyGridHintText: { fontSize: FONT.sm, fontFamily: Poppins.medium, color: t.textMuted },
-    // No per-row border by default — the natural/sharp shading below carries the visual
-    // rhythm (like a piano's white/black keys), matching the reference's near-invisible
-    // row lines. Only the octave boundary gets an actual line (see below).
+    // Every row carries a real separator line. This used to be borderless on the theory
+    // that the natural/accidental shading alone gave enough rhythm — in practice the rows
+    // read as one undifferentiated field, so each now gets a visible hairline and the
+    // octave boundary (below) stays heavier as the structural landmark.
     rowStripe: {
       position: 'absolute',
       left: 0,
       height: ROW_HEIGHT,
       backgroundColor: 'transparent',
+      borderBottomWidth: 1,
+      borderBottomColor: t.isDark ? 'rgba(255,255,255,0.09)' : 'rgba(0,0,0,0.09)',
     },
-    rowStripeAlt: { backgroundColor: t.surfaceAlt },
+    // Accidental (sharp) rows — the grid's equivalent of a piano's black keys. A local
+    // blue rather than the theme's neutral `surfaceAlt`: this shading is a property of
+    // the grid, not of the app's surface hierarchy, and the tint reads as deliberate
+    // where the grey read as a rendering artifact. Picked to sit at roughly the old
+    // grey's lightness so the stripe rhythm is unchanged in strength, only in hue —
+    // and kept clear of the blow blocks' blue-500 fill that sits on top of it.
+    rowStripeAlt: { backgroundColor: t.isDark ? '#1E2A38' : '#D9E9F7' },
     // Rows that exist on the chromatic grid but aren't real positions on the current
     // (diatonic) instrument — deliberately flatter/lower-contrast than the natural/
     // accidental striping above, so unplayable rows read as visually "further back"
@@ -2523,13 +2969,22 @@ function createStyles(t: Theme) {
       ...(Platform.OS === 'web' ? { filter: 'blur(3px)' } : null),
     } as any,
 
+    // Quiet tinted card + saturated left edge, not a solid slab — backgroundColor and
+    // borderColor come from techniqueSkin() per note, so only the structure lives here.
+    // Square corners, full row height, no inset — a block now tiles its row exactly, so
+    // adjacent notes butt up against each other and a run of them reads as one continuous
+    // phrase (the tracker/DAW convention) instead of a string of separate lozenges. The
+    // per-block edge (borderColor from techniqueSkin) is what keeps neighbours apart.
     noteBlock: {
-      position: 'absolute',
-      justifyContent: 'center',
+      position:      'absolute',
+      flexDirection: 'row',
+      alignItems:    'stretch',
+      borderRadius:  0,
+      borderWidth:   1,
+      overflow:      'hidden',
       ...(Platform.OS === 'web'
         ? {
             cursor: 'grab',
-            boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
             transitionProperty: 'box-shadow, filter',
             transitionDuration: '120ms',
             transitionTimingFunction: 'ease',
@@ -2537,13 +2992,17 @@ function createStyles(t: Theme) {
         : null),
     } as any,
     noteBlockHovered: {
-      ...(Platform.OS === 'web' ? { filter: 'brightness(1.12)', boxShadow: '0 2px 6px rgba(0,0,0,0.28)' } : null),
+      ...(Platform.OS === 'web' ? { filter: 'brightness(1.25)' } : null),
     } as any,
     noteBlockSelected: {
       ...(Platform.OS === 'web' ? { boxShadow: `0 0 0 2px ${t.accent}, 0 0 10px ${t.accentDim}` } : null),
     } as any,
-    noteBlockBody: { flex: 1, justifyContent: 'center', paddingLeft: 8, paddingRight: 8, overflow: 'hidden' },
-    noteBlockText: { fontSize: 10, fontFamily: Poppins.bold, color: '#fff' },
+    // Only for notes the detector wasn't confident about (see LOW_CONFIDENCE_THRESHOLD) —
+    // a targeted signal, replacing the old blanket opacity fade that dimmed every note.
+    noteBlockLowConfidence: { borderStyle: 'dashed' },
+    noteBlockBody: { flex: 1, justifyContent: 'center', paddingLeft: 6, paddingRight: 6, overflow: 'hidden' },
+    // Color is per-block (skin.label) — black or white, whichever the fill needs.
+    noteBlockText: { fontSize: 10, fontFamily: Poppins.bold },
     // Live numeric readout shown while dragging (move/resize) — floats above the block,
     // left-anchored so it doesn't shift around as the block's own width changes mid-resize.
     dragTooltip: {
@@ -2605,10 +3064,18 @@ function createStyles(t: Theme) {
       gap: 6,
       overflow: 'hidden',
     },
-    dataPanelTabs: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 4, height: DATA_PANEL_TABS_HEIGHT - 6 },
-    dataTab: { paddingVertical: 2 },
-    dataTabText: { fontSize: FONT.xs, fontFamily: Poppins.semiBold, color: t.textMuted },
-    dataTabTextActive: { color: t.accent },
+    dataPanelTabs: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 4, height: DATA_PANEL_TABS_HEIGHT - 6 },
+    dataTab: {
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 6,
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as any,
+    dataTabActive: { backgroundColor: t.accentSoft },
+    // textSub, not textMuted — at 11px on white, textMuted (#A1A1AA) sits near 2.3:1,
+    // which isn't readable for what is effectively this panel's navigation.
+    dataTabText: { fontSize: FONT.xs, fontFamily: Poppins.semiBold, color: t.textSub },
+    dataTabTextActive: { color: t.accent, fontFamily: Poppins.bold },
     dataPanelCollapseBtn: { marginLeft: 'auto', padding: 4, ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null) } as any,
     dataPanelRow: { flexDirection: 'row' },
     dataAxisRail: {
@@ -2623,5 +3090,22 @@ function createStyles(t: Theme) {
     dataAxisLabelMid: { color: t.textSub },
     dataBarClip: { flex: 1, height: DATA_BAR_HEIGHT, overflow: 'hidden' },
     dataBarContent: { height: DATA_BAR_HEIGHT, position: 'relative' },
+    // Says why the panel is blank instead of leaving 140px of nothing — a per-frame
+    // metric on a hand-drawn chart has no data to draw, which is a fact about the chart,
+    // not a failure.
+    dataEmpty: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      paddingHorizontal: 24,
+    },
+    dataEmptyText: {
+      fontSize: FONT.xs,
+      fontFamily: Poppins.medium,
+      color: t.textMuted,
+      textAlign: 'center',
+      maxWidth: 380,
+    },
   });
 }

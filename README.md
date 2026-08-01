@@ -58,7 +58,7 @@ Join our community of developers creating universal apps.
 ## Roadmap
 
 - [ ] Home screen becomes a library/dashboard (recent recordings + three "start new" paths: record, upload audio, upload MIDI) instead of jumping straight to the key picker
-- [ ] Audio upload tab transcription feature, with automatic harmonica key detection (no manual key picker needed for uploaded audio)
+- [x] Audio upload tab transcription feature, with automatic harmonica key detection (no manual key picker needed for uploaded audio) — web decodes any browser-supported format; Android is WAV-only until a native decoder exists (Phase 5c)
 - [ ] MIDI file upload → harmonica tab conversion: user picks target harmonica key (transposes MIDI notes), with overblow/bend notes highlighted so the user can choose to simplify/edit them; needs a keyboard-accessible "browse files" button alongside any drag-and-drop zone
 - [ ] Piano-roll style editor (Signal-like): drag notes up/down across harmonica-playable pitches, resize/move in time, with playback. Coexists as a toggleable alternate view alongside the existing list-based edit screen (not a replacement) — some edits (precise numeric duration) are easier as a table. Needs an arrow-key nudge alternative to dragging for keyboard/screen-reader users
 - [ ] Better monetization model

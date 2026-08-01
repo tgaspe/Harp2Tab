@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useTheme } from '@/hooks/useTheme';
 import { HARMONICA_KEYS, FONT } from '@/constants/keys';
 import { Poppins } from '@/constants/fonts';
@@ -15,28 +15,42 @@ interface KeyGridProps {
   onAccent?: boolean;
 }
 
+const COLUMNS = 4;
+
+// Twelve fixed cells laid out as plain rows of Views, not a FlatList. It was never
+// scrolling (scrollEnabled={false}) or virtualizing anything useful over a 12-item
+// constant list, and as a VirtualizedList it triggered React Native's
+// "VirtualizedLists should never be nested inside plain ScrollViews" warning the moment
+// it landed inside the edit screen's now-scrollable sidebar.
 export function KeyGrid({ selected, onSelect, onAccent = false }: KeyGridProps) {
   const theme  = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
 
+  const rows = useMemo(() => {
+    const out: HarmonicaKey[][] = [];
+    for (let i = 0; i < HARMONICA_KEYS.length; i += COLUMNS) {
+      out.push(HARMONICA_KEYS.slice(i, i + COLUMNS));
+    }
+    return out;
+  }, []);
+
   return (
-    <FlatList
-      data={HARMONICA_KEYS}
-      keyExtractor={(item) => item}
-      numColumns={4}
-      scrollEnabled={false}
-      contentContainerStyle={styles.grid}
-      columnWrapperStyle={styles.row}
-      renderItem={({ item }) => (
-        <KeyCell
-          label={item}
-          isSelected={selected === item}
-          onPress={() => onSelect(item)}
-          theme={theme}
-          onAccent={onAccent}
-        />
-      )}
-    />
+    <View style={styles.grid}>
+      {rows.map((row) => (
+        <View key={row[0]} style={styles.row}>
+          {row.map((item) => (
+            <KeyCell
+              key={item}
+              label={item}
+              isSelected={selected === item}
+              onPress={() => onSelect(item)}
+              theme={theme}
+              onAccent={onAccent}
+            />
+          ))}
+        </View>
+      ))}
+    </View>
   );
 }
 
@@ -77,7 +91,7 @@ function KeyCell({ label, isSelected, onPress, theme, onAccent = false }: KeyCel
 function createStyles(t: Theme) {
   return StyleSheet.create({
     grid: { gap: 8 },
-    row:  { gap: 8, justifyContent: 'center' },
+    row:  { flexDirection: 'row', gap: 8, justifyContent: 'center' },
     cell: {
       flex: 1,
       aspectRatio: 1,
@@ -93,9 +107,12 @@ function createStyles(t: Theme) {
       backgroundColor: t.accent,
       borderColor: t.accent,
     },
+    // A hairline at 0.35 alpha over the cyan accent is barely there, and the cells read
+    // as a faint grid of ghosts. A slight fill plus a stronger border gives each cell a
+    // real edge without turning it into the solid white the *selected* state owns.
     cellOnAccent: {
-      backgroundColor: 'transparent',
-      borderColor: 'rgba(255,255,255,0.35)',
+      backgroundColor: 'rgba(255,255,255,0.12)',
+      borderColor: 'rgba(255,255,255,0.55)',
     },
     cellSelectedOnAccent: {
       backgroundColor: '#fff',
@@ -113,7 +130,7 @@ function createStyles(t: Theme) {
       color:      '#fff',
     },
     labelOnAccent: {
-      color: 'rgba(255,255,255,0.9)',
+      color: '#fff',
     },
     labelSelectedOnAccent: {
       fontFamily: Poppins.bold,

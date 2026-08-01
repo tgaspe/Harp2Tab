@@ -33,8 +33,32 @@ export function pushFrame(recordingId: string, frame: RawFrame): void {
   arr.push(frame);
 }
 
+/** Bulk sibling of pushFrame — the file-import path produces a session's entire frame
+ *  stream at once rather than one frame at a time like live capture does. */
+export function pushFrames(recordingId: string, frames: RawFrame[]): void {
+  for (const frame of frames) pushFrame(recordingId, frame);
+}
+
 export function getFrames(recordingId: string): RawFrame[] {
   return buffers.get(recordingId) ?? [];
+}
+
+/**
+ * Frames are persisted with the recording (TabRecording.frames, via AsyncStorage), and an
+ * uploaded file can be minutes long — ~1,300 frames per minute at the ~46ms frame rate,
+ * where a typical live take is a few hundred. Thin long sessions out with an even stride
+ * so a library of imports can't blow past AsyncStorage's size ceiling. Frame Inspector
+ * draws a timeline, not a sample-accurate readout, so an evenly thinned stream costs it
+ * nothing at these lengths — and short sessions are untouched.
+ */
+const MAX_PERSISTED_FRAMES = 2000;
+
+export function decimateFrames(frames: RawFrame[], max = MAX_PERSISTED_FRAMES): RawFrame[] {
+  if (frames.length <= max) return frames;
+  const stride = frames.length / max;
+  const thinned: RawFrame[] = new Array(max);
+  for (let i = 0; i < max; i++) thinned[i] = frames[Math.floor(i * stride)];
+  return thinned;
 }
 
 export function clearFrames(recordingId: string): void {

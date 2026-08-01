@@ -2,7 +2,7 @@ import { useAppStore } from './useAppStore';
 import { useRecordingsStore } from './useRecordingsStore';
 import { useSettingsStore } from './useSettingsStore';
 import { resolveSessionGate, type SessionGateResult } from './sessionGate';
-import { getFrames } from '@/audio/frameBuffer';
+import { decimateFrames, getFrames } from '@/audio/frameBuffer';
 import type { TabRecording } from '@/types';
 
 /** The title a recording gets if the user doesn't override it — also used to pre-fill the
@@ -45,8 +45,10 @@ export function saveCurrentSessionToLibrary(title?: string, options?: { asNew?: 
     createdAt,
     duration:      last.start_time + last.duration,
     // Frames were buffered under the session's original recordingId regardless of which
-    // id this gets saved under — always read via that, not `id`.
-    frames:        getFrames(recordingId),
+    // id this gets saved under — always read via that, not `id`. Thinned on the way into
+    // storage: an imported audio file can carry thousands of frames, which the in-memory
+    // buffer handles fine but AsyncStorage shouldn't be asked to.
+    frames:        decimateFrames(getFrames(recordingId)),
     bpm,
   };
 

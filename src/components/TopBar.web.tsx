@@ -16,7 +16,7 @@ const GEAR_ROUTES = ['/', '/recording', '/edit', '/export'];
 const BACK_ROUTES = ['/settings', '/export'];
 // Focused conversion/setup flows — no nav chrome, matches their existing
 // lack of a back button.
-const HIDDEN_ROUTES = ['/paywall', '/onboarding'];
+const HIDDEN_ROUTES = ['/paywall', '/onboarding', '/import'];
 // The List/Piano-Roll toggle only makes sense on the editor — shown next to the app
 // title here (rather than in edit.tsx's own toolbar) since it needs to stay visible
 // and drivable from this globally-rendered bar.

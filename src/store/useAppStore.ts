@@ -66,6 +66,7 @@ interface AppActions {
   transposeToKey:      (key: HarmonicaKey) => void;
   changeHarmonicaType: (type: HarmonicaType) => void;
   startRecording: () => void;
+  startImportedSession: (title?: string) => void;
   stopRecording:  () => void;
   pauseRecording: () => void;
   resumeRecording:() => void;
@@ -125,6 +126,23 @@ export const useAppStore = create<AppState & AppActions>()(
         s.history            = [];
         s.future             = [];
         s.recordingTitle     = '';
+      }),
+
+    // Sibling of startRecording for the file-upload entry points: same fresh-session
+    // bookkeeping (new recordingId, cleared notes/history) but `isRecording` stays false,
+    // since nothing is being captured — useAudioCapture keys off that flag, and turning it
+    // on here would open the mic for a file import. Keeps selectedKey/harmonicaType, which
+    // the user picked on Home before choosing the file.
+    startImportedSession: (title) =>
+      set((s) => {
+        s.isRecording        = false;
+        s.isPaused           = false;
+        s.recordingStartTime = Date.now();
+        s.recordingId        = `rec-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        s.tabNotes           = [];
+        s.history            = [];
+        s.future             = [];
+        s.recordingTitle     = title ?? '';
       }),
 
     stopRecording: () =>

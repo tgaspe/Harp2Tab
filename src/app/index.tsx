@@ -8,6 +8,9 @@ import { usePlayback } from '@/hooks/usePlayback';
 import { selectHarmonicaType, selectKey, useAppStore } from '@/store/useAppStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { computeEffectiveLimit, resolveSessionGate } from '@/store/sessionGate';
+import { AudioImportError } from '@/audio/audioImport';
+import { pickAudioFile } from '@/audio/pickAudioFile';
+import { setPendingImport } from '@/audio/pendingImport';
 import { selectRecordings, useRecordingsStore } from '@/store/useRecordingsStore';
 import type { Theme } from '@/theme';
 import type { HarmonicaKey, HarmonicaType, TabRecording } from '@/types';
@@ -151,6 +154,9 @@ export default function KeySelectionScreen() {
   const renameRecording      = useRecordingsStore((s) => s.renameRecording);
   const toggleFavorite       = useRecordingsStore((s) => s.toggleFavorite);
   const [showRatingModal, setShowRatingModal] = useState(false);
+  // Only for failures that happen before the import screen exists (an oversized file
+  // rejected at pick time) — everything after that is reported on /import itself.
+  const [uploadError, setUploadError] = useState<string | null>(null);
   // Web-only: the key/type picker lives behind the "New Recording" action's chevron
   // instead of always being on-screen. Shared between the hero (empty-library / first
   // visit) and the compact dashboard header (returning user) below — only one of those
@@ -181,6 +187,29 @@ export default function KeySelectionScreen() {
     if (gate === 'showPaywall') { router.push('/paywall'); return; }
     startRecording();
     router.push('/recording');
+  }
+
+  // Same shape as handleStart — the free-tier gate has to come first for every "start a
+  // new session" entry point, not just recording. The file dialog is opened here (inside
+  // the press handler) rather than on the import screen because browsers only allow it
+  // during a real user gesture.
+  async function handleUploadAudio() {
+    if (!selectedKey) return;
+    const gate = resolveSessionGate({ isPurchased, totalRecordingsUsed, ratingStatus });
+    if (gate === 'showRating') { setShowRatingModal(true); return; }
+    if (gate === 'showPaywall') { router.push('/paywall'); return; }
+
+    try {
+      const picked = await pickAudioFile();
+      if (!picked) return; // dismissed the picker — nothing started, nothing consumed
+      setPendingImport(picked);
+      setUploadError(null);
+      router.push('/import');
+    } catch (err) {
+      // Only the pre-read size check can fail this early; everything else surfaces on the
+      // import screen, which has room to explain it properly.
+      setUploadError(err instanceof AudioImportError ? err.message : "That file couldn't be opened.");
+    }
   }
 
   function handleOpenRecording(recording: TabRecording) {
@@ -287,6 +316,15 @@ export default function KeySelectionScreen() {
     </View>
   );
 
+  // Failures that happen at pick time (before /import exists to report them). Shared by
+  // all three layouts' upload buttons so none of them can fail silently.
+  const uploadErrorBanner = uploadError ? (
+    <View style={styles.uploadError} accessibilityRole="alert" accessibilityLiveRegion="polite">
+      <Ionicons name="alert-circle-outline" size={14} color={theme.warning} />
+      <Text style={styles.uploadErrorText}>{uploadError}</Text>
+    </View>
+  ) : null;
+
   const startAndUpload = (
     <View style={styles.startAndUpload}>
       <Pressable
@@ -315,19 +353,23 @@ export default function KeySelectionScreen() {
 
       <View style={styles.uploadRow}>
         <Pressable
-          disabled
-          style={styles.uploadBtn}
+          onPress={handleUploadAudio}
+          disabled={!selectedKey}
+          style={({ pressed, hovered }: any) => [
+            styles.uploadBtn,
+            !selectedKey && styles.uploadBtnDisabled,
+            (pressed || hovered) && !!selectedKey && styles.uploadBtnPressed,
+          ]}
           accessibilityRole="button"
-          accessibilityLabel="Upload Audio — coming soon"
-          accessibilityState={{ disabled: true }}
+          accessibilityLabel="Upload Audio"
+          accessibilityState={{ disabled: !selectedKey }}
         >
-          <Ionicons name="cloud-upload-outline" size={18} color={theme.textMuted} />
-          <Text style={styles.uploadBtnText}>Upload Audio</Text>
-          <Text style={styles.comingSoon}>Soon</Text>
+          <Ionicons name="cloud-upload-outline" size={18} color={selectedKey ? theme.textSub : theme.textMuted} />
+          <Text style={[styles.uploadBtnText, !!selectedKey && styles.uploadBtnTextEnabled]}>Upload Audio</Text>
         </Pressable>
         <Pressable
           disabled
-          style={styles.uploadBtn}
+          style={[styles.uploadBtn, styles.uploadBtnDisabled]}
           accessibilityRole="button"
           accessibilityLabel="Upload MIDI — coming soon"
           accessibilityState={{ disabled: true }}
@@ -337,6 +379,8 @@ export default function KeySelectionScreen() {
           <Text style={styles.comingSoon}>Soon</Text>
         </Pressable>
       </View>
+
+      {uploadErrorBanner}
     </View>
   );
 
@@ -500,25 +544,30 @@ export default function KeySelectionScreen() {
                       )}
                     </View>
 
-                    {/* Not yet wired to real file handling — audio/MIDI upload is a future
-                        feature (see roadmap). This card just reserves its place so it's
-                        obvious where that flow will live once it exists. */}
+                    {/* Audio upload is live; MIDI upload is still to come, so this card
+                        advertises only what it can actually do. */}
                     <View style={styles.heroCardOutlined}>
                       <View style={styles.heroCardIconWrapMuted}>
                         <Ionicons name="cloud-upload-outline" size={20} color={theme.textSub} />
                       </View>
-                      <Text style={styles.heroCardTitle}>Upload Audio or MIDI</Text>
+                      <Text style={styles.heroCardTitle}>Upload Audio</Text>
                       <Text style={styles.heroCardDesc}>Upload a file and get your tabs in seconds</Text>
                       <Pressable
-                        disabled
-                        style={styles.chooseFileBtn}
+                        onPress={handleUploadAudio}
+                        disabled={!selectedKey}
+                        style={({ pressed, hovered }: any) => [
+                          styles.chooseFileBtn,
+                          !selectedKey && styles.chooseFileBtnDisabled,
+                          (pressed || hovered) && !!selectedKey && styles.chooseFileBtnPressed,
+                        ]}
                         accessibilityRole="button"
-                        accessibilityLabel="Choose File — coming soon"
-                        accessibilityState={{ disabled: true }}
+                        accessibilityLabel="Choose audio file"
+                        accessibilityState={{ disabled: !selectedKey }}
                       >
                         <Text style={styles.chooseFileBtnText}>Choose File</Text>
                       </Pressable>
-                      <Text style={styles.uploadHint}>Supports .wav, .mp3, .m4a, .mid</Text>
+                      <Text style={styles.uploadHint}>Supports .wav, .mp3, .m4a</Text>
+                      {uploadErrorBanner}
                     </View>
                   </View>
                 </View>
@@ -548,21 +597,24 @@ export default function KeySelectionScreen() {
                   <Text style={styles.sidebarSectionLabel}>QUICK ACTIONS</Text>
 
                   <Pressable
-                    disabled
+                    onPress={handleUploadAudio}
+                    disabled={!selectedKey}
                     style={({ pressed, hovered }: any) => [
                       styles.sidebarRow,
-                      styles.sidebarRowDisabled,
-                      (pressed || hovered) && styles.sidebarRowPressed,
+                      !selectedKey && styles.sidebarRowDisabled,
+                      (pressed || hovered) && !!selectedKey && styles.sidebarRowPressed,
                     ]}
                     accessibilityRole="button"
-                    accessibilityLabel="Upload Audio or MIDI — coming soon"
-                    accessibilityState={{ disabled: true }}
+                    accessibilityLabel="Upload audio file"
+                    accessibilityState={{ disabled: !selectedKey }}
                   >
                     <View style={styles.sidebarRowIconWrap}>
                       <Ionicons name="cloud-upload-outline" size={16} color="rgba(255,255,255,0.85)" />
                     </View>
                     <Text style={styles.sidebarRowText}>Upload</Text>
                   </Pressable>
+
+                  {uploadErrorBanner}
 
                   <Pressable
                     onPress={handleStart}
@@ -1176,8 +1228,9 @@ function createStyles(t: Theme) {
       borderRadius:    10,
       paddingVertical: 10,
       alignItems:      'center',
-      opacity:         0.6,
     },
+    chooseFileBtnPressed:  { backgroundColor: t.accentSoft },
+    chooseFileBtnDisabled: { opacity: 0.6 },
     chooseFileBtnText: { fontSize: FONT.sm, fontFamily: Poppins.bold, color: t.accent },
     uploadHint: {
       fontSize:   10,
@@ -1308,12 +1361,31 @@ function createStyles(t: Theme) {
       paddingVertical:   12,
       borderWidth:       1,
       borderColor:       t.border,
-      opacity:           0.6,
     },
+    // Only the MIDI button is inert now, so the dimming that used to be baked into
+    // uploadBtn moved here.
+    uploadBtnDisabled: { opacity: 0.6 },
+    uploadBtnPressed:  { backgroundColor: t.surfaceAlt, borderColor: t.accent },
     uploadBtnText: {
       fontSize:   FONT.sm,
       fontFamily: Poppins.semiBold,
       color:      t.textMuted,
+    },
+    uploadBtnTextEnabled: { color: t.textPrimary },
+    uploadError: {
+      flexDirection: 'row',
+      alignItems:    'center',
+      gap:           6,
+      paddingHorizontal: 10,
+      paddingVertical:   8,
+      borderRadius:      10,
+      backgroundColor:   t.warningSoft,
+    },
+    uploadErrorText: {
+      flex:       1,
+      fontSize:   FONT.xs,
+      fontFamily: Poppins.regular,
+      color:      t.textSub,
     },
     comingSoon: {
       fontSize:          9,

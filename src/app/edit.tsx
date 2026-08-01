@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Modal, Platform, Pressable, StyleSheet, Text, TextInput, View, type ViewStyle } from 'react-native';
+import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type ViewStyle } from 'react-native';
 import { FlatList } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -29,6 +29,10 @@ import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_TOP, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
 import type { Theme } from '@/theme';
 import type { HarmonicaKey, HarmonicaType, TabNote, ExportFormat } from '@/types';
+
+// Collapsed sidebar geometry — one square button plus its 12px gutters.
+const SIDEBAR_ICON_BTN = 40;
+const SIDEBAR_RAIL_W   = SIDEBAR_ICON_BTN + 24;
 
 export default function EditScreen() {
   const router       = useRouter();
@@ -66,6 +70,10 @@ export default function EditScreen() {
   const [justSaved, setJustSaved] = useState(false);
   const [namingAction, setNamingAction] = useState<'save' | 'new' | null>(null);
   const [showRatingModal, setShowRatingModal] = useState(false);
+  // Collapses the accent sidebar to an icon rail. Session-local rather than persisted:
+  // it's a "give me room right now" gesture (the piano roll wants every pixel of width it
+  // can get), not a durable preference about how the app should look.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // Lives in the shared store (not local state) so the web TopBar — rendered in the
   // root layout, outside this screen's tree — can show and drive the same toggle next
   // to the app title.
@@ -304,16 +312,19 @@ export default function EditScreen() {
     ? tabNotes.reduce((max, n) => Math.max(max, n.start_time + n.duration), 0)
     : 0;
 
-  // List view goes full-width with its own sidebar (mirroring Home), same as Piano Roll
-  // already does — but only once there's something to edit; an empty session still uses
-  // the plain centered toolbar+CTA layout below (nothing for a sidebar to organize yet).
-  const showListSidebar = Platform.OS === 'web' && viewMode === 'list' && tabNotes.length > 0;
+  // Both web view modes now share the one sidebar shell — previously only List did, and
+  // Piano Roll carried a separate full-width toolbar, which is how the screen ended up
+  // with three stacked menu bars (global TopBar + this toolbar + the piano roll's own
+  // tool row). Actions live in the sidebar; the piano roll keeps only its tool row.
+  // An empty session still uses the plain centered toolbar+CTA layout below — there's
+  // nothing for a sidebar to organize yet.
+  const showSidebar = Platform.OS === 'web' && tabNotes.length > 0;
 
   return (
     <SafeAreaView style={styles.safe}>
       <View style={[styles.container, styles.containerFullWidth]}>
 
-        {showListSidebar ? (
+        {showSidebar ? (
           <View style={styles.editShellEdgeWrap}>
             <View style={styles.editShell}>
               <EditSidebar
@@ -326,44 +337,71 @@ export default function EditScreen() {
                 onUndo={undo}
                 canRedo={canRedo}
                 onRedo={redo}
+                collapsed={sidebarCollapsed}
+                onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
                 theme={theme}
                 styles={styles}
               />
-              <View style={styles.editMainColumn}>
-                <DraggableFlatList
-                  ref={listRef}
-                  data={tabNotes}
-                  keyExtractor={(item) => item.id}
-                  renderItem={renderItem}
-                  onDragEnd={({ data }) => {
-                    let cursor = 0;
-                    reorderNotes(data.map(note => {
-                      const updated = { ...note, start_time: cursor };
-                      cursor += note.duration;
-                      return updated;
-                    }));
-                  }}
-                  containerStyle={styles.list}
-                  contentContainerStyle={{ paddingBottom: 16 }}
-                  showsVerticalScrollIndicator={false}
-                  autoscrollThreshold={50}
-                  autoscrollSpeed={100}
-                  activationDistance={1}
-                  ListFooterComponent={
-                    <Pressable
-                      onPress={handleAddNote}
-                      style={({ pressed, hovered }: any) => [
-                        styles.addNoteCard,
-                        (pressed || hovered) && styles.addNoteCardHovered,
-                      ]}
-                      accessibilityRole="button"
-                      accessibilityLabel="Add Note"
-                    >
-                      <Ionicons name="add-circle-outline" size={18} color={theme.accent} />
-                      <Text style={styles.addNoteCardText}>Add Note</Text>
-                    </Pressable>
-                  }
-                />
+              <View style={[styles.editMainColumn, viewMode === 'pianoRoll' && styles.editMainColumnFlush]}>
+                {/* Piano Roll carries the title inside its own tool row (see headerLeft
+                    below); List has no equivalent header of its own, so it keeps the
+                    standalone one above the list. */}
+                {viewMode === 'list' && <ChartTitle tabNotesLength={tabNotes.length} theme={theme} styles={styles} />}
+
+                {viewMode === 'list' ? (
+                  <DraggableFlatList
+                    ref={listRef}
+                    data={tabNotes}
+                    keyExtractor={(item) => item.id}
+                    renderItem={renderItem}
+                    onDragEnd={({ data }) => {
+                      let cursor = 0;
+                      reorderNotes(data.map(note => {
+                        const updated = { ...note, start_time: cursor };
+                        cursor += note.duration;
+                        return updated;
+                      }));
+                    }}
+                    containerStyle={styles.list}
+                    contentContainerStyle={{ paddingBottom: 16 }}
+                    showsVerticalScrollIndicator={false}
+                    autoscrollThreshold={50}
+                    autoscrollSpeed={100}
+                    activationDistance={1}
+                    ListFooterComponent={
+                      <Pressable
+                        onPress={handleAddNote}
+                        style={({ pressed, hovered }: any) => [
+                          styles.addNoteCard,
+                          (pressed || hovered) && styles.addNoteCardHovered,
+                        ]}
+                        accessibilityRole="button"
+                        accessibilityLabel="Add Note"
+                      >
+                        <Ionicons name="add-circle-outline" size={18} color={theme.accent} />
+                        <Text style={styles.addNoteCardText}>Add Note</Text>
+                      </Pressable>
+                    }
+                  />
+                ) : (
+                  <PianoRoll
+                    notes={tabNotes}
+                    harmonicaKey={harmonicaKey}
+                    harmonicaType={harmonicaType}
+                    bpm={bpm}
+                    selectedId={selectedId}
+                    onSelect={handleSelect}
+                    onCreate={addTabNote}
+                    onUpdate={updateNote}
+                    onDelete={deleteNote}
+                    isPlaying={isPlaying}
+                    currentTimeMs={currentTimeMs}
+                    onSeek={handleSeek}
+                    loopRegion={loopRegion}
+                    onLoopRegionChange={setLoopRegion}
+                    headerLeft={<PianoRollHeader tabNotesLength={tabNotes.length} theme={theme} styles={styles} />}
+                  />
+                )}
               </View>
             </View>
           </View>
@@ -508,7 +546,7 @@ export default function EditScreen() {
           </>
         )}
 
-        {!showListSidebar && (
+        {!showSidebar && (
           tabNotes.length === 0 ? (
           Platform.OS === 'web' ? (
             <View style={styles.empty}>
@@ -604,7 +642,7 @@ export default function EditScreen() {
             setBpm={setBpm}
             metronomeEnabled={metronomeEnabled}
             onToggleMetronome={handleToggleMetronome}
-            glued={viewMode === 'pianoRoll' || showListSidebar}
+            glued={viewMode === 'pianoRoll' || showSidebar}
             theme={theme}
             styles={styles}
           />
@@ -935,13 +973,84 @@ function ChartNameInput({ theme, styles, variant = 'toolbar' }: { theme: Theme; 
   );
 }
 
+// The chart's identity as the piano roll's own header: editable name + note count, sitting
+// at the head of the panel's tool row. The name is accent-colored and toolbar-sized rather
+// than page-heading-sized — inside the panel it's a label for what you're editing, not a
+// page title, and the accent is what keeps it from reading as one more grey control.
+//
+// The note count rides along here because it's the same fact about the same object; it
+// used to have a whole "CHART" section of sidebar to itself for one short line.
+function PianoRollHeader({ tabNotesLength, theme, styles }: {
+  tabNotesLength: number; theme: Theme; styles: EditStyles;
+}) {
+  const recordingTitle    = useAppStore(selectRecordingTitle);
+  const setRecordingTitle = useAppStore((s) => s.setRecordingTitle);
+  const [hovered, setHovered] = useState(false);
+  return (
+    <View
+      style={styles.pianoRollHeader}
+      {...(Platform.OS === 'web'
+        ? { onMouseEnter: () => setHovered(true), onMouseLeave: () => setHovered(false) }
+        : null)}
+    >
+      <TextInput
+        value={recordingTitle}
+        onChangeText={setRecordingTitle}
+        placeholder={getDefaultRecordingTitle()}
+        placeholderTextColor={theme.textMuted}
+        style={[styles.pianoRollTitleInput, hovered && styles.pianoRollTitleInputHovered]}
+        accessibilityLabel="Chart name"
+      />
+      <Text style={styles.pianoRollHeaderMeta} numberOfLines={1}>
+        {tabNotesLength} note{tabNotesLength !== 1 ? 's' : ''}
+      </Text>
+    </View>
+  );
+}
+
+// The chart's name as an actual page title — centered above the editor, at heading size,
+// still directly editable in place (it's the same store field the toolbar version wrote
+// to, just presented as the thing it is rather than as one more toolbar input).
+function ChartTitle({ tabNotesLength, theme, styles }: { tabNotesLength: number; theme: Theme; styles: EditStyles }) {
+  const recordingTitle    = useAppStore(selectRecordingTitle);
+  const setRecordingTitle = useAppStore((s) => s.setRecordingTitle);
+  // Styled as a heading and centered, this field gives no sign it's editable at all —
+  // it reads as the page's static title. Hover paints the input's box in (web only;
+  // there's no hover on touch, where the whole screen is tap-to-edit anyway) so the
+  // text field underneath becomes visible before you click it.
+  const [hovered, setHovered] = useState(false);
+  return (
+    <View
+      style={styles.chartTitleRow}
+      {...(Platform.OS === 'web'
+        ? { onMouseEnter: () => setHovered(true), onMouseLeave: () => setHovered(false) }
+        : null)}
+    >
+      <TextInput
+        value={recordingTitle}
+        onChangeText={setRecordingTitle}
+        placeholder={getDefaultRecordingTitle()}
+        placeholderTextColor={theme.textMuted}
+        style={[styles.chartTitleInput, hovered && styles.chartTitleInputHovered]}
+        accessibilityLabel="Chart name"
+      />
+      {/* The note count used to be a whole "CHART" section in the sidebar for one short
+          line. Piano Roll shows it beside the title in its own tool row; List shows it
+          here, under the title, since it has no header of its own. */}
+      <Text style={styles.chartTitleMeta}>
+        {tabNotesLength} note{tabNotesLength !== 1 ? 's' : ''}
+      </Text>
+    </View>
+  );
+}
+
 // Export as an inline dropdown instead of a separate screen — self-contained like
 // KeyTypeControl above, reading tabNotes/key/type/format straight from the store. Web
 // can always trigger a browser download in place; there's no navigation-worthy content
 // on the /export route that isn't just "pick a format, then Save or Share" — the
 // full-page version stays for native, where Sharing.shareAsync/StorageAccessFramework
 // need their own screen.
-function ExportMenu({ tabNotesLength, theme, styles, variant = 'toolbar' }: { tabNotesLength: number; theme: Theme; styles: EditStyles; variant?: 'toolbar' | 'sidebar' }) {
+function ExportMenu({ tabNotesLength, theme, styles, variant = 'toolbar', collapsed = false }: { tabNotesLength: number; theme: Theme; styles: EditStyles; variant?: 'toolbar' | 'sidebar'; collapsed?: boolean }) {
   const selectedKey     = useAppStore(selectKey);
   const tabNotes        = useAppStore(selectTabNotes);
   const harmonicaType   = useAppStore(selectHarmonicaType);
@@ -1069,20 +1178,23 @@ function ExportMenu({ tabNotesLength, theme, styles, variant = 'toolbar' }: { ta
   if (sidebar) {
     return (
       <>
+        {/* Trigger only — the dialog below is a centered modal either way, so the
+            collapsed rail loses the label and nothing else. */}
         <Pressable
           onPress={() => setOpen(true)}
           disabled={disabled}
           style={({ pressed, hovered }: any) => [
-            styles.sidebarExportBtn,
+            collapsed ? styles.sidebarIconBtn : styles.sidebarExportBtn,
             disabled && styles.sidebarRowDisabled,
             (pressed || hovered) && !disabled && styles.sidebarRowPressed,
           ]}
           accessibilityRole="button"
           accessibilityLabel="Export"
           accessibilityState={{ disabled }}
+          {...(Platform.OS === 'web' ? ({ title: 'Export' } as any) : null)}
         >
-          <Ionicons name="share-outline" size={16} color={disabled ? 'rgba(255,255,255,0.85)' : '#fff'} />
-          <Text style={styles.sidebarRowText}>Export</Text>
+          <Ionicons name="share-outline" size={collapsed ? 18 : 16} color={disabled ? 'rgba(255,255,255,0.85)' : '#fff'} />
+          {!collapsed && <Text style={styles.sidebarRowText}>Export</Text>}
         </Pressable>
 
         {/* Centered modal, same reasoning as the New Recording key/type picker —
@@ -1145,12 +1257,100 @@ function ExportMenu({ tabNotesLength, theme, styles, variant = 'toolbar' }: { ta
   );
 }
 
-// List view's left rail — mirrors the Home screen's sidebar (full-height, accent-filled,
-// plain rows with no card chrome) instead of the piano-roll's compact top toolbar. Only
-// used for List view: Piano Roll keeps its existing edge-to-edge DAW-style layout, which
-// a sidebar would fight rather than complement.
+// One sidebar action, in whichever shape the rail is currently in: a labelled full-width
+// row when expanded, a bare square icon button when collapsed. Both are the same control
+// with the same handler — collapsing drops the text, not the capability.
+//
+// `title` is passed straight through to the DOM on web for a native hover tooltip, since
+// the collapsed rail is a ScrollView and anything absolutely positioned beside a button
+// would be clipped by its overflow. Harmless if react-native-web declines to forward it;
+// accessibilityLabel is what actually carries the name.
+function SidebarAction({
+  icon, label, onPress, disabled = false, collapsed, badge, styles,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  onPress?: () => void;
+  disabled?: boolean;
+  collapsed: boolean;
+  /** Trailing tag on the expanded row (e.g. "Soon"); dropped when collapsed. */
+  badge?: string;
+  styles: EditStyles;
+}) {
+  const webTitle = Platform.OS === 'web' ? ({ title: badge ? `${label} — ${badge}` : label } as any) : null;
+
+  if (collapsed) {
+    return (
+      <Pressable
+        onPress={onPress}
+        disabled={disabled}
+        style={({ pressed, hovered }: any) => [
+          styles.sidebarIconBtn,
+          disabled && styles.sidebarRowDisabled,
+          (pressed || hovered) && !disabled && styles.sidebarRowPressed,
+        ]}
+        accessibilityRole="button"
+        accessibilityLabel={badge ? `${label} — ${badge}` : label}
+        accessibilityState={{ disabled }}
+        {...webTitle}
+      >
+        <Ionicons name={icon} size={18} color="#fff" />
+      </Pressable>
+    );
+  }
+
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      style={({ pressed, hovered }: any) => [
+        styles.sidebarRow,
+        disabled && styles.sidebarRowDisabled,
+        (pressed || hovered) && !disabled && styles.sidebarRowPressed,
+      ]}
+      accessibilityRole="button"
+      accessibilityLabel={badge ? `${label} — ${badge}` : label}
+      accessibilityState={{ disabled }}
+    >
+      <View style={styles.sidebarRowIconWrap}>
+        <Ionicons name={icon} size={16} color="#fff" />
+      </View>
+      <Text style={styles.sidebarRowText}>{label}</Text>
+      {badge !== undefined && <Text style={styles.sidebarComingSoon}>{badge}</Text>}
+    </Pressable>
+  );
+}
+
+// Stand-in for the full key/type picker on the collapsed rail — the KeyGrid needs real
+// width, so the rail shows just the current key and expands the sidebar when tapped
+// rather than trying to cram a 12-cell grid into 40px.
+function SidebarKeyBadge({ onPress, styles }: { onPress: () => void; styles: EditStyles }) {
+  const harmonicaKey  = useAppStore(selectKey);
+  const harmonicaType = useAppStore(selectHarmonicaType);
+  if (!harmonicaKey) return null;
+  const label = `Key ${harmonicaKey}, ${harmonicaType === 'chromatic' ? '12-Chromatic' : 'Diatonic'} — expand to change`;
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed, hovered }: any) => [
+        styles.sidebarIconBtn,
+        (pressed || hovered) && styles.sidebarRowPressed,
+      ]}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      {...(Platform.OS === 'web' ? ({ title: label } as any) : null)}
+    >
+      <Text style={styles.sidebarKeyBadgeText}>{harmonicaKey}</Text>
+    </Pressable>
+  );
+}
+
+// The editor's left rail — mirrors the Home screen's sidebar (full-height, accent-filled,
+// plain rows with no card chrome). Collapses to an icon-only rail: the piano roll is a
+// horizontal medium and 280px of chrome is 280px of chart it doesn't get.
 function EditSidebar({
-  tabNotesLength, justSaved, onSave, onNew, onInspectFrames, canUndo, onUndo, canRedo, onRedo, theme, styles,
+  tabNotesLength, justSaved, onSave, onNew, onInspectFrames, canUndo, onUndo, canRedo, onRedo,
+  collapsed, onToggleCollapsed, theme, styles,
 }: {
   tabNotesLength: number;
   justSaved: boolean;
@@ -1161,6 +1361,8 @@ function EditSidebar({
   onUndo: () => void;
   canRedo: boolean;
   onRedo: () => void;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
   theme: Theme;
   styles: EditStyles;
 }) {
@@ -1189,71 +1391,71 @@ function EditSidebar({
   }
 
   return (
-    <View style={styles.editSidebar}>
-      <View style={styles.sidebarSection}>
-        <Text style={styles.sidebarSectionLabel}>CHART</Text>
-        <ChartNameInput theme={theme} styles={styles} variant="sidebar" />
-        <Text style={styles.sidebarNoteCount}>{tabNotesLength} note{tabNotesLength !== 1 ? 's' : ''}</Text>
-      </View>
+    // Scrollable, not a plain View: the ACTIONS list is taller than the sidebar on a
+    // laptop-height window, and a fixed View silently cut it off — Export ended up
+    // half-visible at the bottom edge and Undo/Redo were unreachable entirely.
+    <ScrollView
+      style={[styles.editSidebar, collapsed && styles.editSidebarCollapsed]}
+      contentContainerStyle={[styles.editSidebarContent, collapsed && styles.editSidebarContentCollapsed]}
+      showsVerticalScrollIndicator={Platform.OS === 'web'}
+    >
+      {/* Collapse toggle. Sits at the top of the rail in both states so it doesn't move
+          when the rail changes width — the one control you need to find again. */}
+      <Pressable
+        onPress={onToggleCollapsed}
+        style={({ pressed, hovered }: any) => [
+          collapsed ? styles.sidebarIconBtn : styles.sidebarCollapseRow,
+          (pressed || hovered) && styles.sidebarRowPressed,
+        ]}
+        accessibilityRole="button"
+        accessibilityLabel={collapsed ? 'Expand sidebar' : 'Collapse sidebar to icons'}
+        {...(Platform.OS === 'web' ? ({ title: collapsed ? 'Expand sidebar' : 'Collapse sidebar' } as any) : null)}
+      >
+        <Ionicons name={collapsed ? 'chevron-forward' : 'chevron-back'} size={16} color="#fff" />
+        {!collapsed && <Text style={styles.sidebarCollapseText}>Collapse</Text>}
+      </Pressable>
 
       <View style={styles.sidebarDivider} />
 
-      <View style={styles.sidebarSection}>
-        <Text style={styles.sidebarSectionLabel}>KEY & TYPE</Text>
-        <KeyTypeControl theme={theme} styles={styles} variant="inline" />
-      </View>
+      {collapsed ? (
+        <SidebarKeyBadge onPress={onToggleCollapsed} styles={styles} />
+      ) : (
+        <View style={styles.sidebarSection}>
+          <Text style={styles.sidebarSectionLabel}>KEY & TYPE</Text>
+          <KeyTypeControl theme={theme} styles={styles} variant="inline" />
+        </View>
+      )}
 
       <View style={styles.sidebarDivider} />
 
-      <View style={styles.sidebarSection}>
-        <Text style={styles.sidebarSectionLabel}>ACTIONS</Text>
+      <View style={[styles.sidebarSection, collapsed && styles.sidebarSectionCollapsed]}>
+        {!collapsed && <Text style={styles.sidebarSectionLabel}>ACTIONS</Text>}
 
-        <Pressable
+        <SidebarAction
+          icon="cloud-upload-outline"
+          label="Upload"
+          badge="Soon"
           disabled
-          style={[styles.sidebarRow, styles.sidebarRowDisabled]}
-          accessibilityRole="button"
-          accessibilityLabel="Upload Audio or MIDI — coming soon"
-          accessibilityState={{ disabled: true }}
-        >
-          <View style={styles.sidebarRowIconWrap}>
-            <Ionicons name="cloud-upload-outline" size={16} color="#fff" />
-          </View>
-          <Text style={styles.sidebarRowText}>Upload</Text>
-          <Text style={styles.sidebarComingSoon}>Soon</Text>
-        </Pressable>
+          collapsed={collapsed}
+          styles={styles}
+        />
 
-        <Pressable
+        <SidebarAction
+          icon="mic-outline"
+          label="New Recording"
           onPress={toggleNewPicker}
-          style={({ pressed, hovered }: any) => [
-            styles.sidebarRow,
-            (pressed || hovered) && styles.sidebarRowPressed,
-          ]}
-          accessibilityRole="button"
-          accessibilityLabel="New Recording — choose key & type"
-        >
-          <View style={styles.sidebarRowIconWrap}>
-            <Ionicons name="mic-outline" size={16} color="#fff" />
-          </View>
-          <Text style={styles.sidebarRowText}>New Recording</Text>
-        </Pressable>
+          collapsed={collapsed}
+          styles={styles}
+        />
 
-        <Pressable
+        <SidebarAction
+          icon={justSaved ? 'checkmark-circle' : 'bookmark-outline'}
+          label={justSaved ? 'Saved' : 'Save'}
           onPress={onSave}
           disabled={tabNotesLength === 0}
-          style={({ pressed, hovered }: any) => [
-            styles.sidebarRow,
-            tabNotesLength === 0 && styles.sidebarRowDisabled,
-            (pressed || hovered) && tabNotesLength > 0 && styles.sidebarRowPressed,
-          ]}
-          accessibilityRole="button"
-          accessibilityLabel={justSaved ? 'Saved to recent recordings' : 'Save to recent recordings'}
-          accessibilityState={{ disabled: tabNotesLength === 0 }}
-        >
-          <View style={styles.sidebarRowIconWrap}>
-            <Ionicons name={justSaved ? 'checkmark-circle' : 'bookmark-outline'} size={16} color="#fff" />
-          </View>
-          <Text style={styles.sidebarRowText}>{justSaved ? 'Saved' : 'Save'}</Text>
-        </Pressable>
+          collapsed={collapsed}
+          styles={styles}
+        />
 
         <Modal
           visible={newPickerOpen}
@@ -1311,26 +1513,43 @@ function EditSidebar({
           </Pressable>
         </Modal>
 
-        <Pressable
+        <SidebarAction
+          icon="analytics-outline"
+          label="Inspect Frames"
           onPress={onInspectFrames}
           disabled={tabNotesLength === 0}
-          style={({ pressed, hovered }: any) => [
-            styles.sidebarRow,
-            tabNotesLength === 0 && styles.sidebarRowDisabled,
-            (pressed || hovered) && tabNotesLength > 0 && styles.sidebarRowPressed,
-          ]}
-          accessibilityRole="button"
-          accessibilityLabel="Inspect frames"
-          accessibilityState={{ disabled: tabNotesLength === 0 }}
-        >
-          <View style={styles.sidebarRowIconWrap}>
-            <Ionicons name="analytics-outline" size={16} color="#fff" />
-          </View>
-          <Text style={styles.sidebarRowText}>Inspect Frames</Text>
-        </Pressable>
+          collapsed={collapsed}
+          styles={styles}
+        />
 
-        <ExportMenu tabNotesLength={tabNotesLength} theme={theme} styles={styles} variant="sidebar" />
+        <ExportMenu
+          tabNotesLength={tabNotesLength}
+          collapsed={collapsed}
+          theme={theme}
+          styles={styles}
+          variant="sidebar"
+        />
 
+        {collapsed ? (
+          <>
+            <SidebarAction
+              icon="arrow-undo"
+              label="Undo"
+              onPress={onUndo}
+              disabled={!canUndo}
+              collapsed
+              styles={styles}
+            />
+            <SidebarAction
+              icon="arrow-redo"
+              label="Redo"
+              onPress={onRedo}
+              disabled={!canRedo}
+              collapsed
+              styles={styles}
+            />
+          </>
+        ) : (
         <View style={styles.sidebarRowSplit}>
           <Pressable
             onPress={onUndo}
@@ -1365,8 +1584,9 @@ function EditSidebar({
             <Text style={styles.sidebarRowHalfText}>Redo</Text>
           </Pressable>
         </View>
+        )}
       </View>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -1617,17 +1837,129 @@ function createStyles(t: Theme) {
     // Mirrors Home's fullSidebar almost exactly (same width, accent fill, plain rows) —
     // deliberately reusing that visual language rather than inventing a second sidebar
     // style, so the two full-height accent rails read as the same UI pattern.
+    // Box styling only — a ScrollView's own `style` can't carry padding or gap for its
+    // content (those belong on contentContainerStyle below), and `flexGrow: 0` is what
+    // stops the ScrollView from expanding past its 280px column.
     editSidebar: {
       width:             280,
+      flexGrow:          0,
       flexShrink:        0,
-      gap:               16,
       backgroundColor:   t.accent,
-      paddingHorizontal: 20,
-      paddingVertical:   28,
       borderRightWidth:  1,
       borderRightColor:  'rgba(0,0,0,0.18)',
+      // The rail slides rather than snapping between its two widths. Web-only; on native
+      // this is a static width change, which is fine — there's no sidebar there.
+      ...(Platform.OS === 'web'
+        ? { transitionProperty: 'width', transitionDuration: '160ms', transitionTimingFunction: 'ease' }
+        : null),
     } as ViewStyle,
-    editMainColumn: { flex: 1, paddingHorizontal: 24, paddingTop: 4, gap: 12 },
+    editSidebarContent: {
+      gap:               16,
+      paddingHorizontal: 20,
+      paddingVertical:   28,
+    } as ViewStyle,
+    // Collapsed rail: one square button wide plus its padding. Width is the only thing
+    // that changes on the container — everything inside swaps shape via its own
+    // `collapsed` branch rather than being squeezed by the parent.
+    editSidebarCollapsed: { width: SIDEBAR_RAIL_W } as ViewStyle,
+    editSidebarContentCollapsed: {
+      gap:               10,
+      paddingHorizontal: 12,
+      paddingVertical:   20,
+      alignItems:        'center',
+    } as ViewStyle,
+    // Square icon button for the collapsed rail — same translucent-pill language as
+    // sidebarRow, just reduced to the glyph.
+    sidebarIconBtn: {
+      width:           SIDEBAR_ICON_BTN,
+      height:          SIDEBAR_ICON_BTN,
+      alignItems:      'center',
+      justifyContent:  'center',
+      borderRadius:    10,
+      backgroundColor: 'rgba(255,255,255,0.14)',
+      borderWidth:     1,
+      borderColor:     'rgba(255,255,255,0.22)',
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
+    sidebarKeyBadgeText: { fontSize: FONT.md, fontFamily: Poppins.bold, color: '#fff' },
+    // Expanded-state collapse control — quieter than a full sidebarRow (no fill), since
+    // it's chrome for the sidebar itself rather than one of the chart's actions.
+    sidebarCollapseRow: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      gap:               8,
+      alignSelf:         'flex-start',
+      paddingVertical:   6,
+      paddingHorizontal: 8,
+      borderRadius:      8,
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
+    sidebarCollapseText: { fontSize: FONT.xs, fontFamily: Poppins.semiBold, color: 'rgba(255,255,255,0.9)' },
+    sidebarSectionCollapsed: { gap: 10, alignItems: 'center' } as ViewStyle,
+    // Tight vertical rhythm on purpose: this column already stacks a title, the piano
+    // roll's own tool row and its bar ruler between the global TopBar above and the
+    // transport bar below, and every band of padding here comes straight out of the
+    // note grid's height.
+    editMainColumn: { flex: 1, paddingHorizontal: 24, paddingTop: 0, gap: 8 },
+    // Piano Roll only: no side gutters, so the panel runs from the sidebar's edge to the
+    // window's. The grid is the whole point of the screen and every gutter pixel is a
+    // pixel of chart; List keeps its gutters, since a full-bleed column of text rows
+    // would just be hard to read.
+    editMainColumnFlush: { paddingHorizontal: 0 } as ViewStyle,
+
+    // Centered page title for the chart — heading-sized and editable in place. `width:
+    // 100%` + centered text (rather than a shrink-to-fit input) keeps the caret and the
+    // placeholder centered too, so it reads as a title in both the empty and filled state.
+    chartTitleRow: { alignItems: 'center', paddingTop: 2, paddingBottom: 0 },
+    chartTitleInput: {
+      width:      '100%',
+      textAlign:  'center',
+      fontSize:   FONT.xl,
+      fontFamily: SpaceGrotesk.bold,
+      color:      t.textPrimary,
+      letterSpacing: -0.4,
+      paddingVertical: 4,
+      borderRadius: 8,
+      backgroundColor: 'transparent',
+      ...(Platform.OS === 'web' ? { outlineStyle: 'none', cursor: 'text' } as any : null),
+    } as any,
+    // Notion-style: the field's box only appears under the pointer, so the title reads as
+    // a heading at rest and as an input the moment you go near it.
+    chartTitleInputHovered: { backgroundColor: t.surface },
+    chartTitleMeta: {
+      fontSize:   FONT.xs,
+      fontFamily: Poppins.medium,
+      color:      t.textMuted,
+      textAlign:  'center',
+    },
+
+    // The piano roll's in-panel header: name + note count at the head of its tool row.
+    // flexShrink lets the name give up width before the toolbar's fixed controls do.
+    pianoRollHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, minWidth: 0 },
+    // Accent-colored and toolbar-sized (FONT.base, down from the page title's FONT.xl) —
+    // inside the panel this labels what you're editing rather than titling the page, and
+    // the accent is what stops it reading as one more grey control in the row.
+    pianoRollTitleInput: {
+      fontSize:          FONT.base,
+      fontFamily:        SpaceGrotesk.bold,
+      color:             t.accent,
+      letterSpacing:     -0.2,
+      paddingVertical:   3,
+      paddingHorizontal: 6,
+      borderRadius:      6,
+      minWidth:          80,
+      maxWidth:          260,
+      flexShrink:        1,
+      backgroundColor:   'transparent',
+      ...(Platform.OS === 'web' ? { outlineStyle: 'none', cursor: 'text' } as any : null),
+    } as any,
+    pianoRollTitleInputHovered: { backgroundColor: t.surface },
+    pianoRollHeaderMeta: {
+      fontSize:   FONT.xs,
+      fontFamily: Poppins.medium,
+      color:      t.textMuted,
+      flexShrink: 0,
+    },
 
     // Add Note as a trailing card in the list itself, matching TabCard's own shape
     // (same radius/vertical rhythm) but dashed/outlined and centered — reads as "the
@@ -1660,12 +1992,9 @@ function createStyles(t: Theme) {
       letterSpacing: 1,
       marginBottom:  2,
     },
-    sidebarDivider: { height: 1, backgroundColor: 'rgba(255,255,255,0.18)' },
-    sidebarNoteCount: {
-      fontSize:   FONT.xs,
-      fontFamily: Poppins.regular,
-      color:      'rgba(255,255,255,0.75)',
-    },
+    // alignSelf: 'stretch' rather than relying on the container's default — the collapsed
+    // rail centers its children, and a zero-width divider would just vanish there.
+    sidebarDivider: { height: 1, alignSelf: 'stretch', backgroundColor: 'rgba(255,255,255,0.18)' },
     chartNameInputSidebar: {
       fontSize:          13,
       fontFamily:        SpaceGrotesk.bold,
@@ -1686,7 +2015,7 @@ function createStyles(t: Theme) {
     sidebarKeyTypeGroup: { gap: 10 },
     sidebarTypeToggle: {
       flexDirection:   'row',
-      backgroundColor: 'rgba(255,255,255,0.14)',
+      backgroundColor: 'rgba(255,255,255,0.18)',
       borderRadius:    8,
       padding:         2,
       gap:             2,
@@ -1699,7 +2028,11 @@ function createStyles(t: Theme) {
       ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
     } as ViewStyle,
     sidebarTypeSegActive: { backgroundColor: '#fff' },
-    sidebarTypeText:       { fontSize: FONT.xs, fontFamily: Poppins.semiBold, color: 'rgba(255,255,255,0.85)' },
+    // Full white, not 0.85 — the inactive segment sits on a translucent track over the
+    // cyan accent, where a faded white label all but disappears. The active segment is
+    // distinguished by its solid white pill, so the inactive one doesn't need to be dim
+    // as well to make the pairing read.
+    sidebarTypeText:       { fontSize: FONT.xs, fontFamily: Poppins.semiBold, color: '#fff' },
     sidebarTypeTextActive: { color: t.accent },
 
     // Sidebar action rows (Save / New Recording / Inspect Frames / Export trigger) —
@@ -2278,10 +2611,12 @@ function createStyles(t: Theme) {
     } as any,
     webPlayCircleHover:    { backgroundColor: t.accentDim },
     webPlayCircleDisabled: { backgroundColor: t.surface, boxShadow: 'none' } as any,
+    // textSub, not textMuted — this is the only readout of elapsed-of-total anywhere on
+    // the screen, and at #A1A1AA on white it was sitting around 2.3:1.
     webPlayTime: {
       fontSize:    12,
-      fontFamily:  Poppins.regular,
-      color:       t.textMuted,
+      fontFamily:  Poppins.medium,
+      color:       t.textSub,
       minWidth:    36,
       textAlign:   'right',
       fontVariant: ['tabular-nums'],
