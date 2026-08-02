@@ -130,6 +130,13 @@ function getTranspose(key: HarmonicaKey): number {
   return offset >= 7 ? offset - 12 : offset;
 }
 
+/** MIDI number → scientific pitch name, in the sharp spelling every other note string in
+ *  the app uses (`TabNote.note`, `noteToTab`'s input). */
+export function midiToNoteName(midi: number): string {
+  const rounded = Math.round(midi);
+  return NOTE_NAMES[((rounded % 12) + 12) % 12] + (Math.floor(rounded / 12) - 1);
+}
+
 export function frequencyToTab(
   frequency: number,
   key: HarmonicaKey,

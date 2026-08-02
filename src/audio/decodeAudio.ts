@@ -8,7 +8,6 @@
  * tracked as Phase 5c, deliberately not a blocker for the web path.
  */
 
-import { File } from 'expo-file-system';
 import {
   AudioImportError,
   assertDecodedWithinLimits,
@@ -16,6 +15,7 @@ import {
   type DecodedAudio,
   type PickedAudioFile,
 } from './audioImport';
+import { readFileBytes } from './readFileBytes';
 import { parseWav } from './wav';
 
 function looksLikeWav(picked: PickedAudioFile): boolean {
@@ -34,13 +34,7 @@ export async function decodeAudioFile(picked: PickedAudioFile): Promise<DecodedA
     );
   }
 
-  let bytes: Uint8Array;
-  try {
-    bytes = await new File(picked.uri).bytes();
-  } catch {
-    throw new AudioImportError('decodeFailed', `"${picked.name}" couldn't be read.`);
-  }
-
+  const bytes = await readFileBytes(picked);
   const audio = parseWav(bytes, picked.name);
   assertDecodedWithinLimits(audio, picked.name);
   return audio;

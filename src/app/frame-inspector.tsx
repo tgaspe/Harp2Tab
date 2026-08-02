@@ -175,6 +175,7 @@ export default function FrameInspectorScreen() {
   const harmonicaType  = useAppStore(selectHarmonicaType);
   const tabNotes       = useAppStore(selectTabNotes);
   const recordingId    = useAppStore(selectRecordingId);
+  const sessionSource  = useAppStore((s) => s.sessionSource);
   const savedRecordings = useRecordingsStore(selectRecordings);
 
   // Fast path: the in-memory buffer (populated live while recording/just after). Falls
@@ -447,11 +448,24 @@ export default function FrameInspectorScreen() {
 
         {frames.length === 0 ? (
           <View style={styles.empty}>
-            <Ionicons name="analytics-outline" size={44} color={theme.textMuted} />
-            <Text style={styles.emptyTitle}>No raw frame data for this session</Text>
+            <Ionicons
+              name={sessionSource === 'midiUpload' ? 'musical-note-outline' : 'analytics-outline'}
+              size={44}
+              color={theme.textMuted}
+            />
+            {/* Two different absences. A MIDI import never had audio to analyse, so there
+                is nothing missing; an older recording predates frame retention, so there
+                is. Telling a MIDI import it "was saved before Frame Inspector existed"
+                would be simply untrue. */}
+            <Text style={styles.emptyTitle}>
+              {sessionSource === 'midiUpload'
+                ? 'Nothing to inspect on a MIDI import'
+                : 'No raw frame data for this session'}
+            </Text>
             <Text style={styles.emptyHint}>
-              This recording was saved before Frame Inspector data was kept, so there's
-              nothing to show here.
+              {sessionSource === 'midiUpload'
+                ? 'A MIDI file states its notes outright, so no pitch detection ran and there are no frames behind these tabs.'
+                : "This recording was saved before Frame Inspector data was kept, so there's nothing to show here."}
             </Text>
           </View>
         ) : (

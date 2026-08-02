@@ -50,4 +50,10 @@ export interface TabRecording {
   /** Starred in the recordings list — optional, absent/false for every recording saved
    *  before this existed. */
   favorite?: boolean;
+  /** How this tab was created. Optional: absent means a recording saved before the field
+   *  existed. Frame Inspector needs it to tell "no frames because this predates frame
+   *  retention" from "no frames because a MIDI import never had audio at all". */
+  source?: RecordingSource;
 }
+
+export type RecordingSource = 'recording' | 'audioUpload' | 'midiUpload';

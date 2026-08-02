@@ -13,14 +13,12 @@ import {
   type DecodedAudio,
   type PickedAudioFile,
 } from './audioImport';
+import { readFileBytes } from './readFileBytes';
 
 export async function decodeAudioFile(picked: PickedAudioFile): Promise<DecodedAudio> {
   assertSizeWithinLimit(picked.size, picked.name);
 
-  const file = picked.file as File | undefined;
-  // The picker hands back a real File on web; the uri fetch is only a fallback for a
-  // blob:/data: uri arriving from somewhere else (a future drag-and-drop zone).
-  const bytes = file ? await file.arrayBuffer() : await (await fetch(picked.uri)).arrayBuffer();
+  const bytes = await readFileBytes(picked);
 
   // A plain AudioContext decodes at the device's own sample rate — the same rate live
   // capture runs at, which keeps the analysis pass's frame timing identical between the
@@ -29,7 +27,11 @@ export async function decodeAudioFile(picked: PickedAudioFile): Promise<DecodedA
   try {
     let buffer: AudioBuffer;
     try {
-      buffer = await ctx.decodeAudioData(bytes);
+      // decodeAudioData wants an ArrayBuffer and detaches it; the byte-range copy keeps
+      // that from depending on whether the view spans its whole buffer.
+      buffer = await ctx.decodeAudioData(
+        bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
+      );
     } catch {
       throw new AudioImportError(
         'unsupportedFormat',

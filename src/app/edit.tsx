@@ -18,6 +18,12 @@ import { ExportOption } from '@/components/ExportOption';
 import { useTheme } from '@/hooks/useTheme';
 import { useAppStore, selectTabNotes, selectKey, selectHarmonicaType, selectCanUndo, selectCanRedo, selectBpm, selectMetronomeEnabled, selectExportFmt, selectRecordingTitle, selectViewMode } from '@/store/useAppStore';
 import { saveCurrentSessionToLibrary, getDefaultRecordingTitle, startNewRecordingSession } from '@/store/sessionSnapshot';
+import { resolveSessionGate } from '@/store/sessionGate';
+import { useSettingsStore } from '@/store/useSettingsStore';
+import { AudioImportError } from '@/audio/audioImport';
+import { setPendingImport } from '@/audio/pendingImport';
+import { pickAudioFile } from '@/audio/pickAudioFile';
+import { pickMidiFile } from '@/audio/pickMidiFile';
 import { usePlayback } from '@/hooks/usePlayback';
 import { previewNote } from '@/native/Playback';
 import { noteToTab } from '@/audio/HarmonicaMapper';
@@ -70,6 +76,9 @@ export default function EditScreen() {
   const [justSaved, setJustSaved] = useState(false);
   const [namingAction, setNamingAction] = useState<'save' | 'new' | null>(null);
   const [showRatingModal, setShowRatingModal] = useState(false);
+  // Only for failures that happen before /import exists (an oversized file rejected at
+  // pick time) — everything after that is reported on the import screen itself.
+  const [uploadError, setUploadError] = useState<string | null>(null);
   // Collapses the accent sidebar to an icon rail. Session-local rather than persisted:
   // it's a "give me room right now" gesture (the piano roll wants every pixel of width it
   // can get), not a durable preference about how the app should look.
@@ -221,6 +230,41 @@ export default function EditScreen() {
     setNamingAction('new');
   }
 
+  /**
+   * Upload as a *new session* started from the editor — the sibling of New Recording, and
+   * gated the same way. The current chart is committed to the library first (this sidebar
+   * is web-only and only renders with notes on screen, so there is always something to
+   * lose), because /import replaces the session outright.
+   *
+   * The picker is opened directly from the press, before the save, for two reasons: a
+   * browser only allows a file dialog during a real user gesture, and backing out of the
+   * dialog then costs nothing — nothing has been saved, gated or navigated.
+   */
+  async function handleUploadFromEditor(kind: 'audio' | 'midi') {
+    const { isPurchased, totalRecordingsUsed, ratingStatus } = useSettingsStore.getState();
+    const gate = resolveSessionGate({ isPurchased, totalRecordingsUsed, ratingStatus });
+    if (gate === 'showRating')  { setShowRatingModal(true); return; }
+    if (gate === 'showPaywall') { router.push('/paywall'); return; }
+
+    try {
+      const picked = await (kind === 'midi' ? pickMidiFile() : pickAudioFile());
+      if (!picked) return; // dismissed — nothing saved, nothing consumed
+
+      // Always a fresh entry, for the same reason handleNewRecording gives: a session
+      // reopened from the library would otherwise be overwritten rather than kept.
+      if (tabNotes.length > 0) saveCurrentSessionToLibrary(recordingTitle, { asNew: true });
+
+      setPendingImport(picked);
+      setUploadError(null);
+      router.dismissAll();
+      router.push(kind === 'midi' ? { pathname: '/import', params: { kind: 'midi' } } : '/import');
+    } catch (err) {
+      // Only the pre-read size check can fail this early; everything else surfaces on the
+      // import screen, which has room to explain it properly.
+      setUploadError(err instanceof AudioImportError ? err.message : "That file couldn't be opened.");
+    }
+  }
+
   function handleSaveToLibrary() {
     if (tabNotes.length === 0) return;
     if (Platform.OS === 'web') {
@@ -332,6 +376,9 @@ export default function EditScreen() {
                 justSaved={justSaved}
                 onSave={handleSaveToLibrary}
                 onNew={handleNewRecording}
+                onUploadAudio={() => void handleUploadFromEditor('audio')}
+                onUploadMidi={() => void handleUploadFromEditor('midi')}
+                uploadError={uploadError}
                 onInspectFrames={() => router.push('/frame-inspector')}
                 canUndo={canUndo}
                 onUndo={undo}
@@ -1349,13 +1396,18 @@ function SidebarKeyBadge({ onPress, styles }: { onPress: () => void; styles: Edi
 // plain rows with no card chrome). Collapses to an icon-only rail: the piano roll is a
 // horizontal medium and 280px of chrome is 280px of chart it doesn't get.
 function EditSidebar({
-  tabNotesLength, justSaved, onSave, onNew, onInspectFrames, canUndo, onUndo, canRedo, onRedo,
+  tabNotesLength, justSaved, onSave, onNew, onUploadAudio, onUploadMidi, uploadError,
+  onInspectFrames, canUndo, onUndo, canRedo, onRedo,
   collapsed, onToggleCollapsed, theme, styles,
 }: {
   tabNotesLength: number;
   justSaved: boolean;
   onSave: () => void;
   onNew: (keyType: { key: HarmonicaKey; type: HarmonicaType }) => void;
+  onUploadAudio: () => void;
+  onUploadMidi: () => void;
+  /** Pick-time failure (an oversized file), shown here since /import never opened. */
+  uploadError: string | null;
   onInspectFrames: () => void;
   canUndo: boolean;
   onUndo: () => void;
@@ -1433,12 +1485,28 @@ function EditSidebar({
 
         <SidebarAction
           icon="cloud-upload-outline"
-          label="Upload"
-          badge="Soon"
-          disabled
+          label="Upload Audio"
+          onPress={onUploadAudio}
           collapsed={collapsed}
           styles={styles}
         />
+
+        <SidebarAction
+          icon="musical-note-outline"
+          label="Upload MIDI"
+          onPress={onUploadMidi}
+          collapsed={collapsed}
+          styles={styles}
+        />
+
+        {/* Dropped when collapsed — the rail has no room for a sentence, and the same
+            message reappears the moment the sidebar is expanded again. */}
+        {!!uploadError && !collapsed && (
+          <View style={styles.sidebarUploadError} accessibilityRole="alert">
+            <Ionicons name="alert-circle-outline" size={13} color="#fff" />
+            <Text style={styles.sidebarUploadErrorText}>{uploadError}</Text>
+          </View>
+        )}
 
         <SidebarAction
           icon="mic-outline"
@@ -2052,6 +2120,23 @@ function createStyles(t: Theme) {
     } as ViewStyle,
     sidebarRowPressed:   { backgroundColor: 'rgba(255,255,255,0.22)' },
     sidebarRowDisabled:  { opacity: 0.55 },
+    // On-accent like the rest of the rail — a translucent white wash rather than the
+    // theme's warning colours, which are tuned for the app background, not this panel.
+    sidebarUploadError: {
+      flexDirection:     'row',
+      alignItems:        'flex-start',
+      gap:               6,
+      paddingHorizontal: 10,
+      paddingVertical:   8,
+      borderRadius:      8,
+      backgroundColor:   'rgba(255,255,255,0.16)',
+    },
+    sidebarUploadErrorText: {
+      flex:       1,
+      fontSize:   FONT.xs,
+      fontFamily: Poppins.regular,
+      color:      '#fff',
+    },
     sidebarRowIconWrap:  { width: 20, alignItems: 'center', justifyContent: 'center' },
     sidebarRowText:      { flex: 1, fontSize: FONT.sm, fontFamily: Poppins.semiBold, color: '#fff' },
 

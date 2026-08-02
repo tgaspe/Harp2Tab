@@ -10,6 +10,7 @@ import { useSettingsStore } from '@/store/useSettingsStore';
 import { computeEffectiveLimit, resolveSessionGate } from '@/store/sessionGate';
 import { AudioImportError } from '@/audio/audioImport';
 import { pickAudioFile } from '@/audio/pickAudioFile';
+import { pickMidiFile } from '@/audio/pickMidiFile';
 import { setPendingImport } from '@/audio/pendingImport';
 import { selectRecordings, useRecordingsStore } from '@/store/useRecordingsStore';
 import type { Theme } from '@/theme';
@@ -212,6 +213,25 @@ export default function KeySelectionScreen() {
     }
   }
 
+  // Same shape again for the third entry point. The `kind` param is what tells /import to
+  // parse rather than transcribe — everything either side of that step is shared.
+  async function handleUploadMidi() {
+    if (!selectedKey) return;
+    const gate = resolveSessionGate({ isPurchased, totalRecordingsUsed, ratingStatus });
+    if (gate === 'showRating') { setShowRatingModal(true); return; }
+    if (gate === 'showPaywall') { router.push('/paywall'); return; }
+
+    try {
+      const picked = await pickMidiFile();
+      if (!picked) return; // dismissed the picker — nothing started, nothing consumed
+      setPendingImport(picked);
+      setUploadError(null);
+      router.push({ pathname: '/import', params: { kind: 'midi' } });
+    } catch (err) {
+      setUploadError(err instanceof AudioImportError ? err.message : "That file couldn't be opened.");
+    }
+  }
+
   function handleOpenRecording(recording: TabRecording) {
     loadRecording(recording);
     router.push('/edit');
@@ -368,15 +388,19 @@ export default function KeySelectionScreen() {
           <Text style={[styles.uploadBtnText, !!selectedKey && styles.uploadBtnTextEnabled]}>Upload Audio</Text>
         </Pressable>
         <Pressable
-          disabled
-          style={[styles.uploadBtn, styles.uploadBtnDisabled]}
+          onPress={handleUploadMidi}
+          disabled={!selectedKey}
+          style={({ pressed, hovered }: any) => [
+            styles.uploadBtn,
+            !selectedKey && styles.uploadBtnDisabled,
+            (pressed || hovered) && !!selectedKey && styles.uploadBtnPressed,
+          ]}
           accessibilityRole="button"
-          accessibilityLabel="Upload MIDI — coming soon"
-          accessibilityState={{ disabled: true }}
+          accessibilityLabel="Upload MIDI"
+          accessibilityState={{ disabled: !selectedKey }}
         >
-          <Ionicons name="musical-note-outline" size={18} color={theme.textMuted} />
-          <Text style={styles.uploadBtnText}>Upload MIDI</Text>
-          <Text style={styles.comingSoon}>Soon</Text>
+          <Ionicons name="musical-note-outline" size={18} color={selectedKey ? theme.textSub : theme.textMuted} />
+          <Text style={[styles.uploadBtnText, !!selectedKey && styles.uploadBtnTextEnabled]}>Upload MIDI</Text>
         </Pressable>
       </View>
 
@@ -544,8 +568,6 @@ export default function KeySelectionScreen() {
                       )}
                     </View>
 
-                    {/* Audio upload is live; MIDI upload is still to come, so this card
-                        advertises only what it can actually do. */}
                     <View style={styles.heroCardOutlined}>
                       <View style={styles.heroCardIconWrapMuted}>
                         <Ionicons name="cloud-upload-outline" size={20} color={theme.textSub} />
@@ -567,8 +589,35 @@ export default function KeySelectionScreen() {
                         <Text style={styles.chooseFileBtnText}>Choose File</Text>
                       </Pressable>
                       <Text style={styles.uploadHint}>Supports .wav, .mp3, .m4a</Text>
-                      {uploadErrorBanner}
                     </View>
+
+                    {/* Third entry point: MIDI already states its pitches and timings, so
+                        this one converts rather than transcribes — a different promise from
+                        the audio card, and worth its own card rather than a second button. */}
+                    <View style={styles.heroCardOutlined}>
+                      <View style={styles.heroCardIconWrapMuted}>
+                        <Ionicons name="musical-note-outline" size={20} color={theme.textSub} />
+                      </View>
+                      <Text style={styles.heroCardTitle}>Upload MIDI</Text>
+                      <Text style={styles.heroCardDesc}>Convert a MIDI part into harmonica tabs</Text>
+                      <Pressable
+                        onPress={handleUploadMidi}
+                        disabled={!selectedKey}
+                        style={({ pressed, hovered }: any) => [
+                          styles.chooseFileBtn,
+                          !selectedKey && styles.chooseFileBtnDisabled,
+                          (pressed || hovered) && !!selectedKey && styles.chooseFileBtnPressed,
+                        ]}
+                        accessibilityRole="button"
+                        accessibilityLabel="Choose MIDI file"
+                        accessibilityState={{ disabled: !selectedKey }}
+                      >
+                        <Text style={styles.chooseFileBtnText}>Choose File</Text>
+                      </Pressable>
+                      <Text style={styles.uploadHint}>Supports .mid, .midi</Text>
+                    </View>
+
+                    {uploadErrorBanner}
                   </View>
                 </View>
               </View>
@@ -611,7 +660,25 @@ export default function KeySelectionScreen() {
                     <View style={styles.sidebarRowIconWrap}>
                       <Ionicons name="cloud-upload-outline" size={16} color="rgba(255,255,255,0.85)" />
                     </View>
-                    <Text style={styles.sidebarRowText}>Upload</Text>
+                    <Text style={styles.sidebarRowText}>Upload Audio</Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={handleUploadMidi}
+                    disabled={!selectedKey}
+                    style={({ pressed, hovered }: any) => [
+                      styles.sidebarRow,
+                      !selectedKey && styles.sidebarRowDisabled,
+                      (pressed || hovered) && !!selectedKey && styles.sidebarRowPressed,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Upload MIDI file"
+                    accessibilityState={{ disabled: !selectedKey }}
+                  >
+                    <View style={styles.sidebarRowIconWrap}>
+                      <Ionicons name="musical-note-outline" size={16} color="rgba(255,255,255,0.85)" />
+                    </View>
+                    <Text style={styles.sidebarRowText}>Upload MIDI</Text>
                   </Pressable>
 
                   {uploadErrorBanner}
@@ -1386,16 +1453,6 @@ function createStyles(t: Theme) {
       fontSize:   FONT.xs,
       fontFamily: Poppins.regular,
       color:      t.textSub,
-    },
-    comingSoon: {
-      fontSize:          9,
-      fontFamily:        Poppins.bold,
-      color:             t.textMuted,
-      letterSpacing:     0.6,
-      backgroundColor:   t.surfaceAlt,
-      borderRadius:      6,
-      paddingHorizontal: 5,
-      paddingVertical:   2,
     },
   });
 }

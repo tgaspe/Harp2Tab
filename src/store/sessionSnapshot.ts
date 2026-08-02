@@ -27,7 +27,7 @@ export function getDefaultRecordingTitle(): string {
  * edits back" semantics and should not.
  */
 export function saveCurrentSessionToLibrary(title?: string, options?: { asNew?: boolean }): void {
-  const { tabNotes, selectedKey, harmonicaType, recordingId, recordingStartTime, bpm } =
+  const { tabNotes, selectedKey, harmonicaType, recordingId, recordingStartTime, bpm, sessionSource } =
     useAppStore.getState();
 
   if (!selectedKey || !recordingId || tabNotes.length === 0) return;
@@ -50,6 +50,7 @@ export function saveCurrentSessionToLibrary(title?: string, options?: { asNew?: 
     // buffer handles fine but AsyncStorage shouldn't be asked to.
     frames:        decimateFrames(getFrames(recordingId)),
     bpm,
+    source:        sessionSource,
   };
 
   useRecordingsStore.getState().saveRecording(recording);

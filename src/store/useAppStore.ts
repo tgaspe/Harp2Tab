@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { noteToTab, tabToNote } from '@/audio/HarmonicaMapper';
-import type { HarmonicaKey, HarmonicaType, TabNote, TabRecording, ExportFormat } from '@/types';
+import type { HarmonicaKey, HarmonicaType, RecordingSource, TabNote, TabRecording, ExportFormat } from '@/types';
 
 const MAX_HISTORY = 50; // bounded for hygiene; snapshots are cheap (array of refs) so this is generous
 
@@ -39,6 +39,10 @@ interface AppState {
    *  and drive the same toggle next to the app title. Not undo-tracked, same reasoning
    *  as recordingTitle. */
   viewMode:           'list' | 'pianoRoll';
+  /** How the current session was created. Written into the library entry at save time so
+   *  Frame Inspector can explain an empty frame buffer correctly — a MIDI import has no
+   *  audio to inspect by nature, not because data was lost. */
+  sessionSource:      RecordingSource;
 }
 
 function pushHistory(s: {
@@ -66,7 +70,7 @@ interface AppActions {
   transposeToKey:      (key: HarmonicaKey) => void;
   changeHarmonicaType: (type: HarmonicaType) => void;
   startRecording: () => void;
-  startImportedSession: (title?: string) => void;
+  startImportedSession: (title: string | undefined, source: RecordingSource) => void;
   stopRecording:  () => void;
   pauseRecording: () => void;
   resumeRecording:() => void;
@@ -104,6 +108,7 @@ const initialState: AppState = {
   metronomeEnabled:   false,
   recordingTitle:     '',
   viewMode:           'list',
+  sessionSource:      'recording',
 };
 
 export const useAppStore = create<AppState & AppActions>()(
@@ -126,6 +131,7 @@ export const useAppStore = create<AppState & AppActions>()(
         s.history            = [];
         s.future             = [];
         s.recordingTitle     = '';
+        s.sessionSource      = 'recording';
       }),
 
     // Sibling of startRecording for the file-upload entry points: same fresh-session
@@ -133,7 +139,7 @@ export const useAppStore = create<AppState & AppActions>()(
     // since nothing is being captured — useAudioCapture keys off that flag, and turning it
     // on here would open the mic for a file import. Keeps selectedKey/harmonicaType, which
     // the user picked on Home before choosing the file.
-    startImportedSession: (title) =>
+    startImportedSession: (title, source) =>
       set((s) => {
         s.isRecording        = false;
         s.isPaused           = false;
@@ -143,6 +149,7 @@ export const useAppStore = create<AppState & AppActions>()(
         s.history            = [];
         s.future             = [];
         s.recordingTitle     = title ?? '';
+        s.sessionSource      = source;
       }),
 
     stopRecording: () =>
@@ -329,6 +336,9 @@ export const useAppStore = create<AppState & AppActions>()(
         s.isPaused            = false;
         s.bpm                 = recording.bpm ?? DEFAULT_BPM;
         s.recordingTitle      = recording.title;
+        // Legacy entries predate the field; they can only have come from a live recording,
+        // since that was the app's one creation path at the time.
+        s.sessionSource       = recording.source ?? 'recording';
       }),
 
     reset: () =>
