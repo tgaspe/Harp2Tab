@@ -6,10 +6,11 @@ import { useTheme } from '@/hooks/useTheme';
 import { FONT } from '@/constants/keys';
 import { SpaceGrotesk, Poppins } from '@/constants/fonts';
 import { useAppStore, selectViewMode, selectTabNotes } from '@/store/useAppStore';
+import { selectHeaderAction, useHeaderActionStore } from '@/store/useHeaderActionStore';
 import type { Theme } from '@/theme';
 
 // Routes that had their own gear->settings shortcut before TopBar existed.
-const GEAR_ROUTES = ['/', '/recording', '/edit', '/export'];
+const GEAR_ROUTES = ['/', '/recording', '/edit', '/export', '/studio'];
 // Only the two routes that already had a back arrow before TopBar existed —
 // deliberately not router.canGoBack(), so we don't invent a "go back
 // mid-recording" affordance that didn't exist before.
@@ -31,6 +32,9 @@ export function TopBar() {
   const viewMode    = useAppStore(selectViewMode);
   const setViewMode = useAppStore((s) => s.setViewMode);
   const tabNotes    = useAppStore(selectTabNotes);
+  // Whatever the current screen has parked here — the Studio uses it for Export, so it
+  // doesn't need a chrome row of its own.
+  const headerAction = useHeaderActionStore(selectHeaderAction);
 
   if (HIDDEN_ROUTES.includes(pathname)) return null;
 
@@ -96,7 +100,32 @@ export function TopBar() {
         )}
       </View>
 
-      {showGear && (
+      <View style={styles.right}>
+        {headerAction && (
+          <Pressable
+            onPress={headerAction.onPress}
+            disabled={headerAction.disabled}
+            style={({ pressed, hovered }: any) => [
+              styles.headerAction,
+              headerAction.disabled && styles.headerActionDisabled,
+              (pressed || hovered) && !headerAction.disabled && styles.headerActionHovered,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel={headerAction.label}
+            accessibilityState={{ disabled: !!headerAction.disabled }}
+          >
+            <Ionicons
+              name={headerAction.icon as any}
+              size={16}
+              color={headerAction.disabled ? theme.textMuted : theme.accent}
+            />
+            <Text style={[styles.headerActionText, headerAction.disabled && { color: theme.textMuted }]}>
+              {headerAction.label}
+            </Text>
+          </Pressable>
+        )}
+
+        {showGear && (
         <Pressable
           onPress={() => router.push('/settings')}
           style={({ pressed, hovered }: any) => [
@@ -108,7 +137,8 @@ export function TopBar() {
         >
           <Ionicons name="settings-outline" size={24} color={theme.textSub} />
         </Pressable>
-      )}
+        )}
+      </View>
     </View>
   );
 }
@@ -133,6 +163,25 @@ function createStyles(t: Theme) {
       alignItems:    'center',
       gap:           6,
     },
+    right: {
+      flexDirection: 'row',
+      alignItems:    'center',
+      gap:           10,
+    },
+    headerAction: {
+      flexDirection:   'row',
+      alignItems:      'center',
+      gap:             6,
+      paddingHorizontal: 12,
+      paddingVertical: 7,
+      borderRadius:    8,
+      borderWidth:     1,
+      borderColor:     t.accentDim,
+      backgroundColor: t.accentSoft,
+    },
+    headerActionHovered:  { backgroundColor: t.surfaceAlt },
+    headerActionDisabled: { opacity: 0.5 },
+    headerActionText: { fontFamily: Poppins.bold, fontSize: 13, color: t.accent },
     logoRow: {
       flexDirection:     'row',
       alignItems:        'center',

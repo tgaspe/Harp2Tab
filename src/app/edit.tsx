@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type ViewStyle } from 'react-native';
+import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type StyleProp, type ViewStyle } from 'react-native';
 import { FlatList } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -28,7 +28,7 @@ import { usePlayback } from '@/hooks/usePlayback';
 import { previewNote } from '@/native/Playback';
 import { noteToTab } from '@/audio/HarmonicaMapper';
 import { PLAYBACK_RATES, barDurationMs } from '@/audio/tempo';
-import { generateForFormat } from '@/export/generators';
+import { generateForFormat, singlePart } from '@/export/generators';
 import { contentToBlob, triggerWebDownload } from '@/export/webDownload';
 import { FONT, EXPORT_FORMATS } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
@@ -817,11 +817,11 @@ export default function EditScreen() {
 // with dividers between them, not the mobile-style stacked full-width touch targets
 // native still uses.
 
-type EditStyles = ReturnType<typeof createStyles>;
+export type EditStyles = ReturnType<typeof createStyles>;
 
 // Thin vertical rule separating logical clusters of controls within a toolbar row —
 // used instead of just relying on `gap` so groups read as distinct at a glance.
-function Divider({ styles }: { styles: EditStyles }) {
+export function Divider({ styles }: { styles: EditStyles }) {
   return <View style={styles.toolbarDivider} />;
 }
 
@@ -829,7 +829,7 @@ function Divider({ styles }: { styles: EditStyles }) {
 // hover tooltip (the brief specifically calls out "every icon should have a tooltip"),
 // and a `variant` so secondary utility icons stay visually quiet while the handful of
 // primary/active ones (Export, Metronome-on, Loop-on) stand out.
-function IconButton({
+export function IconButton({
   icon, label, onPress, variant = 'ghost', disabled, selected, theme, styles, iconSize = 14,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
@@ -1114,7 +1114,7 @@ function ExportMenu({ tabNotesLength, theme, styles, variant = 'toolbar', collap
     if (!selectedKey || tabNotes.length === 0 || isExporting) return;
     setIsExporting(true);
     try {
-      const { content, encoding, ext, mimeType } = generateForFormat(tabNotes, selectedKey, harmonicaType, exportFormat);
+      const { content, encoding, ext, mimeType } = generateForFormat(singlePart(tabNotes, selectedKey, harmonicaType), exportFormat);
       triggerWebDownload(contentToBlob(content, encoding, mimeType), `harp2tab_export.${ext}`);
     } finally {
       setIsExporting(false);
@@ -1126,7 +1126,7 @@ function ExportMenu({ tabNotesLength, theme, styles, variant = 'toolbar', collap
     if (!selectedKey || tabNotes.length === 0 || isExporting) return;
     setIsExporting(true);
     try {
-      const { content, encoding, ext, mimeType } = generateForFormat(tabNotes, selectedKey, harmonicaType, exportFormat);
+      const { content, encoding, ext, mimeType } = generateForFormat(singlePart(tabNotes, selectedKey, harmonicaType), exportFormat);
       const filename = `harp2tab_export.${ext}`;
       const blob = contentToBlob(content, encoding, mimeType);
       const canUseWebShare = typeof navigator.share === 'function' && typeof navigator.canShare === 'function';
@@ -1762,11 +1762,11 @@ function WebToolbar({
   );
 }
 
-function WebTransportBar({
+export function WebTransportBar({
   tabNotesLength, isPlaying, isPaused, onPlayToggle, onStop, onSkipBack, onSkipForward,
   currentTimeMs, totalTimeMs, formatElapsed,
   loopEnabled, onToggleLoop, playbackRate, onCycleRate,
-  bpm, setBpm, metronomeEnabled, onToggleMetronome, glued, theme, styles,
+  bpm, setBpm, metronomeEnabled, onToggleMetronome, glued, containerStyle, compact, theme, styles,
 }: {
   tabNotesLength: number;
   isPlaying: boolean;
@@ -1790,6 +1790,23 @@ function WebTransportBar({
   /** True in piano-roll mode — sits flush against the data panel above it (no gap, no
    *  separating line) instead of floating below it like it does over the list view. */
   glued?: boolean;
+  /**
+   * Applied last, so a host that isn't `edit.tsx` can undo its layout compensations.
+   *
+   * `webTransportBar` carries three negative margins whose only job is to cancel this
+   * screen's container padding (`marginHorizontal: -24`, `marginBottom:
+   * -WEB_SCREEN_PADDING_BOTTOM`) and its `gap: 16` (`glued`'s `marginTop: -16`). In a host
+   * without that padding they don't cancel anything — they pull the bar outside its own
+   * box, which reads as the contents sitting off-centre.
+   */
+  containerStyle?: StyleProp<ViewStyle>;
+  /**
+   * Shorter bar: tighter vertical padding and a smaller play button (48px tall instead of
+   * 68px). Exists as a flag rather than something `containerStyle` could do, because the
+   * height is set by the play circle as much as by the padding, and a caller can't reach
+   * a nested child's style from the outside.
+   */
+  compact?: boolean;
   theme: Theme;
   styles: EditStyles;
 }) {
@@ -1801,7 +1818,7 @@ function WebTransportBar({
   // would instead push them off-center.
   const disabled = tabNotesLength === 0;
   return (
-    <View style={[styles.webTransportBar, glued && styles.webTransportBarGlued]}>
+    <View style={[styles.webTransportBar, glued && styles.webTransportBarGlued, compact && styles.webTransportBarCompact, containerStyle]}>
       <View style={styles.webTransportSide}>
         <View style={styles.webTransportGroup}>
           <IconButton
@@ -1845,6 +1862,7 @@ function WebTransportBar({
           disabled={disabled}
           style={({ pressed, hovered }: any) => [
             styles.webPlayCircle,
+            compact && styles.webPlayCircleCompact,
             disabled && styles.webPlayCircleDisabled,
             (pressed || hovered) && !disabled && styles.webPlayCircleHover,
           ]}
@@ -1852,7 +1870,7 @@ function WebTransportBar({
           accessibilityLabel={isPlaying && !isPaused ? 'Pause' : isPaused ? 'Resume' : 'Play tab'}
           accessibilityState={{ disabled }}
         >
-          <Ionicons name={isPlaying && !isPaused ? 'pause' : 'play'} size={17} color={disabled ? theme.textMuted : '#fff'} />
+          <Ionicons name={isPlaying && !isPaused ? 'pause' : 'play'} size={compact ? 14 : 17} color={disabled ? theme.textMuted : '#fff'} />
         </Pressable>
         <IconButton icon="play-skip-forward" label="Forward one bar" onPress={onSkipForward} disabled={disabled} theme={theme} styles={styles} iconSize={13} />
       </View>
@@ -1877,7 +1895,7 @@ function WebTransportBar({
   );
 }
 
-function createStyles(t: Theme) {
+export function createStyles(t: Theme) {
   return StyleSheet.create({
     safe:      { flex: 1, backgroundColor: t.bg },
     container: {
@@ -2654,6 +2672,7 @@ function createStyles(t: Theme) {
       marginTop: -16,
       borderTopWidth: 0,
     },
+    webTransportBarCompact: { paddingVertical: 8 },
     webTransportSide: { flex: 1, flexDirection: 'row', alignItems: 'center' },
     // Speed stepper + elapsed/total time need to sit side-by-side, not the View default
     // of stacking vertically — this side now holds two elements, not just the time text.
@@ -2694,6 +2713,7 @@ function createStyles(t: Theme) {
         ? { boxShadow: `0 3px 10px ${t.accent}66` } as any
         : null),
     } as any,
+    webPlayCircleCompact:  { width: 32, height: 32, borderRadius: 16 },
     webPlayCircleHover:    { backgroundColor: t.accentDim },
     webPlayCircleDisabled: { backgroundColor: t.surface, boxShadow: 'none' } as any,
     // textSub, not textMuted — this is the only readout of elapsed-of-total anywhere on

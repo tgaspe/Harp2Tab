@@ -12,7 +12,7 @@ import { ActionSheetModal } from '@/components/ActionSheetModal';
 import { useTheme } from '@/hooks/useTheme';
 import { useAppStore, selectKey, selectTabNotes, selectExportFmt, selectHarmonicaType } from '@/store/useAppStore';
 import { saveCurrentSessionToLibrary, getDefaultRecordingTitle, startNewRecordingSession } from '@/store/sessionSnapshot';
-import { generateForFormat } from '@/export/generators';
+import { generateForFormat, singlePart } from '@/export/generators';
 import { contentToBlob, triggerWebDownload } from '@/export/webDownload';
 import { EXPORT_FORMATS, FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
@@ -61,7 +61,7 @@ export default function ExportScreen() {
 
   async function buildFile() {
     const { content, encoding, ext, mimeType } = generateForFormat(
-      tabNotes, selectedKey!, harmonicaType, exportFormat,
+      singlePart(tabNotes, selectedKey!, harmonicaType), exportFormat,
     );
     const uri = FileSystem.cacheDirectory + `harp2tab_export.${ext}`;
     await FileSystem.writeAsStringAsync(uri, content, { encoding });
@@ -74,7 +74,7 @@ export default function ExportScreen() {
     try {
       if (Platform.OS === 'web') {
         const { content, encoding, ext, mimeType } = generateForFormat(
-          tabNotes, selectedKey, harmonicaType, exportFormat,
+          singlePart(tabNotes, selectedKey, harmonicaType), exportFormat,
         );
         const filename = `harp2tab_export.${ext}`;
         const blob = contentToBlob(content, encoding, mimeType);
@@ -102,7 +102,7 @@ export default function ExportScreen() {
     setIsExporting(true);
     try {
       const { content, encoding, ext, mimeType } = generateForFormat(
-        tabNotes, selectedKey, harmonicaType, exportFormat,
+        singlePart(tabNotes, selectedKey, harmonicaType), exportFormat,
       );
 
       if (Platform.OS === 'web') {

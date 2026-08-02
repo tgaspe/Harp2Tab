@@ -1,46 +1,89 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { TrackList } from '@/components/TrackList';
-import { audibleTracks, instrumentName } from '@/audio/studioTracks';
 import { PianoRoll } from '@/components/PianoRoll';
+// The editor's own transport and its style sheet, imported rather than reimplemented.
+// Rebuilding these was the mistake the first version of this screen made: the Studio ended
+// up with a single "Play" text button while the editor next door had loop, tempo,
+// metronome, skip, stop, play/pause, rate and a time readout.
+import { WebTransportBar, createStyles as createEditStyles } from '@/app/edit';
+import { audibleTracks, instrumentName } from '@/audio/studioTracks';
 import { getChromaticRows } from '@/audio/HarmonicaMapper';
-import { tempoMapOf } from '@/audio/midiProject';
+import { createTrack, tempoMapOf } from '@/audio/midiProject';
+import { mostMelodicTrack } from '@/audio/midiToNotes';
 import {
   appendTabNote,
   applyTabNoteChange,
   removeTabNote,
   trackToTabNotes,
 } from '@/audio/studioNotes';
-import { convertTrackToRecording } from '@/audio/convertTrack';
+import { convertAllTracks, convertTrackToRecording } from '@/audio/convertTrack';
+import { generateForFormat } from '@/export/generators';
+import { contentToBlob, triggerWebDownload } from '@/export/webDownload';
 import { useMidiProjectsStore } from '@/store/useMidiProjectsStore';
 import { useRecordingsStore } from '@/store/useRecordingsStore';
-import { useAppStore } from '@/store/useAppStore';
+import { selectExportFmt, useAppStore } from '@/store/useAppStore';
 import { usePlayback } from '@/hooks/usePlayback';
+import { useHeaderActionStore } from '@/store/useHeaderActionStore';
 import { useTheme } from '@/hooks/useTheme';
+import { barDurationMs, PLAYBACK_RATES } from '@/audio/tempo';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import type { Theme } from '@/theme';
-import type { MidiTrackData, TabNote } from '@/types';
+import type { MidiProject, MidiTrackData, TabNote } from '@/types';
 
 /**
  * The MIDI Studio — the stage *before* the tab editor.
  *
  * Music here is many tracks at full pitch range with no instrument attached; the harmonica
- * only enters at the conversion boundary (`convertTrackToRecording`). That separation is
- * what lets this screen reuse `PianoRoll` wholesale: the roll indexes rows positionally and
- * knows nothing about what a row means, so handing it a chromatic ladder and a project's
- * notes needs no harmonica-aware branch anywhere in it.
+ * only enters at the conversion boundary (`convertTrackToRecording`).
+ *
+ * Structurally this is the *editor's* screen with the track panel swapped in for the
+ * key/actions sidebar. That's deliberate and was learned the hard way: the first version
+ * treated the Studio as a new screen that merely embedded `PianoRoll`, so it inherited none
+ * of the editor's chrome and re-solved problems already solved next door — including a
+ * second control-lane strip stacked under the roll's own Breath Force / Duration /
+ * Confidence / Pitch Bend panel. The roll already has that panel; the Studio adds tracks
+ * and conversion. Nothing else.
+ *
+ * It deliberately has **no chrome row of its own**. The project title rides in the piano
+ * roll's tool row (`headerLeft`, same as the editor puts its chart title there), Export is
+ * parked in the global `TopBar` via `useHeaderActionStore`, and getting back to the library
+ * is the Harp2Tab logo — which already does exactly that on every other screen.
  */
+
+/** Pitch-row height in the Studio. Roughly two-thirds the editor's, which puts about five
+ *  octaves on screen instead of two while still leaving a note block clickable. */
+const STUDIO_ROW_HEIGHT = 18;
+
+/** Which track to open on. `tracks[0]` is a bad default and was: real files routinely lead
+ *  with a conductor or marker track carrying no notes, so the editor opened blank, scrolled
+ *  to the top of a 128-row ladder. `mostMelodicTrack` already answers this for import. */
+function defaultTrackFor(project: MidiProject): MidiTrackData | null {
+  const withNotes = project.tracks.filter((t) => t.notes.length > 0);
+  if (withNotes.length === 0) return project.tracks[0] ?? null;
+
+  // `mostMelodicTrack` works on the import pipeline's own track shape; it only reads
+  // `notes` and `noteCount`, so the project's tracks map onto it directly.
+  const best = mostMelodicTrack(withNotes.map((t, i) => ({
+    id: i, name: t.name, channel: t.channel, noteCount: t.notes.length,
+    lowestNote: 0, highestNote: 0, durationMs: 0, notes: t.notes,
+  })));
+  return withNotes[best.id] ?? withNotes[0];
+}
+
 export default function StudioScreen() {
   const theme  = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
+  const editStyles = useMemo(() => createEditStyles(theme), [theme]);
 
   const { projectId } = useLocalSearchParams<{ projectId?: string }>();
-  const projects    = useMidiProjectsStore((s) => s.projects);
-  const saveProject = useMidiProjectsStore((s) => s.saveProject);
+  const projects      = useMidiProjectsStore((s) => s.projects);
+  const saveProject   = useMidiProjectsStore((s) => s.saveProject);
   const saveRecording = useRecordingsStore((s) => s.saveRecording);
   const loadRecording = useAppStore((s) => s.loadRecording);
+  const exportFormat  = useAppStore(selectExportFmt);
 
   const project = useMemo(
     () => projects.find((p) => p.id === projectId) ?? projects[0] ?? null,
@@ -51,18 +94,21 @@ export default function StudioScreen() {
   const [selectedNoteId, setSelectedNoteId]   = useState<string | null>(null);
   const [loopRegion, setLoopRegion] = useState<{ startMs: number; endMs: number } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [tracksCollapsed, setTracksCollapsed] = useState(false);
+  const [metronomeEnabled, setMetronomeEnabled] = useState(false);
 
   const playback = usePlayback();
 
   const tracks = project?.tracks ?? [];
-  const selectedTrack = tracks.find((t) => t.id === selectedTrackId) ?? tracks[0] ?? null;
+  const selectedTrack = useMemo(() => {
+    if (!project) return null;
+    return tracks.find((t) => t.id === selectedTrackId) ?? defaultTrackFor(project);
+  }, [project, tracks, selectedTrackId]);
 
   // Full MIDI range — the Studio has no instrument, so nothing narrows it.
   const rows = useMemo(() => getChromaticRows(), []);
-  const tempoMap = useMemo(
-    () => (project ? tempoMapOf(project) : undefined),
-    [project],
-  );
+  const tempoMap = useMemo(() => (project ? tempoMapOf(project) : undefined), [project]);
+  const bpm = Math.round(project?.tempos[0]?.bpm ?? 120);
 
   const editableNotes: TabNote[] = useMemo(
     () => (selectedTrack ? trackToTabNotes(selectedTrack) : []),
@@ -77,6 +123,16 @@ export default function StudioScreen() {
       .filter((t) => t.id !== selectedTrack.id)
       .map((t) => ({ id: t.id, color: t.color, notes: trackToTabNotes(t) }));
   }, [project, tracks, selectedTrack]);
+
+  /** Everything audible, merged and time-ordered — `usePlayback` schedules one flat list. */
+  const audibleNotes = useMemo(
+    () => audibleTracks(tracks)
+      .flatMap((t) => trackToTabNotes(t))
+      .sort((a, b) => a.start_time - b.start_time),
+    [tracks],
+  );
+
+  const totalTimeMs = project?.durationMs ?? 0;
 
   const updateTrack = useCallback((trackId: string, changes: Partial<MidiTrackData>) => {
     if (!project) return;
@@ -95,6 +151,32 @@ export default function StudioScreen() {
     if (!selectedTrack) return;
     const notes = applyTabNoteChange(selectedTrack, id, changes);
     if (notes === selectedTrack.notes) return;
+    updateTrack(selectedTrack.id, { notes });
+  }, [selectedTrack, updateTrack]);
+
+  /**
+   * Bulk edits — quantize, duplicate, paste, group move, arrow-key nudge.
+   *
+   * Applied in one pass rather than by looping the single-note path, because each
+   * `applyTabNoteChange` returns a fresh array: looping would write the store N times and
+   * discard all but the last change.
+   */
+  const handleUpdateMany = useCallback((updates: { id: string; changes: Partial<TabNote> }[]) => {
+    if (!selectedTrack) return;
+    let working = selectedTrack;
+    for (const update of updates) {
+      const notes = applyTabNoteChange(working, update.id, update.changes);
+      if (notes !== working.notes) working = { ...working, notes };
+    }
+    if (working.notes !== selectedTrack.notes) {
+      updateTrack(selectedTrack.id, { notes: working.notes });
+    }
+  }, [selectedTrack, updateTrack]);
+
+  const handleCreateMany = useCallback((created: Omit<TabNote, 'id'>[]) => {
+    if (!selectedTrack) return;
+    let notes = selectedTrack.notes;
+    for (const note of created) notes = appendTabNote({ ...selectedTrack, notes }, note);
     updateTrack(selectedTrack.id, { notes });
   }, [selectedTrack, updateTrack]);
 
@@ -124,45 +206,91 @@ export default function StudioScreen() {
     router.push('/edit');
   }, [project, saveRecording, loadRecording]);
 
-  const handleSeek = useCallback((ms: number) => {
-    playback.seek(ms);
-  }, [playback]);
-
-  /**
-   * Everything audible, merged into one sequence.
-   *
-   * Merged rather than one scheduler per track because `usePlayback` schedules a flat note
-   * list and reads the last element to know when the sequence ends — so the tracks have to
-   * be interleaved by time, not concatenated. Mute and solo are resolved here, which is the
-   * point of having them: auditioning one part against the rest is how you find the melody.
-   */
-  const audibleNotes = useMemo(() => {
-    const merged = audibleTracks(tracks).flatMap((t) => trackToTabNotes(t));
-    return merged.sort((a, b) => a.start_time - b.start_time);
-  }, [tracks]);
-
-  const handleTogglePlay = useCallback(() => {
-    if (playback.isPlaying) {
-      playback.stop();
+  const handleExportAll = useCallback(() => {
+    if (!project) return;
+    const converted = convertAllTracks(project);
+    if (converted.length === 0) {
+      setNotice('No track in this project has notes a harmonica could play.');
       return;
     }
-    playback.play(audibleNotes, {
-      bpm: project?.tempos[0]?.bpm ?? 120,
-      metronomeEnabled: false,
-      // The map, not just the opening BPM — a metronome or any tempo-aware scheduling has
-      // to follow the file's changes rather than assume the first tempo holds throughout.
-      tempoMap,
+
+    const { content, encoding, ext, mimeType } = generateForFormat(
+      converted.map((c) => ({
+        name:          c.recording.title,
+        key:           c.key,
+        harmonicaType: c.recording.harmonicaType,
+        notes:         c.recording.tabNotes,
+      })),
+      exportFormat,
+    );
+
+    const safeTitle = project.title.replace(/[^\w-]+/g, '_').slice(0, 60) || 'harp2tab_project';
+    triggerWebDownload(contentToBlob(content, encoding, mimeType), `${safeTitle}.${ext}`);
+    setNotice(`Exported ${converted.length} track${converted.length === 1 ? '' : 's'} as ${exportFormat}.`);
+  }, [project, exportFormat]);
+
+  // ── Transport, matching the editor's semantics exactly ──────────────────────
+
+  const playOptions = useCallback(
+    () => ({ bpm, metronomeEnabled, rate: playback.playbackRate, tempoMap }),
+    [bpm, metronomeEnabled, playback.playbackRate, tempoMap],
+  );
+
+  function handlePlayToggle() {
+    if (playback.isPlaying && !playback.isPaused) { playback.pause(); return; }
+    if (playback.isPaused) { playback.resume(); return; }
+    playback.play(audibleNotes, playOptions(), playback.currentTimeMs, loopRegion ?? undefined);
+  }
+
+  function handleSeek(ms: number) {
+    playback.seek(ms);
+  }
+
+  function handleSkipBar(direction: 1 | -1) {
+    const barMs = barDurationMs(bpm);
+    playback.seek(Math.max(0, Math.min(totalTimeMs, playback.currentTimeMs + direction * barMs)));
+  }
+
+  function handleCycleRate() {
+    const i = PLAYBACK_RATES.indexOf(playback.playbackRate as (typeof PLAYBACK_RATES)[number]);
+    playback.setPlaybackRate(PLAYBACK_RATES[(i + 1) % PLAYBACK_RATES.length]);
+  }
+
+  function formatElapsed(ms: number): string {
+    const total = Math.max(0, Math.round(ms / 1000));
+    return `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, '0')}`;
+  }
+
+  /** Tempo lives on the project's map, so the transport's BPM stepper edits the map's
+   *  opening tempo rather than a scalar the Studio doesn't have. */
+  function setProjectBpm(next: number) {
+    if (!project) return;
+    const clamped = Math.max(20, Math.min(400, Math.round(next)));
+    const tempos = project.tempos.length > 0
+      ? project.tempos.map((t, i) => (i === 0 ? { ...t, bpm: clamped } : t))
+      : [{ timeMs: 0, bpm: clamped }];
+    saveProject({ ...project, tempos });
+  }
+
+  const setHeaderAction   = useHeaderActionStore((s) => s.setHeaderAction);
+  const clearHeaderAction = useHeaderActionStore((s) => s.clearHeaderAction);
+  useEffect(() => {
+    setHeaderAction({
+      icon:    'share-outline',
+      label:   `Export ${exportFormat}`,
+      onPress: handleExportAll,
+      disabled: !project,
     });
-  }, [playback, audibleNotes, project, tempoMap]);
+    // Cleared on unmount so the button doesn't linger on whatever screen comes next.
+    return clearHeaderAction;
+  }, [setHeaderAction, clearHeaderAction, handleExportAll, exportFormat, project]);
 
   if (!project) {
     return (
       <SafeAreaView style={styles.screen}>
         <View style={styles.empty}>
           <Text style={styles.emptyTitle}>No project open</Text>
-          <Text style={styles.emptyBody}>
-            Import a MIDI file to start a Studio project.
-          </Text>
+          <Text style={styles.emptyBody}>Import a MIDI file to start a Studio project.</Text>
           <Pressable style={styles.emptyBtn} onPress={() => router.replace('/')}>
             <Text style={styles.emptyBtnText}>Back to library</Text>
           </Pressable>
@@ -173,35 +301,6 @@ export default function StudioScreen() {
 
   return (
     <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
-      <View style={styles.header}>
-        <Pressable
-          onPress={() => router.replace('/')}
-          accessibilityRole="button"
-          accessibilityLabel="Back to library"
-          style={styles.backBtn}
-        >
-          <Text style={styles.backText}>‹ Library</Text>
-        </Pressable>
-        <View style={styles.headerText}>
-          <Text style={styles.title} numberOfLines={1}>{project.title}</Text>
-          <Text style={styles.subtitle} numberOfLines={1}>
-            {tracks.length} track{tracks.length === 1 ? '' : 's'}
-            {selectedTrack ? ` · editing ${selectedTrack.name} (${instrumentName(selectedTrack.program)})` : ''}
-          </Text>
-        </View>
-
-        <Pressable
-          onPress={handleTogglePlay}
-          disabled={audibleNotes.length === 0}
-          style={[styles.transportBtn, audibleNotes.length === 0 && styles.transportBtnDisabled]}
-          accessibilityRole="button"
-          accessibilityState={{ disabled: audibleNotes.length === 0 }}
-          accessibilityLabel={playback.isPlaying ? 'Stop playback' : 'Play all audible tracks'}
-        >
-          <Text style={styles.transportText}>{playback.isPlaying ? '■ Stop' : '▶ Play'}</Text>
-        </Pressable>
-      </View>
-
       {notice && (
         <Pressable style={styles.notice} onPress={() => setNotice(null)} accessibilityRole="button">
           <Text style={styles.noticeText}>{notice}</Text>
@@ -221,6 +320,19 @@ export default function StudioScreen() {
             const t = tracks.find((x) => x.id === id);
             if (t) updateTrack(id, { soloed: !t.soloed });
           }}
+          onSetProgram={(id, program) => updateTrack(id, { program })}
+          onAddTrack={() => {
+            const track = createTrack(project.tracks.length);
+            saveProject({ ...project, tracks: [...project.tracks, track] });
+            setSelectedTrackId(track.id);
+          }}
+          onDeleteTrack={(id) => {
+            if (project.tracks.length <= 1) return;
+            saveProject({ ...project, tracks: project.tracks.filter((t) => t.id !== id) });
+            if (selectedTrackId === id) setSelectedTrackId(null);
+          }}
+          collapsed={tracksCollapsed}
+          onToggleCollapsed={() => setTracksCollapsed((v) => !v)}
           onConvert={handleConvert}
         />
 
@@ -233,19 +345,40 @@ export default function StudioScreen() {
               harmonicaKey="C"
               harmonicaType="chromatic"
               rows={rows}
+              // Shorter than the editor's 28px: that ladder is ~40 harmonica rows, this
+              // one is all 128 semitones, where tall rows mean barely two octaves fit.
+              rowHeight={STUDIO_ROW_HEIGHT}
+              // Colour by track, not by technique. Technique is a harmonica idea and no
+              // harp has been chosen yet, so every note's tab is empty — which the roll
+              // otherwise paints as "unreachable on this harmonica" grey.
+              noteColor={selectedTrack?.color}
               backgroundLanes={backgroundLanes}
-              bpm={project.tempos[0]?.bpm ?? 120}
+              bpm={bpm}
               tempoMap={tempoMap}
               selectedId={selectedNoteId}
               onSelect={setSelectedNoteId}
               onCreate={handleCreate}
               onUpdate={handleUpdate}
+              onUpdateMany={handleUpdateMany}
+              onCreateMany={handleCreateMany}
+              // The freshly-adapted notes, so "select what was just created" resolves
+              // against the project rather than the tab session's store.
+              readNotesAfterWrite={() => (selectedTrack ? trackToTabNotes(selectedTrack) : [])}
               onDelete={handleDelete}
               isPlaying={playback.isPlaying}
               currentTimeMs={playback.currentTimeMs}
               onSeek={handleSeek}
               loopRegion={loopRegion}
               onLoopRegionChange={setLoopRegion}
+              headerLeft={
+                <View style={styles.rollHeader}>
+                  <Text style={styles.rollTitle} numberOfLines={1}>{project.title}</Text>
+                  <Text style={styles.rollSubtitle} numberOfLines={1}>
+                    {tracks.length} track{tracks.length === 1 ? '' : 's'}
+                    {selectedTrack ? ` · ${selectedTrack.name} (${instrumentName(selectedTrack.program)})` : ''}
+                  </Text>
+                </View>
+              }
             />
           ) : (
             <View style={styles.empty}>
@@ -254,6 +387,35 @@ export default function StudioScreen() {
           )}
         </View>
       </View>
+
+      {/* The editor's transport, not a second one — but without `glued`, and with the
+          margins reset: those exist to cancel edit.tsx's container padding and gap, which
+          this screen doesn't have. Left in place they drag the bar out of its own box and
+          the controls stop looking vertically centred. */}
+      <WebTransportBar
+        tabNotesLength={audibleNotes.length}
+        isPlaying={playback.isPlaying}
+        isPaused={playback.isPaused}
+        onPlayToggle={handlePlayToggle}
+        onStop={playback.stop}
+        onSkipBack={() => handleSkipBar(-1)}
+        onSkipForward={() => handleSkipBar(1)}
+        currentTimeMs={playback.currentTimeMs}
+        totalTimeMs={totalTimeMs}
+        formatElapsed={formatElapsed}
+        loopEnabled={playback.loopEnabled}
+        onToggleLoop={() => playback.setLoopEnabled(!playback.loopEnabled)}
+        playbackRate={playback.playbackRate}
+        onCycleRate={handleCycleRate}
+        bpm={bpm}
+        setBpm={setProjectBpm}
+        metronomeEnabled={metronomeEnabled}
+        onToggleMetronome={() => setMetronomeEnabled((v) => !v)}
+        containerStyle={styles.transportBar}
+        compact
+        theme={theme}
+        styles={editStyles}
+      />
     </SafeAreaView>
   );
 }
@@ -261,28 +423,16 @@ export default function StudioScreen() {
 function createStyles(t: Theme) {
   return StyleSheet.create({
     screen: { flex: 1, backgroundColor: t.bg },
-    header: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 12,
-      paddingHorizontal: 16,
-      paddingVertical: 10,
-      borderBottomWidth: 1,
-      borderBottomColor: t.border,
+    transportBar: {
+      marginHorizontal: 0,
+      marginBottom:     0,
+      marginTop:        0,
+      borderTopWidth:   1,
+      borderTopColor:   t.separator,
     },
-    backBtn: { paddingVertical: 4, paddingHorizontal: 6 },
-    backText: { fontFamily: Poppins.bold, fontSize: 13, color: t.accent },
-    headerText: { flex: 1, minWidth: 0 },
-    title:    { fontFamily: Poppins.bold, fontSize: 16, color: t.textPrimary },
-    subtitle: { fontFamily: SpaceGrotesk.regular, fontSize: 12, color: t.textMuted },
-    transportBtn: {
-      paddingHorizontal: 14, paddingVertical: 7,
-      borderRadius: 8,
-      backgroundColor: t.accentSoft,
-      borderWidth: 1, borderColor: t.accentDim,
-    },
-    transportBtnDisabled: { opacity: 0.4 },
-    transportText: { fontFamily: Poppins.bold, fontSize: 13, color: t.accent },
+    rollHeader: { minWidth: 0, maxWidth: 320 },
+    rollTitle:    { fontFamily: Poppins.bold, fontSize: 14, color: t.textPrimary },
+    rollSubtitle: { fontFamily: SpaceGrotesk.regular, fontSize: 11, color: t.textMuted },
     notice: {
       marginHorizontal: 16,
       marginTop: 8,
@@ -293,7 +443,7 @@ function createStyles(t: Theme) {
       borderColor: t.warning,
     },
     noticeText: { fontFamily: SpaceGrotesk.regular, fontSize: 13, color: t.textPrimary },
-    body: { flex: 1, flexDirection: 'row' },
+    body: { flex: 1, flexDirection: 'row', minHeight: 0 },
     rollWrap: { flex: 1, minWidth: 0 },
     empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8, padding: 24 },
     emptyTitle: { fontFamily: Poppins.bold, fontSize: 16, color: t.textPrimary },

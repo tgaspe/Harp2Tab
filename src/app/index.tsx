@@ -13,6 +13,8 @@ import { pickAudioFile } from '@/audio/pickAudioFile';
 import { pickMidiFile } from '@/audio/pickMidiFile';
 import { setPendingImport } from '@/audio/pendingImport';
 import { selectRecordings, useRecordingsStore } from '@/store/useRecordingsStore';
+import { selectMidiProjects, useMidiProjectsStore } from '@/store/useMidiProjectsStore';
+import { createProject } from '@/audio/midiProject';
 import type { Theme } from '@/theme';
 import type { HarmonicaKey, HarmonicaType, TabRecording } from '@/types';
 import { Ionicons } from '@expo/vector-icons';
@@ -151,6 +153,9 @@ export default function KeySelectionScreen() {
   const isPurchased          = useSettingsStore((s) => s.isPurchased);
   const ratingStatus         = useSettingsStore((s) => s.ratingStatus);
   const recordings           = useRecordingsStore(selectRecordings);
+  const midiProjects         = useMidiProjectsStore(selectMidiProjects);
+  const saveProject          = useMidiProjectsStore((s) => s.saveProject);
+  const deleteProject        = useMidiProjectsStore((s) => s.deleteProject);
   const deleteRecording      = useRecordingsStore((s) => s.deleteRecording);
   const renameRecording      = useRecordingsStore((s) => s.renameRecording);
   const toggleFavorite       = useRecordingsStore((s) => s.toggleFavorite);
@@ -211,6 +216,19 @@ export default function KeySelectionScreen() {
       // import screen, which has room to explain it properly.
       setUploadError(err instanceof AudioImportError ? err.message : "That file couldn't be opened.");
     }
+  }
+
+  /**
+   * A blank Studio project.
+   *
+   * Deliberately *not* behind the free-tier gate: nothing has been transcribed, and no tab
+   * exists yet. The gate applies at conversion, which is where a tab is actually produced —
+   * same reasoning as "Open in Studio" on the import screen.
+   */
+  function handleNewProject() {
+    const project = createProject({ title: 'Untitled project' });
+    saveProject(project);
+    router.push({ pathname: '/studio', params: { projectId: project.id } });
   }
 
   // Same shape again for the third entry point. The `kind` param is what tells /import to
@@ -401,6 +419,18 @@ export default function KeySelectionScreen() {
         >
           <Ionicons name="musical-note-outline" size={18} color={selectedKey ? theme.textSub : theme.textMuted} />
           <Text style={[styles.uploadBtnText, !!selectedKey && styles.uploadBtnTextEnabled]}>Upload MIDI</Text>
+        </Pressable>
+        <Pressable
+          onPress={handleNewProject}
+          style={({ pressed, hovered }: any) => [
+            styles.uploadBtn,
+            (pressed || hovered) && styles.uploadBtnPressed,
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel="New MIDI Studio project"
+        >
+          <Ionicons name="add-circle-outline" size={18} color={theme.textSub} />
+          <Text style={[styles.uploadBtnText, styles.uploadBtnTextEnabled]}>New Project</Text>
         </Pressable>
       </View>
 
@@ -681,6 +711,24 @@ export default function KeySelectionScreen() {
                     <Text style={styles.sidebarRowText}>Upload MIDI</Text>
                   </Pressable>
 
+                  {/* Not gated on a harmonica key, unlike the three above it: a blank
+                      Studio project has no harmonica yet — the key is chosen at
+                      conversion, which is where a tab actually gets produced. */}
+                  <Pressable
+                    onPress={handleNewProject}
+                    style={({ pressed, hovered }: any) => [
+                      styles.sidebarRow,
+                      (pressed || hovered) && styles.sidebarRowPressed,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel="New MIDI Studio project"
+                  >
+                    <View style={styles.sidebarRowIconWrap}>
+                      <Ionicons name="options-outline" size={16} color="rgba(255,255,255,0.85)" />
+                    </View>
+                    <Text style={styles.sidebarRowText}>New Project</Text>
+                  </Pressable>
+
                   {uploadErrorBanner}
 
                   <Pressable
@@ -733,6 +781,47 @@ export default function KeySelectionScreen() {
               >
                 <Text style={styles.dashboardTitle}>Welcome back</Text>
                 <Text style={styles.dashboardSubtitle}>Here's where you left off.</Text>
+
+                {/* Projects sit above recordings because they're upstream of them: a
+                    project is what a tab gets converted *out of*, so finding one is how you
+                    get back to editing the source rather than the result. */}
+                {midiProjects.length > 0 && (
+                  <View style={styles.section}>
+                    <Text style={styles.libraryToolbarLabel}>
+                      MIDI STUDIO · {midiProjects.length} PROJECT{midiProjects.length !== 1 ? 'S' : ''}
+                    </Text>
+                    <View style={styles.projectGrid}>
+                      {midiProjects.map((project) => (
+                        <View key={project.id} style={styles.projectCard}>
+                          <Pressable
+                            style={styles.projectCardMain}
+                            onPress={() => router.push({ pathname: '/studio', params: { projectId: project.id } })}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Open ${project.title} in the MIDI Studio`}
+                          >
+                            <Ionicons name="options-outline" size={16} color={theme.accent} />
+                            <View style={styles.projectCardText}>
+                              <Text style={styles.projectCardTitle} numberOfLines={1}>{project.title}</Text>
+                              <Text style={styles.projectCardMeta} numberOfLines={1}>
+                                {project.tracks.length} track{project.tracks.length === 1 ? '' : 's'}
+                                {' · '}
+                                {project.tracks.reduce((n, t) => n + t.notes.length, 0)} notes
+                              </Text>
+                            </View>
+                          </Pressable>
+                          <Pressable
+                            onPress={() => deleteProject(project.id)}
+                            style={styles.projectCardDelete}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Delete project ${project.title}`}
+                          >
+                            <Ionicons name="trash-outline" size={14} color={theme.textMuted} />
+                          </Pressable>
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                )}
 
                 <View style={[styles.section, styles.dashboardLibrary]}>
                   <View style={styles.libraryToolbar}>
@@ -918,6 +1007,24 @@ function createStyles(t: Theme) {
     scrollContent: { gap: 24, paddingBottom: 16 },
     section: { gap: 12 },
     recordingsList: { gap: 10 },
+    projectGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+    projectCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      flexBasis: 280,
+      flexGrow: 1,
+      minWidth: 240,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: t.border,
+      backgroundColor: t.cardBg,
+      paddingRight: 4,
+    },
+    projectCardMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, minWidth: 0 },
+    projectCardText: { flex: 1, minWidth: 0 },
+    projectCardTitle: { fontFamily: Poppins.bold, fontSize: 14, color: t.textPrimary },
+    projectCardMeta: { fontFamily: SpaceGrotesk.regular, fontSize: 12, color: t.textMuted },
+    projectCardDelete: { padding: 8 },
     recordingsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
     recordingsGridItem: { flexBasis: 320, flexGrow: 1, minWidth: 280 },
     startAndUpload: { gap: 10 },

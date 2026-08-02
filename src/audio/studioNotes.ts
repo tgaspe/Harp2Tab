@@ -48,7 +48,71 @@ export function trackToTabNotes(track: MidiTrackData): TabNote[] {
     start_time:  Math.max(0, Math.round(note.timeMs)),
     confidence:  100,
     breathForce: note.velocity,
+    // Carried so playback can voice the track; the piano roll ignores it entirely.
+    program:     track.program,
   }));
+}
+
+export interface BackgroundLane {
+  id:    string;
+  color: string;
+  notes: readonly TabNote[];
+}
+
+export interface BackgroundBlock {
+  key:   string;
+  left:  number;
+  top:   number;
+  width: number;
+  color: string;
+}
+
+export interface LaneWindow {
+  visibleStartMs:  number;
+  visibleEndMs:    number;
+  firstVisibleRow: number;
+  lastVisibleRow:  number;
+  pxPerSecond:     number;
+  rowHeight:       number;
+}
+
+/**
+ * Lay out the inert background lanes, culled on both axes.
+ *
+ * Pure and outside the component on purpose: this is the loop whose cost decides whether a
+ * twelve-track orchestral file is usable, since a project has far more background notes
+ * than foreground ones. Keeping it here means it can be measured directly rather than
+ * inferred from how the UI feels.
+ *
+ * `rowIndexByNote` is passed in rather than rebuilt per call — it depends only on the row
+ * ladder, which changes far less often than the scroll position.
+ */
+export function layoutBackgroundLanes(
+  lanes: readonly BackgroundLane[] | undefined,
+  rowIndexByNote: ReadonlyMap<string, number>,
+  window: LaneWindow,
+): BackgroundBlock[] {
+  if (!lanes?.length) return [];
+  const { visibleStartMs, visibleEndMs, firstVisibleRow, lastVisibleRow, pxPerSecond, rowHeight } = window;
+
+  const blocks: BackgroundBlock[] = [];
+  for (const lane of lanes) {
+    for (const note of lane.notes) {
+      // Time first: it rejects the most notes for the least work, since a viewport spans a
+      // few seconds of a piece that runs for minutes.
+      if (note.start_time + note.duration < visibleStartMs || note.start_time > visibleEndMs) continue;
+      const rowIndex = rowIndexByNote.get(note.note);
+      if (rowIndex === undefined || rowIndex < firstVisibleRow || rowIndex > lastVisibleRow) continue;
+      blocks.push({
+        key:   `${lane.id}:${note.id}`,
+        left:  (note.start_time / 1000) * pxPerSecond,
+        top:   rowIndex * rowHeight,
+        width: Math.max(3, (note.duration / 1000) * pxPerSecond),
+        color: lane.color,
+      });
+    }
+  }
+  return blocks;
 }
 
 /** Apply a piano-roll edit back onto a track's notes. Returns the same array reference when

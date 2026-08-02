@@ -25,6 +25,10 @@ export interface TabNote {
    *  sessions derive it from `RawFrame.rms` normalised against the mic calibration; MIDI
    *  supplies it directly. */
   breathForce?: number;
+  /** General MIDI program, as a *playback* hint only — it never affects tabs. Set when the
+   *  Studio hands a multi-track project to the scheduler, so a flute and a cello don't
+   *  arrive as the same tone; absent for a tab session, which is one harmonica. */
+  program?: number;
 }
 
 /** A single raw pitch/loudness sample from the capture pipeline, retained for Frame

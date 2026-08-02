@@ -108,6 +108,22 @@ export function convertTrackToRecording(
   };
 }
 
+/**
+ * Convert every track that can be converted, for a multi-track export.
+ *
+ * Each part keeps its *own* key and octave fit rather than sharing one — the same reason
+ * conversion is per-track everywhere else, and the reason the export formats carry a key
+ * per part. Tracks with nothing playable are skipped rather than emitted empty.
+ */
+export function convertAllTracks(
+  project: Pick<MidiProject, 'id' | 'title' | 'tempos'> & { tracks: MidiTrackData[] },
+  options: ConvertOptions = {},
+): ConversionResult[] {
+  return project.tracks
+    .map((track) => convertTrackToRecording(project, track, options))
+    .filter((result): result is ConversionResult => result !== null);
+}
+
 /** Re-run a conversion from the tab's recorded source. Returns null if the project or
  *  track is gone — a dangling reference is an expected state, not an error. */
 export function reconvertFromSource(

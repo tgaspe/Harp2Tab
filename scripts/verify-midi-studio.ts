@@ -29,6 +29,9 @@ import {
   trackToTabNotes,
 } from '../src/audio/studioNotes';
 import { audibleTracks } from '../src/audio/studioTracks';
+import { breathScaleFor, withBreathForce } from '../src/audio/breathForce';
+import { voiceForProgram, velocityGain } from '../src/audio/timbre';
+import type { TabNote } from '../src/types';
 import { hasSmfHeader, readSmf, writeSmf } from '../src/audio/smf';
 import {
   barToMs,
@@ -773,6 +776,122 @@ function soloMuteResolution(): void {
   );
 }
 
+// ── Breath force + timbre ─────────────────────────────────────────────────────
+
+/** Mic RMS is not breath force — it has to be normalised against the take's own range,
+ *  or the lane shows how close the microphone was. */
+function breathForceNormalisation(): void {
+  // A crescendo: three notes at rising loudness, plus frames between them.
+  const frames = [
+    ...Array.from({ length: 10 }, (_, i) => ({ frequency: 440, rms: 0.02, t: i * 20 })),
+    ...Array.from({ length: 10 }, (_, i) => ({ frequency: 440, rms: 0.10, t: 400 + i * 20 })),
+    ...Array.from({ length: 10 }, (_, i) => ({ frequency: 440, rms: 0.20, t: 800 + i * 20 })),
+  ];
+  const notes: Omit<TabNote, 'id'>[] = [
+    { tab: '4', note: 'C5', start_time: 0,   duration: 190, confidence: 100 },
+    { tab: '5', note: 'E5', start_time: 400, duration: 190, confidence: 100 },
+    { tab: '6', note: 'G5', start_time: 800, duration: 190, confidence: 100 },
+  ];
+
+  const annotated = withBreathForce(notes, frames);
+  const forces = annotated.map((n) => n.breathForce ?? -1);
+
+  check(
+    'breath force rises with a crescendo and spans the take\'s range',
+    forces[0] < forces[1] && forces[1] < forces[2] && forces[0] >= 0 && forces[2] <= 127,
+    `${forces.join(' → ')}`,
+  );
+
+  // A recording at one constant level has no dynamics to report. Inventing a full range
+  // from its noise floor would be worse than saying nothing.
+  const flat = Array.from({ length: 30 }, (_, i) => ({ frequency: 440, rms: 0.1, t: i * 20 }));
+  const flatAnnotated = withBreathForce(notes, flat);
+  check(
+    'a take with no dynamic variation is left unannotated rather than invented',
+    !breathScaleFor(flat).usable && flatAnnotated.every((n) => n.breathForce === undefined),
+    'no breath force assigned',
+  );
+
+  // Loudness is relative to the take, so doubling the gain on everything must not change
+  // the reported dynamics — that's the whole point of normalising.
+  const louder = frames.map((f) => ({ ...f, rms: f.rms * 4 }));
+  const louderForces = withBreathForce(notes, louder).map((n) => n.breathForce ?? -1);
+  check(
+    'recording the same performance louder reports the same breath force',
+    louderForces.join(',') === forces.join(','),
+    `${forces.join(',')} vs ${louderForces.join(',')}`,
+  );
+}
+
+/** Tracks have to be audibly distinguishable, which means different families getting
+ *  genuinely different voices rather than all collapsing to one default. */
+function timbreFamilies(): void {
+  const programs = [0, 19, 26, 33, 42, 57, 66, 73];   // piano…pipe, one per family
+  const voices = programs.map(voiceForProgram);
+  const distinct = new Set(voices.map((v) => `${v.type}:${v.attackSec}:${v.sustainLevel}`));
+
+  check(
+    'GM families map to genuinely different voices',
+    distinct.size >= 5,
+    `${distinct.size} distinct voices across ${programs.length} families`,
+  );
+
+  check(
+    'a struck instrument decays while a sustained one holds',
+    voiceForProgram(0).sustainLevel < voiceForProgram(19).sustainLevel,
+    `piano sustain ${voiceForProgram(0).sustainLevel}, organ ${voiceForProgram(19).sustainLevel}`,
+  );
+
+  check(
+    'an unstated program falls back to the plain tone the tab editor has always used',
+    voiceForProgram(undefined).type === 'sine' && velocityGain(undefined) === 1,
+    'unchanged for tab sessions',
+  );
+
+  check(
+    'velocity maps to gain monotonically across its range',
+    velocityGain(0) === 0 && velocityGain(127) === 1 && velocityGain(64) < velocityGain(100),
+    `0→${velocityGain(0)}, 64→${velocityGain(64).toFixed(2)}, 127→${velocityGain(127)}`,
+  );
+}
+
+/**
+ * Grid-line generation has to stay bounded by the *window*, not the piece.
+ *
+ * This is what makes the low end of the zoom range viable: at 3px/s a long project spans
+ * thousands of bars, and generating every subdivision across all of them would cost a View
+ * each for lines nobody can see.
+ */
+function gridLinesAreWindowed(): void {
+  const map = compileTempoMap(
+    [{ timeMs: 0, bpm: 120 }],
+    [{ timeMs: 0, numerator: 4, denominator: 4 }],
+  );
+
+  const sevenMinutes = 7 * 60 * 1000;
+  const whole = gridLines(map, 0, sevenMinutes, 16);
+  // A ~4s viewport at the same resolution.
+  const window = gridLines(map, 120_000, 124_000, 16);
+
+  check(
+    'windowed grid generation is bounded by the viewport, not the piece',
+    window.length < 100 && whole.length > 50 * window.length,
+    `${whole.length} lines for the whole piece vs ${window.length} for a 4s window`,
+  );
+
+  check(
+    'a windowed request still reports absolute bar numbers',
+    window.filter((l) => l.isBar).every((l) => (l.bar ?? 0) > 55),
+    `first bar in window: ${window.find((l) => l.isBar)?.bar}`,
+  );
+
+  check(
+    'an empty or inverted window yields nothing rather than throwing',
+    gridLines(map, 5000, 5000, 8).length === 0 && gridLines(map, 9000, 1000, 8).length === 0,
+    'no lines, as expected',
+  );
+}
+
 function main(): void {
   constantTempoMatchesScalar();
   tempoChangeKeepsBarsAligned();
@@ -793,6 +912,9 @@ function main(): void {
   perTrackOctaveFit();
   reconvertFromSourceCase();
   soloMuteResolution();
+  breathForceNormalisation();
+  timbreFamilies();
+  gridLinesAreWindowed();
 
   projectRoundTrip();
   projectSurvivesMissingSidecar();

@@ -15,15 +15,71 @@
 > - [ ] Phase 8 — Better monetization + remaining web billing
 > - [ ] Phase 9 — iOS version
 > - [ ] Phase 10 — Improve web UI polish
-> - [~] Phase 11 — MIDI Studio (multi-track DAW) — the largest remaining phase; depends on
->       nothing in 7–10 and can be built before or in parallel with them.
->       **11-1, 11-2, 11-3, 11-5 implemented; 11-4 partial**
->       (`scripts/verify-midi-studio.ts`, 53 cases). The end-to-end path works:
->       import MIDI → "Open in Studio" → pick a track → Convert to tabs → Edit.
->       Still open in 11-4: per-track GM instrument *selection* (the panel shows the
->       instrument but can't change it), GM-family timbre mapping in the web scheduler
->       (still one sine for every track), and the orchestral-file perf spike.
->       11-6…11-10 not started.
+> - [x] Phase 11 — MIDI Studio (multi-track DAW), except the SoundFont sound module
+>       (11-6), which is blocked on a product decision — see below.
+>       Harnesses: `verify-midi-studio.ts` (65 cases), `verify-export.ts` (16),
+>       `perf-studio-lanes.ts` (the 11-4 spike). Existing suites still green.
+>
+> **Phase 11 — what shipped, against what was planned**
+> - 11-1…11-5, 11-8…11-10 complete. End-to-end: import MIDI → Open in Studio → edit →
+>   Convert to tabs → Edit, plus blank projects, quantize, multi-track export.
+> - **11-7 (arrange view) was built and then removed at the user's request** — the toggle
+>   was judged not to earn its place, and with it gone the view was unreachable, so
+>   `ArrangeView.tsx` and `arrangeGaps.ts` were deleted rather than left as dead code. The
+>   handoff case it addressed is still visible in the roll itself: other tracks render as
+>   background lanes behind the one being edited.
+> - **11-6 was largely already built and I missed it.** `PianoRoll` has had a
+>   **Breath Force / Duration / Confidence / Pitch Bend** data panel since Phase 4
+>   (`metricTab`, `PianoRoll.tsx:431` at the pre-Phase-11 commit). I built a second
+>   `ControlLane`/`LaneSpec` strip and stacked it under the existing one, so the Studio
+>   rendered "Breath force" three times. **`ControlLane.tsx` has been deleted.** What
+>   survives from 11-6 is the part that genuinely didn't exist and feeds the panel that
+>   does: `timbre.ts` (GM voices, so tracks are audibly distinct) and `breathForce.ts`
+>   (RMS → breath force, normalised against the take's own range).
+>   **SoundFont** still hasn't shipped, and is blocked on a decision rather than effort:
+>   which soundfont (they carry real and differing licences), and bundled vs. fetched on
+>   demand (tens of MB against a network dependency and a CSP question).
+> - **The Studio is the editor's screen with the track panel swapped in — not a new one.**
+>   The first version treated it as a fresh screen that merely embedded `PianoRoll`, so it
+>   inherited none of `edit.tsx`'s chrome and re-solved solved problems. Reworked to import
+>   the editor's own `WebTransportBar` (loop / tempo / metronome / skip / stop / play-pause
+>   / rate / time — it previously had a single "Play" text button) and to leave the piano
+>   roll's own data panel alone. Rule for anything added here later: **reuse the editor's
+>   components; the Studio only adds tracks and conversion.**
+> - **The Studio has no chrome row of its own**, by request. The project title rides in the
+>   piano roll's tool row via `headerLeft` (exactly where the editor puts its chart title),
+>   Export is parked in the global `TopBar` through `useHeaderActionStore`, and the
+>   Harp2Tab logo is the way back to the library — it already is on every other screen.
+>   `useHeaderActionStore` is a one-slot register for this: `TopBar` renders in the root
+>   layout, outside any screen's tree, so a screen can't hand it a callback directly. It
+>   generalises the trick the editor already uses to drive its List/Piano-Roll toggle from
+>   there. Screens must clear the slot on unmount or the button follows them.
+> - The track panel collapses to a 44px colour rail, mirroring the editor's icon sidebar.
+> - **Deviations worth recording:**
+>   - The arrange view must stay height-capped (`MAX_PANEL_HEIGHT`) and internally
+>     scrollable, and defaults to collapsed. Uncapped, a 29-track project rendered ~700px
+>     of lanes inside a fixed-height flex column and squeezed the piano roll to zero — the
+>     editor simply vanished. It is an overview above the editor, never a replacement.
+>   - The Studio opens on `mostMelodicTrack`, not `tracks[0]`. Real files routinely lead
+>     with a note-less conductor or marker track, which opened the editor blank at the top
+>     of a 128-row ladder.
+>   - `PianoRoll`'s bulk edit paths (quantize, duplicate, paste, group move, arrow nudge)
+>     reached into `useAppStore` directly while single-note paths went through `onUpdate`.
+>     Invisible while the tab editor was the only caller, wrong the moment the Studio
+>     appeared — a Studio quantize would have edited the tab session. Now routed through
+>     `onUpdateMany`/`onCreateMany` props that default to the old store calls.
+>   - Studio notes needed identity the data model doesn't have (SMF doesn't identify notes).
+>     Resolved as *positional* ids in `studioNotes.ts` rather than a per-note persisted id.
+>   - The perf spike ran headlessly (`perf-studio-lanes.ts`) rather than in a browser, and
+>     forced the lane layout out of the component into `studioNotes.layoutBackgroundLanes`.
+>     12 tracks / 5,400 notes: worst 1.24ms per frame against a 16.7ms budget, blocks per
+>     frame bounded at 581. It also confirmed the SMF-persistence decision — 64 KB against
+>     309 KB as raw JSON. It measures layout, not React reconciliation or paint.
+>   - The arrange view's gap detection was initially written as "selected idle AND another
+>     sounding", which the harness caught: an accompanying track's own rests shredded one
+>     long handoff into sub-second fragments that the length filter then discarded, so the
+>     handoff vanished entirely. Rewritten to define the gap by the selected track's
+>     silence, then test overlap exactly.
 >
 > The phase write-ups below are left as originally planned/approved (before implementation) —
 > they're the design record, not a changelog. Notable deviations from the original plan that

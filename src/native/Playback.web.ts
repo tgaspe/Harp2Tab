@@ -1,5 +1,6 @@
 import { noteNameToFrequency } from '@/audio/synthesizeWav';
 import { constantTempoMap, gridLines, type PlaybackOptions } from '@/audio/tempo';
+import { velocityGain, voiceForProgram } from '@/audio/timbre';
 import type { TabNote } from '@/types';
 
 // Web gets real-time OscillatorNode scheduling — no pre-render/file-write round-trip
@@ -72,15 +73,28 @@ export async function playNotes(notes: TabNote[], options?: PlaybackOptions, sta
     const durSec    = (noteEnd - effectiveStart) / 1000 / rate;
     const fadeSec   = Math.min(0.01, durSec / 4);
 
+    const voice = voiceForProgram(n.program);
+    // Breath force is the note's dynamics — a tab session leaves it unset and every note
+    // plays at full level, exactly as before.
+    const peak  = AMPLITUDE * voice.gain * velocityGain(n.breathForce);
+
     const osc  = ctx.createOscillator();
     const gain = ctx.createGain();
-    osc.type = 'sine';
+    osc.type = voice.type;
     osc.frequency.value = freq;
 
-    // Short fade in/out avoids audible clicks at note boundaries.
+    // ADSR, clamped so a short note still gets a complete envelope rather than an attack
+    // that outlasts it. The trailing ramp to zero doubles as the click-free fade the plain
+    // sine used to do by hand.
+    const attack  = Math.min(voice.attackSec, durSec * 0.4);
+    const decay   = Math.min(voice.decaySec, Math.max(0, durSec - attack) * 0.6);
+    const release = Math.min(voice.releaseSec, Math.max(fadeSec, durSec - attack - decay));
+    const sustainPeak = peak * voice.sustainLevel;
+
     gain.gain.setValueAtTime(0, startSec);
-    gain.gain.linearRampToValueAtTime(AMPLITUDE, startSec + fadeSec);
-    gain.gain.setValueAtTime(AMPLITUDE, startSec + durSec - fadeSec);
+    gain.gain.linearRampToValueAtTime(peak, startSec + attack);
+    if (decay > 0) gain.gain.linearRampToValueAtTime(sustainPeak, startSec + attack + decay);
+    gain.gain.setValueAtTime(sustainPeak, startSec + Math.max(attack + decay, durSec - release));
     gain.gain.linearRampToValueAtTime(0, startSec + durSec);
 
     osc.connect(gain);

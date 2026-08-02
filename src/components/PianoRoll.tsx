@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Modal,
   NativeScrollEvent,
@@ -16,11 +16,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/hooks/useTheme';
 import { getGridRows, type GridRow } from '@/audio/HarmonicaMapper';
 import { getFrames } from '@/audio/frameBuffer';
+import { layoutBackgroundLanes } from '@/audio/studioNotes';
 import { selectRecordingId, useAppStore } from '@/store/useAppStore';
 import { selectRecordings, useRecordingsStore } from '@/store/useRecordingsStore';
 import {
   constantTempoMap, gridLines, msToBarInMap, snapMsToGridInMap,
-  type SnapDivision, type TempoMap,
+  type GridLine, type SnapDivision, type TempoMap,
 } from '@/audio/tempo';
 import { FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
@@ -28,14 +29,30 @@ import { WEB_CONTENT_WIDTH } from '@/constants/layout';
 import type { Theme } from '@/theme';
 import type { HarmonicaKey, HarmonicaType, TabNote } from '@/types';
 
+/**
+ * Default pitch-row height, and what the tab editor uses.
+ *
+ * Overridable per host (`rowHeight` prop) rather than fixed, because the two stages have
+ * very different ladders: the editor draws ~40 harmonica rows and wants them comfortable,
+ * while the Studio draws the full 128-semitone chromatic range, where 28px means only a
+ * couple of octaves are ever on screen.
+ */
 const ROW_HEIGHT       = 28;
 // Wide enough for the rail's content plus a gutter on both sides. The cells' fixed
 // columns come to 85px (swatch 6+6, sign 7, number 14, modifier 20, note 28+4), so at the
 // old 88 they overflowed their own 8px right padding and sat flush against the left edge
 // with nothing to spare — 85 + 10 left + 8 right = 103.
 const LABEL_WIDTH       = 104;
+// The zoom pill reads `pxPerSecond / DEFAULT_PX_PER_SECOND`, so the default is 100% and
+// the floor below is the smallest percentage reachable. 0% can't exist — it would mean
+// zero pixels per second, i.e. the whole piece collapsed to no width at all.
 const DEFAULT_PX_PER_SECOND = 90;
-const MIN_PX_PER_SECOND     = 20;
+// 20px/s (22%) was fine when a session was a harmonica take of a minute or two, but it
+// can't fit a Studio arrangement: a five-minute project is 6000px at that floor, so most
+// of it stays off-screen no matter how far out you zoom. 3px/s (3%) fits ~7 minutes in a
+// 1200px viewport. Going this low is only viable because the grid tiers now thin out with
+// zoom and the lines are culled to the viewport — see BeatGridLines.
+const MIN_PX_PER_SECOND     = 3;
 const MAX_PX_PER_SECOND     = 400;
 const ZOOM_BUTTON_STEP      = 1.3; // multiplicative step per +/- tap, matching Frame Inspector's convention
 // Breathing room left to the right of the last note when fitting the chart to the
@@ -154,8 +171,18 @@ function mixHex(hex: string, base: string, alpha: number): string {
  *  the white light-mode grid it darkens the fill (a 0.78 mix left the yellow block's edge
  *  at 2.5:1 and the block dissolved into the page); on the near-black dark grid the fill
  *  is already high-contrast, so the edge only needs to lift slightly to define the shape. */
-function techniqueSkin(tab: string, isDark: boolean) {
-  const fill = techniqueColor(tab);
+/**
+ * A note block's fill, edge and label colours.
+ *
+ * `override` exists for the MIDI Studio, where colour means something different. In the tab
+ * editor a note's colour is its *technique* — blow, draw, bend depth, overblow — read off
+ * the tab string. The Studio has no harmonica yet, so every note's tab is empty, which
+ * classifies as 'unplayable' and paints the whole grid zinc grey: technically consistent,
+ * completely uninformative. There, colour identifies the *track* instead, matching the
+ * track panel and the background lanes.
+ */
+function techniqueSkin(tab: string, isDark: boolean, override?: string) {
+  const fill = override ?? techniqueColor(tab);
   return {
     fill,
     label: labelOn(fill),
@@ -167,6 +194,21 @@ function techniqueSkin(tab: string, isDark: boolean) {
 // name instead, so the block never renders blank.
 function noteBlockLabel(note: TabNote): string {
   return note.tab || note.note;
+}
+
+/**
+ * Horizontal inset for a note's label, tightening as the block narrows.
+ *
+ * A block bottoms out at 14px wide, and a fixed 6px each side left ~2px of text area —
+ * so the label didn't shrink or truncate, it simply vanished, and only reappeared once
+ * the zoom made blocks wide enough. Wide blocks keep the comfortable inset; narrow ones
+ * give the text nearly the whole block and let it clip at the edges, which is far more
+ * legible than showing nothing at all.
+ */
+function labelInsetFor(widthPx: number): number {
+  if (widthPx >= 34) return 6;
+  if (widthPx >= 22) return 3;
+  return 1;
 }
 
 // Below this, a note's detection is shaky enough to be worth flagging (dashed edge).
@@ -316,11 +358,14 @@ function ToolButton({
 // purpose, and a vivid hue used as small text fails contrast badly (yellow on white
 // measures ~1.5:1); a swatch is a graphical mark, so it carries the same legend role
 // safely, and the tooltip is what names the color.
-function LabelRailCell({ row, top, isOctaveBoundary, styles }: {
+function LabelRailCell({ row, top, height, swatchColor, isOctaveBoundary, styles }: {
   row: GridRow;
-  /** Absolute offset in the rail — the cell's own row index times ROW_HEIGHT. Positioned
-   *  rather than laid out in flow so off-screen cells can be culled. */
+  /** Absolute offset in the rail — the cell's own row index times the row height.
+   *  Positioned rather than laid out in flow so off-screen cells can be culled. */
   top: number;
+  height: number;
+  /** Set when note colour is overridden — see `techniqueSkin`. */
+  swatchColor?: string;
   isOctaveBoundary: boolean;
   styles: ReturnType<typeof createStyles>;
 }) {
@@ -330,7 +375,7 @@ function LabelRailCell({ row, top, isOctaveBoundary, styles }: {
     <View
       style={[
         styles.labelCell,
-        { position: 'absolute', top, left: 0, right: 0 },
+        { position: 'absolute', top, left: 0, right: 0, height },
         !isNaturalNote(row.note) && styles.rowStripeAlt,
         isOctaveBoundary && styles.octaveBoundary,
         !row.playable && styles.rowUnplayable,
@@ -341,7 +386,7 @@ function LabelRailCell({ row, top, isOctaveBoundary, styles }: {
         : null)}
     >
       {row.playable ? (
-        <View style={[styles.labelSwatch, { backgroundColor: techniqueColor(row.tab) }]} />
+        <View style={[styles.labelSwatch, { backgroundColor: swatchColor ?? techniqueColor(row.tab) }]} />
       ) : (
         // An unplayable row's tab columns are all empty strings, which left a blank cell
         // that read as a rendering gap rather than "no position for this pitch".
@@ -377,11 +422,31 @@ interface PianoRollProps {
   /** Overrides the harmonica-derived pitch axis. The Studio passes `getChromaticRows()`;
    *  the tab editor passes nothing and keeps deriving rows from its key and type. */
   rows?:          GridRow[];
+  /** Pitch-row height in px. Defaults to `ROW_HEIGHT`; the Studio passes something
+   *  shorter so more of the 128-row chromatic ladder fits on screen at once. */
+  rowHeight?:     number;
+  /** Overrides the technique-derived note colour. The Studio passes the active track's
+   *  colour, since technique is a harmonica idea and there's no harmonica at that stage. */
+  noteColor?:     string;
   /** Tracks other than the one being edited, drawn behind it and completely inert. Keeping
    *  them non-interactive is a hard requirement, not a simplification: interactivity here
    *  means a gesture-handler instance per note, which is what the note culling below exists
    *  to limit in the first place. */
   backgroundLanes?: { id: string; color: string; notes: TabNote[] }[];
+  /**
+   * Bulk edits — quantize, duplicate, paste, group move, arrow-key nudge.
+   *
+   * These exist as props because the bulk paths used to reach into `useAppStore` directly
+   * while the single-note paths went through `onUpdate`/`onCreate`. That split was
+   * invisible while the tab editor was the only caller and silently wrong the moment a
+   * second one appeared: in the Studio, a quantize would have edited the tab session
+   * instead of the open project. Omitted by the tab editor, which keeps the store calls.
+   */
+  onUpdateMany?: (updates: { id: string; changes: NoteUpdate }[]) => void;
+  onCreateMany?: (notes: Omit<TabNote, 'id'>[]) => void;
+  /** Notes as they exist *after* a create — used to select what was just made. The tab
+   *  editor reads this back off its store; the Studio passes its own array. */
+  readNotesAfterWrite?: () => TabNote[];
   selectedId:     string | null;
   onSelect:       (id: string) => void;
   onCreate:       (note: Omit<TabNote, 'id'>) => void;
@@ -401,7 +466,8 @@ interface PianoRollProps {
 }
 
 export function PianoRoll({
-  notes, harmonicaKey, harmonicaType, bpm, tempoMap, rows, backgroundLanes, selectedId, onSelect, onCreate, onUpdate, onDelete, isPlaying, currentTimeMs, onSeek,
+  notes, harmonicaKey, harmonicaType, bpm, tempoMap, rows, rowHeight, noteColor, backgroundLanes,
+  onUpdateMany, onCreateMany, readNotesAfterWrite, selectedId, onSelect, onCreate, onUpdate, onDelete, isPlaying, currentTimeMs, onSeek,
   loopRegion, onLoopRegionChange, headerLeft,
 }: PianoRollProps) {
   const theme  = useTheme();
@@ -409,7 +475,30 @@ export function PianoRoll({
 
   // Compiling is a small cost but not a free one, and this feeds every snap and every grid
   // line — memoized so a re-render for an unrelated reason doesn't rebuild it.
+  const rowH = rowHeight ?? ROW_HEIGHT;
+  // Gap above and below a background-lane block, as a share of the row.
+  const backgroundInset = Math.max(1, Math.round(rowH * 0.18));
+
   const map = useMemo(() => tempoMap ?? constantTempoMap(bpm), [tempoMap, bpm]);
+
+  // One place each for the bulk operations, so no call site below reaches into a store
+  // directly. Defaults preserve the tab editor's existing behaviour exactly.
+  const applyMany = useCallback((updates: { id: string; changes: NoteUpdate }[]) => {
+    if (updates.length === 0) return;
+    if (onUpdateMany) onUpdateMany(updates);
+    else useAppStore.getState().updateNotes(updates);
+  }, [onUpdateMany]);
+
+  const createMany = useCallback((created: Omit<TabNote, 'id'>[]) => {
+    if (created.length === 0) return;
+    if (onCreateMany) onCreateMany(created);
+    else useAppStore.getState().addTabNotes(created);
+  }, [onCreateMany]);
+
+  const notesAfterWrite = useCallback(
+    () => (readNotesAfterWrite ? readNotesAfterWrite() : useAppStore.getState().tabNotes),
+    [readNotesAfterWrite],
+  );
 
   // Two separate ideas that used to be crammed into one cycling control: `snapEnabled` is
   // just on/off — whether placing/moving/dragging a note quantizes to the grid at all, or
@@ -557,13 +646,32 @@ export function PianoRoll({
   const selectionCount = mouseMode === 'pencil' ? (selectedId ? 1 : 0) : selectedIds.length;
   const hasSelection = selectionCount > 0;
 
-  const totalMs = notes.length ? notes.reduce((max, n) => Math.max(max, n.start_time + n.duration), 0) : 0;
+  /**
+   * How far the content runs — across *every* lane, not just the editable one.
+   *
+   * The bar ruler, the grid lines and the scrollable width are all sized from this. Taking
+   * it from the selected track alone (which is what it did while the tab editor was the
+   * only caller, where there is nothing else) meant that in the Studio a short selected
+   * track truncated the whole grid: longer background tracks kept drawing notes past the
+   * end of the content width, with no bar lines under them and the tail clipped off.
+   */
+  const editableTotalMs = useMemo(
+    () => notes.reduce((max, n) => Math.max(max, n.start_time + n.duration), 0),
+    [notes],
+  );
+  const totalMs = useMemo(() => {
+    let end = editableTotalMs;
+    for (const lane of backgroundLanes ?? []) {
+      for (const n of lane.notes) end = Math.max(end, n.start_time + n.duration);
+    }
+    return end;
+  }, [editableTotalMs, backgroundLanes]);
   // Floor gridWidth to the actual available viewport, not just a fixed 600 — otherwise a
   // short recording leaves a huge blank gap (no rows, no lines) to the right on a wide
   // screen, since the scrollable content would be narrower than the screen itself.
   const dataWidth  = (totalMs / 1000) * pxPerSecond + 120;
   const gridWidth  = Math.max(viewportWidth || 600, dataWidth);
-  const gridHeight = positions.length * ROW_HEIGHT;
+  const gridHeight = positions.length * rowH;
 
   // Only mount note blocks (and their gesture detectors) for notes actually near the
   // visible time window — with real gesture-handler instances per note, mounting all of
@@ -584,11 +692,11 @@ export function PianoRoll({
   const CULL_MARGIN_ROWS = 4;
   const firstVisibleRow = Math.max(
     0,
-    Math.floor(scrollY / ROW_HEIGHT) - CULL_MARGIN_ROWS,
+    Math.floor(scrollY / rowH) - CULL_MARGIN_ROWS,
   );
   const lastVisibleRow = Math.min(
     positions.length - 1,
-    Math.ceil((scrollY + (gridViewportHeight || positions.length * ROW_HEIGHT)) / ROW_HEIGHT) + CULL_MARGIN_ROWS,
+    Math.ceil((scrollY + (gridViewportHeight || positions.length * rowH)) / rowH) + CULL_MARGIN_ROWS,
   );
   const visibleRows = useMemo(
     () => positions
@@ -608,28 +716,16 @@ export function PianoRoll({
     return index;
   }, [positions]);
 
-  // Culled on both axes before any View is created — an orchestral file has far more
-  // background notes than foreground ones, so this is the loop that has to stay cheap.
-  const backgroundNoteBlocks = useMemo(() => {
-    if (!backgroundLanes?.length) return [];
-    const blocks: { key: string; left: number; top: number; width: number; color: string }[] = [];
-
-    for (const lane of backgroundLanes) {
-      for (const note of lane.notes) {
-        if (note.start_time + note.duration < visibleStartMs || note.start_time > visibleEndMs) continue;
-        const rowIndex = rowIndexByNote.get(note.note);
-        if (rowIndex === undefined || rowIndex < firstVisibleRow || rowIndex > lastVisibleRow) continue;
-        blocks.push({
-          key:   `${lane.id}:${note.id}`,
-          left:  (note.start_time / 1000) * pxPerSecond,
-          top:   rowIndex * ROW_HEIGHT,
-          width: Math.max(3, (note.duration / 1000) * pxPerSecond),
-          color: lane.color,
-        });
-      }
-    }
-    return blocks;
-  }, [backgroundLanes, rowIndexByNote, visibleStartMs, visibleEndMs, firstVisibleRow, lastVisibleRow, pxPerSecond]);
+  // Culled on both axes before any View is created. The layout itself lives in
+  // `studioNotes` so it can be measured directly — it's the loop that decides whether a
+  // large multi-track project is usable.
+  const backgroundNoteBlocks = useMemo(
+    () => layoutBackgroundLanes(backgroundLanes, rowIndexByNote, {
+      visibleStartMs, visibleEndMs, firstVisibleRow, lastVisibleRow,
+      pxPerSecond, rowHeight: rowH,
+    }),
+    [backgroundLanes, rowIndexByNote, visibleStartMs, visibleEndMs, firstVisibleRow, lastVisibleRow, pxPerSecond],
+  );
 
   // Shared by the marquee hit-test and the group-selection bounding box — content-space
   // {left, top, width, height} for a note, or null if its pitch doesn't match any row
@@ -641,7 +737,7 @@ export function PianoRoll({
     if (rowIndex === -1) return null;
     const left = (note.start_time / 1000) * pxPerSecond;
     const width = Math.max(14, (note.duration / 1000) * pxPerSecond);
-    return { left, top: rowIndex * ROW_HEIGHT, width, height: ROW_HEIGHT };
+    return { left, top: rowIndex * rowH, width, height: rowH };
   }
 
   // Pencil tool: tapping empty grid background creates a note at the tapped time/row,
@@ -662,12 +758,12 @@ export function PianoRoll({
     });
     if (hit) { onSelect(hit.id); return; }
 
-    const rowIndex = Math.min(positions.length - 1, Math.max(0, Math.floor(y / ROW_HEIGHT)));
+    const rowIndex = Math.min(positions.length - 1, Math.max(0, Math.floor(y / rowH)));
     const pos = positions[rowIndex];
     const rawStart = Math.max(0, (x / pxPerSecond) * 1000);
     const start = snapMsToGridInMap(map, Math.round(rawStart), snapDivision);
     onCreate({ tab: pos.tab, note: pos.note, start_time: start, duration: DEFAULT_NEW_NOTE_DURATION_MS, confidence: 100 });
-    const updated = useAppStore.getState().tabNotes;
+    const updated = notesAfterWrite();
     const created = updated[updated.length - 1];
     if (created) onSelect(created.id);
   }
@@ -746,7 +842,7 @@ export function PianoRoll({
     const targets = getSelectionNotes();
     const applyTo = targets.length > 0 ? targets : notes;
     if (applyTo.length === 0) return;
-    useAppStore.getState().updateNotes(applyTo.map((n) => ({
+    applyMany(applyTo.map((n) => ({
       id: n.id,
       changes: { start_time: snapMsToGridInMap(map, n.start_time, snapSubdivision) },
     })));
@@ -778,8 +874,13 @@ export function PianoRoll({
   function fitToContent() {
     if (positions.length === 0) return;
 
-    if (totalMs > 0 && viewportWidth > 0) {
-      const target = ((viewportWidth - FIT_PADDING_PX) / totalMs) * 1000;
+    // Frames the track being *edited*, not the whole arrangement — otherwise selecting a
+    // four-bar part in a three-minute project zooms out until that part is a sliver.
+    // Falls back to the full extent when the selected track is empty, so there's still
+    // something meaningful on screen. The grid itself always spans every lane (`totalMs`).
+    const fitMs = editableTotalMs > 0 ? editableTotalMs : totalMs;
+    if (fitMs > 0 && viewportWidth > 0) {
+      const target = ((viewportWidth - FIT_PADDING_PX) / fitMs) * 1000;
       const newPx = Math.max(MIN_PX_PER_SECOND, Math.min(MAX_PX_PER_SECOND, target));
       setPxPerSecond(newPx);
       setScrollX(0);
@@ -793,8 +894,8 @@ export function PianoRoll({
       .map((n) => positions.findIndex((p) => p.note === n.note))
       .filter((i) => i >= 0);
     if (occupiedRows.length === 0 || gridViewportHeight === 0) return;
-    const centerPx = ((Math.min(...occupiedRows) + Math.max(...occupiedRows) + 1) / 2) * ROW_HEIGHT;
-    const maxY = Math.max(0, positions.length * ROW_HEIGHT - gridViewportHeight);
+    const centerPx = ((Math.min(...occupiedRows) + Math.max(...occupiedRows) + 1) / 2) * rowH;
+    const maxY = Math.max(0, positions.length * rowH - gridViewportHeight);
     vScrollRef.current?.scrollTo({
       y: Math.max(0, Math.min(maxY, centerPx - gridViewportHeight / 2)),
       animated: false,
@@ -847,12 +948,12 @@ export function PianoRoll({
   // store's array (addTabNotes only ever pushes, never reorders) rather than matching by
   // content, so two identical duplicated notes can't be confused with each other.
   function selectNewest(count: number) {
-    const updated = useAppStore.getState().tabNotes;
+    const updated = notesAfterWrite();
     const created = updated.slice(updated.length - count);
     if (mouseModeRef.current === 'pencil') {
       if (created[0]) onSelect(created[0].id);
     } else {
-      setSelectedIds(created.map((n) => n.id));
+      setSelectedIds(created.map((n: TabNote) => n.id));
     }
   }
 
@@ -863,7 +964,7 @@ export function PianoRoll({
   function handleDuplicate() {
     const targets = getSelectionNotes();
     if (targets.length === 0) return;
-    useAppStore.getState().addTabNotes(targets.map((n) => ({
+    createMany(targets.map((n) => ({
       tab: n.tab, note: n.note, confidence: 100,
       start_time: n.start_time + n.duration, duration: n.duration,
     })));
@@ -885,7 +986,7 @@ export function PianoRoll({
     const clip = clipboardRef.current;
     if (clip.length === 0) return;
     const anchor = currentTimeMsRef.current;
-    useAppStore.getState().addTabNotes(clip.map((c) => ({
+    createMany(clip.map((c) => ({
       tab: c.tab, note: c.note, duration: c.duration, confidence: 100,
       start_time: Math.max(0, anchor + c.offsetMs),
     })));
@@ -921,7 +1022,7 @@ export function PianoRoll({
       const p = positions[newRow];
       updates.push({ id: n.id, changes: { tab: p.tab, note: p.note } });
     }
-    if (updates.length > 0) useAppStore.getState().updateNotes(updates);
+    applyMany(updates);
     if (skipped > 0) {
       showToast(`${skipped} note${skipped !== 1 ? 's' : ''} couldn't move — already at the edge`);
     }
@@ -978,7 +1079,7 @@ export function PianoRoll({
             .map((sid) => notesRef.current.find((n) => n.id === sid))
             .filter((n): n is TabNote => n !== undefined)
             .map((n) => ({ id: n.id, changes: { start_time: Math.max(0, n.start_time + dtMs) } }));
-          if (updates.length > 0) useAppStore.getState().updateNotes(updates);
+          applyMany(updates);
           return;
         }
 
@@ -1521,7 +1622,14 @@ export function PianoRoll({
         <View style={styles.rulerClip}>
           <GestureDetector gesture={rulerTapGesture}>
             <View style={[styles.rulerContent, { width: gridWidth, transform: [{ translateX: -scrollX }] }]}>
-              <BarRuler map={map} durationMs={totalMs} pxPerSecond={pxPerSecond} theme={theme} />
+              <BarRuler
+                map={map}
+                durationMs={totalMs}
+                pxPerSecond={pxPerSecond}
+                theme={theme}
+                visibleStartMs={visibleStartMs}
+                visibleEndMs={visibleEndMs}
+              />
 
               {loopRegion && (
                 <Animated.View style={[styles.loopRegionBand, loopRegionAnimatedStyle]}>
@@ -1587,7 +1695,9 @@ export function PianoRoll({
                   // would otherwise collide as a React key.
                   key={p.note}
                   row={p}
-                  top={index * ROW_HEIGHT}
+                  top={index * rowH}
+                  height={rowH}
+                  swatchColor={noteColor}
                   isOctaveBoundary={next ? getOctave(p.note) !== getOctave(next.note) : false}
                   styles={styles}
                 />
@@ -1613,7 +1723,7 @@ export function PianoRoll({
                       pointerEvents="none"
                       style={[
                         styles.rowStripe,
-                        { top: index * ROW_HEIGHT, width: gridWidth },
+                        { top: index * rowH, width: gridWidth, height: rowH },
                         !isNaturalNote(p.note) && styles.rowStripeAlt,
                         isOctaveBoundary && styles.octaveBoundary,
                         !p.playable && styles.rowUnplayable,
@@ -1629,6 +1739,8 @@ export function PianoRoll({
                   height={gridHeight}
                   theme={theme}
                   snapSubdivision={snapSubdivision}
+                  visibleStartMs={visibleStartMs}
+                  visibleEndMs={visibleEndMs}
                 />
 
                 {/* Non-selected tracks: plain Views, no gesture handlers, no per-note
@@ -1642,10 +1754,13 @@ export function PianoRoll({
                     style={{
                       position: 'absolute',
                       left:   block.left,
-                      top:    block.top + 6,
+                      // Inset proportionally rather than by a fixed 6px, so a background
+                      // note stays a readable bar at any row height instead of thinning
+                      // to a hairline as the rows shorten.
+                      top:    block.top + backgroundInset,
                       width:  block.width,
-                      height: ROW_HEIGHT - 12,
-                      borderRadius: 3,
+                      height: Math.max(3, rowH - backgroundInset * 2),
+                      borderRadius: 2,
                       backgroundColor: block.color,
                       opacity: 0.32,
                     }}
@@ -1667,6 +1782,8 @@ export function PianoRoll({
                       positions={positions}
                       map={map}
                       pxPerSecond={pxPerSecond}
+                      rowHeight={rowH}
+                      noteColor={noteColor}
                       snapDivision={snapDivision}
                       interactive={mouseMode === 'pencil'}
                       isSelected={mouseMode === 'pencil' ? selectedId === note.id : selectedIds.includes(note.id)}
@@ -1695,7 +1812,10 @@ export function PianoRoll({
                     positions={positions}
                     map={map}
                     pxPerSecond={pxPerSecond}
+                    rowHeight={rowH}
+                    noteColor={noteColor}
                     snapDivision={snapDivision}
+                    applyMany={applyMany}
                     styles={styles}
                   />
                 )}
@@ -1924,16 +2044,22 @@ function HelpModal({ visible, onClose, theme, styles }: {
 
 // ─── Bar ruler ─────────────────────────────────────────────────────────────────
 
-function BarRuler({ map, durationMs, pxPerSecond, theme }: {
+function BarRuler({ map, durationMs, pxPerSecond, theme, visibleStartMs, visibleEndMs }: {
   map: TempoMap; durationMs: number; pxPerSecond: number; theme: Theme;
+  visibleStartMs: number; visibleEndMs: number;
 }) {
   // Bars are asked for rather than computed from a bar length, because with a tempo or
   // meter map there is no single bar length: each bar's width and position depend on
   // what's in force where it sits.
+  //
+  // Windowed for the same reason the gridlines are: at the low end of the zoom range a
+  // long project has thousands of bars, and a ruler that builds all of them is paying for
+  // labels nobody can see.
+  const from = Math.max(0, visibleStartMs);
+  const to   = Math.min(durationMs + 8000, visibleEndMs);
   const bars = useMemo(
-    // A few bars past the end so the ruler doesn't stop short of the scrollable area.
-    () => gridLines(map, 0, durationMs + 8000, 4).filter((l) => l.isBar),
-    [map, durationMs],
+    () => gridLines(map, from, to, 4).filter((l) => l.isBar),
+    [map, from, to],
   );
 
   // Label density is driven by the narrowest bar on screen, so a ritardando that stretches
@@ -1951,8 +2077,11 @@ function BarRuler({ map, durationMs, pxPerSecond, theme }: {
 
   return (
     <>
-      {bars.map((line, i) => (
-        i % tickEvery !== 0 ? null : (
+      {bars.map((line) => (
+        // Anchored to the absolute bar number, not the index within the visible slice —
+        // otherwise which bars carry a label changes as you scroll, and the ruler appears
+        // to shuffle itself.
+        ((line.bar ?? 1) - 1) % tickEvery !== 0 ? null : (
           <View
             key={line.bar}
             style={{ position: 'absolute', left: (line.ms / 1000) * pxPerSecond, top: 0, bottom: 0 }}
@@ -1975,21 +2104,52 @@ function BarRuler({ map, durationMs, pxPerSecond, theme }: {
 // Draws lines for the current subdivision regardless of whether the Snap toggle is on —
 // the grid is a visual reference either way, matching how DAWs keep the grid visible even
 // with "snap to grid" switched off.
-function BeatGridLines({ map, durationMs, pxPerSecond, height, theme, snapSubdivision }: {
+/** Closest two gridlines may sit before the tier is dropped. Below this they stop reading
+ *  as a grid and become a grey wash — and cost a View each for the privilege. */
+const MIN_GRID_SPACING_PX = 7;
+
+function BeatGridLines({
+  map, durationMs, pxPerSecond, height, theme, snapSubdivision, visibleStartMs, visibleEndMs,
+}: {
   map: TempoMap; durationMs: number; pxPerSecond: number; height: number; theme: Theme;
   snapSubdivision: Exclude<SnapDivision, 'off'>;
+  visibleStartMs: number; visibleEndMs: number;
 }) {
+  // Only the visible window, and only as far as there's content. Generating the whole
+  // timeline was survivable at 20px/s and is not at 3px/s: a seven-minute project at 1/16
+  // is ~6,700 subdivisions, every one of them a View, none of them on screen.
+  const from = Math.max(0, visibleStartMs);
+  const to   = Math.min(durationMs + 8000, visibleEndMs);
+
   // One walk produces all three tiers already classified, so the "is this subdivision also
   // a beat?" test is an index check inside `gridLines` rather than the modulo-on-pixels
   // approximation this used to do (which drifted at fractional pixel spacings).
   const all = useMemo(
-    () => gridLines(map, 0, durationMs + 8000, snapSubdivision),
-    [map, durationMs, snapSubdivision],
+    () => gridLines(map, from, to, snapSubdivision),
+    [map, from, to, snapSubdivision],
   );
 
-  const subdivisionLines = all.filter((l) => !l.isBeat).map((l) => (l.ms / 1000) * pxPerSecond);
-  const lines = all
-    .filter((l) => l.isBeat)
+  // Thin the tiers out as the view zooms out, rather than drawing every line at every
+  // zoom. Measured off what actually came back, so it stays right across a tempo change
+  // where the spacing isn't uniform.
+  const spacingPx = (a: GridLine, b: GridLine) => ((b.ms - a.ms) / 1000) * pxPerSecond;
+  const minSpacing = (list: GridLine[]) => list.reduce(
+    (min, line, i) => (i === 0 ? min : Math.min(min, spacingPx(list[i - 1], line))),
+    Infinity,
+  );
+
+  const beats = all.filter((l) => l.isBeat);
+  const bars  = all.filter((l) => l.isBar);
+
+  const showSubdivisions = minSpacing(all)   >= MIN_GRID_SPACING_PX;
+  const showBeats        = minSpacing(beats) >= MIN_GRID_SPACING_PX;
+
+  const subdivisionLines = showSubdivisions
+    ? all.filter((l) => !l.isBeat).map((l) => (l.ms / 1000) * pxPerSecond)
+    : [];
+  // Bars are the last tier standing: zoomed all the way out you still want to know where
+  // you are in the piece, and they're the only thing that answers that.
+  const lines = (showBeats ? beats : bars)
     .map((l) => ({ x: (l.ms / 1000) * pxPerSecond, isBar: l.isBar }));
 
   return (
@@ -2159,6 +2319,8 @@ interface NoteBlockProps {
   positions:    GridRow[];
   map:          TempoMap;
   pxPerSecond:  number;
+  rowHeight:    number;
+  noteColor?:   string;
   snapDivision: SnapDivision;
   isSelected:   boolean;
   // False while the Selection tool is active — the note renders as a static visual only,
@@ -2172,7 +2334,7 @@ interface NoteBlockProps {
 }
 
 function PianoRollNoteBlock({
-  note, rowIndex, positions, map, pxPerSecond, snapDivision, isSelected, interactive, onSelect, onUpdate, styles,
+  note, rowIndex, positions, map, pxPerSecond, rowHeight, noteColor, snapDivision, isSelected, interactive, onSelect, onUpdate, styles,
 }: NoteBlockProps) {
   // react-native-gesture-handler's Gesture.Pan() instead of the old PanResponder —
   // PanResponder turned out unreliable on web for two compounding reasons: (1) it only
@@ -2202,7 +2364,7 @@ function PianoRollNoteBlock({
     const dtMs      = (dxPx / pxPerSecond) * 1000;
     const rawStart  = Math.max(0, Math.round(note.start_time + dtMs));
     const newStart  = snapMsToGridInMap(map, rawStart, snapDivision);
-    const rowDelta  = Math.round(dyPx / ROW_HEIGHT);
+    const rowDelta  = Math.round(dyPx / rowHeight);
     const newRow    = Math.min(positions.length - 1, Math.max(0, rowIndex + rowDelta));
     const newPos    = positions[newRow];
 
@@ -2276,9 +2438,9 @@ function PianoRollNoteBlock({
 
   const left   = (note.start_time / 1000) * pxPerSecond;
   // Blocks fill their row edge to edge — no inset margin, no rounding (see noteBlock).
-  const top    = rowIndex * ROW_HEIGHT;
+  const top    = rowIndex * rowHeight;
   const width  = Math.max(14, (note.duration / 1000) * pxPerSecond);
-  const height = ROW_HEIGHT;
+  const height = rowHeight;
   // Technique still drives the color, but as an edge accent + text on a quiet tinted
   // body rather than a solid slab — see techniqueSkin. Selection gets its own signal via
   // the noteBlockSelected ring, not by overriding the skin.
@@ -2288,7 +2450,8 @@ function PianoRollNoteBlock({
   // EVERY block rendered permanently translucent and the whole grid read as washed out.
   // Genuinely low-confidence notes get a dashed edge below instead — a signal that
   // applies only when it's actually informative.
-  const skin = techniqueSkin(note.tab, theme.isDark);
+  const skin = techniqueSkin(note.tab, theme.isDark, noteColor);
+  const labelInset = labelInsetFor(width);
   const lowConfidence = note.confidence < LOW_CONFIDENCE_THRESHOLD;
 
   // Horizontal (time) follows the finger continuously; vertical (pitch) snaps to whole
@@ -2299,7 +2462,7 @@ function PianoRollNoteBlock({
   const moveAnimatedStyle = useAnimatedStyle(() => ({
     transform: [
       { translateX: translateX.value },
-      { translateY: Math.round(translateY.value / ROW_HEIGHT) * ROW_HEIGHT },
+      { translateY: Math.round(translateY.value / rowHeight) * rowHeight },
     ],
   }));
   // Combined into one style (rather than two competing `width`/`left` styles) since a
@@ -2323,7 +2486,7 @@ function PianoRollNoteBlock({
           isSelected && styles.noteBlockSelected,
         ]}
       >
-        <View style={styles.noteBlockBody}>
+        <View style={[styles.noteBlockBody, { paddingLeft: labelInset, paddingRight: labelInset }]}>
           <Text style={[styles.noteBlockText, { color: skin.label }]} numberOfLines={1} selectable={false}>
             {noteBlockLabel(note)}
           </Text>
@@ -2348,7 +2511,7 @@ function PianoRollNoteBlock({
           boxAnimatedStyle,
         ]}
       >
-        <View style={styles.noteBlockBody}>
+        <View style={[styles.noteBlockBody, { paddingLeft: labelInset, paddingRight: labelInset }]}>
           <Text style={[styles.noteBlockText, { color: skin.label }]} numberOfLines={1} selectable={false}>
             {noteBlockLabel(note)}
           </Text>
@@ -2384,14 +2547,19 @@ function PianoRollNoteBlock({
 // during a resize each one (GroupGhostNote) independently re-derives its left/width from
 // the shared resize deltas, since different notes need different amounts of stretch.
 function GroupSelectionOverlay({
-  bounds, selectedNotes, positions, map, pxPerSecond, snapDivision, styles,
+  bounds, selectedNotes, positions, map, pxPerSecond, rowHeight, noteColor, snapDivision, applyMany, styles,
 }: {
   bounds: { left: number; top: number; width: number; height: number };
   selectedNotes: TabNote[];
   positions: GridRow[];
   map: TempoMap;
   pxPerSecond: number;
+  rowHeight: number;
+  noteColor?: string;
   snapDivision: SnapDivision;
+  /** Routed from the parent rather than reaching into a store here — see the
+   *  `onUpdateMany` prop on PianoRoll for why the direct store call was a latent bug. */
+  applyMany: (updates: { id: string; changes: NoteUpdate }[]) => void;
   styles: ReturnType<typeof createStyles>;
 }) {
   const translateX = useSharedValue(0);
@@ -2410,7 +2578,7 @@ function GroupSelectionOverlay({
   // updateNotes call so undoing a group move is a single Ctrl+Z, not one per note.
   function commitGroupMove(dxPx: number, dyPx: number) {
     const dtMs = (dxPx / pxPerSecond) * 1000;
-    const rowDelta = Math.round(dyPx / ROW_HEIGHT);
+    const rowDelta = Math.round(dyPx / rowHeight);
     const updates: { id: string; changes: NoteUpdate }[] = [];
     for (const note of selectedNotes) {
       const rowIndex = positions.findIndex((p) => p.note === note.note);
@@ -2424,7 +2592,7 @@ function GroupSelectionOverlay({
       if (newPos.tab !== note.tab) { changes.tab = newPos.tab; changes.note = newPos.note; }
       if (Object.keys(changes).length > 0) updates.push({ id: note.id, changes });
     }
-    if (updates.length > 0) useAppStore.getState().updateNotes(updates);
+    applyMany(updates);
   }
 
   // dLeftPx/dRightPx: how far the left/right edge of the group's bounding box moved
@@ -2450,7 +2618,7 @@ function GroupSelectionOverlay({
         updates.push({ id: note.id, changes: { start_time: newStart, duration: newDuration } });
       }
     }
-    if (updates.length > 0) useAppStore.getState().updateNotes(updates);
+    applyMany(updates);
   }
 
   const moveGesture = Gesture.Pan()
@@ -2494,7 +2662,7 @@ function GroupSelectionOverlay({
   const wrapAnimatedStyle = useAnimatedStyle(() => ({
     transform: [
       { translateX: translateX.value },
-      { translateY: Math.round(translateY.value / ROW_HEIGHT) * ROW_HEIGHT },
+      { translateY: Math.round(translateY.value / rowHeight) * rowHeight },
     ],
   }));
   const boundsAnimatedStyle = useAnimatedStyle(() => ({
@@ -2541,6 +2709,8 @@ function GroupSelectionOverlay({
             key={note.id}
             note={note}
             rowIndex={rowIndex}
+            rowHeight={rowHeight}
+            noteColor={noteColor}
             t0={t0}
             t1={t1}
             bounds={bounds}
@@ -2558,9 +2728,11 @@ function GroupSelectionOverlay({
 // plain View built inline in GroupSelectionOverlay's .map()) because it needs its own
 // useAnimatedStyle call, and the number of selected notes varies render to render, which
 // a hook call inside a variable-length .map() can't safely do in the parent itself.
-function GroupGhostNote({ note, rowIndex, t0, t1, bounds, resizeLeftDelta, resizeRightDelta, styles }: {
+function GroupGhostNote({ note, rowIndex, rowHeight, noteColor, t0, t1, bounds, resizeLeftDelta, resizeRightDelta, styles }: {
   note: TabNote;
   rowIndex: number;
+  rowHeight: number;
+  noteColor?: string;
   t0: number;
   t1: number;
   bounds: { left: number; width: number };
@@ -2569,7 +2741,8 @@ function GroupGhostNote({ note, rowIndex, t0, t1, bounds, resizeLeftDelta, resiz
   styles: ReturnType<typeof createStyles>;
 }) {
   const theme = useTheme();
-  const skin  = techniqueSkin(note.tab, theme.isDark);
+  const skin  = techniqueSkin(note.tab, theme.isDark, noteColor);
+  const ghostInset = labelInsetFor((t1 - t0) * bounds.width);
   const animatedStyle = useAnimatedStyle(() => {
     const newGroupLeft  = bounds.left + resizeLeftDelta.value;
     const newGroupWidth = Math.max(1, bounds.width - resizeLeftDelta.value + resizeRightDelta.value);
@@ -2585,8 +2758,8 @@ function GroupGhostNote({ note, rowIndex, t0, t1, bounds, resizeLeftDelta, resiz
       style={[
         styles.noteBlock,
         {
-          top: rowIndex * ROW_HEIGHT,
-          height: ROW_HEIGHT,
+          top: rowIndex * rowHeight,
+          height: rowHeight,
           backgroundColor: skin.fill,
           borderColor: skin.edge,
         },
@@ -2594,7 +2767,9 @@ function GroupGhostNote({ note, rowIndex, t0, t1, bounds, resizeLeftDelta, resiz
         animatedStyle,
       ]}
     >
-      <View style={styles.noteBlockBody}>
+      {/* Inset matched to the ghost's own live width so a group drag doesn't make labels
+          pop in and out relative to the blocks they're copying. */}
+      <View style={[styles.noteBlockBody, { paddingLeft: ghostInset, paddingRight: ghostInset }]}>
         <Text style={[styles.noteBlockText, { color: skin.label }]} numberOfLines={1} selectable={false}>{noteBlockLabel(note)}</Text>
       </View>
     </Animated.View>
@@ -2967,6 +3142,8 @@ function createStyles(t: Theme) {
       ...(Platform.OS === 'web' ? { boxShadow: t.isDark ? '2px 0 8px rgba(0,0,0,0.35)' : '2px 0 6px rgba(0,0,0,0.08)' } : null),
     } as any,
     labelCell: {
+      // Both this and `rowStripe` get their real height inline from `rowH` — the value
+      // here is only the fallback for a host that doesn't override it.
       height: ROW_HEIGHT,
       flexDirection:  'row',
       alignItems:     'center',
@@ -3120,6 +3297,9 @@ function createStyles(t: Theme) {
     // Only for notes the detector wasn't confident about (see LOW_CONFIDENCE_THRESHOLD) —
     // a targeted signal, replacing the old blanket opacity fade that dimmed every note.
     noteBlockLowConfidence: { borderStyle: 'dashed' },
+    // Padding is set inline per block from `labelInsetFor` — the value here is only the
+    // fallback. `overflow: hidden` is deliberate: a narrow block clips its label at the
+    // edges rather than spilling it across neighbouring notes.
     noteBlockBody: { flex: 1, justifyContent: 'center', paddingLeft: 6, paddingRight: 6, overflow: 'hidden' },
     // Color is per-block (skin.label) — black or white, whichever the fill needs.
     noteBlockText: { fontSize: 10, fontFamily: Poppins.bold },

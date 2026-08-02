@@ -13,7 +13,7 @@
  * Run: npx tsx scripts/verify-midi-import.ts
  */
 
-import { generateForFormat } from '../src/export/generators';
+import { generateForFormat, singlePart } from '../src/export/generators';
 import { midiToNoteName, noteToTab, tabToNote } from '../src/audio/HarmonicaMapper';
 import {
   MIN_NOTE_MS,
@@ -142,7 +142,7 @@ function ownExportRoundTrip(): void {
     confidence: 100,
   }));
 
-  const { content } = generateForFormat(original, key, 'diatonic', 'MIDI');
+  const { content } = generateForFormat(singlePart(original, key, 'diatonic'), 'MIDI');
   const bytes  = Uint8Array.from(Buffer.from(content, 'base64'));
   const parsed = parseMidiFile(bytes, 'export.mid');
 

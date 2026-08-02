@@ -24,3 +24,30 @@ export function audibleTracks(tracks: readonly MidiTrackData[]): MidiTrackData[]
   const anySoloed = tracks.some((t) => t.soloed);
   return tracks.filter((t) => !t.muted && (!anySoloed || t.soloed));
 }
+
+/** GM's sixteen families, each the first program in its block of eight. */
+export const GM_FAMILIES = [
+  'Piano', 'Chromatic Percussion', 'Organ', 'Guitar',
+  'Bass', 'Strings', 'Ensemble', 'Brass',
+  'Reed', 'Pipe', 'Synth Lead', 'Synth Pad',
+  'Synth Effects', 'Ethnic', 'Percussive', 'Sound Effects',
+] as const;
+
+export function familyOf(program: number): string {
+  return GM_FAMILIES[Math.floor(Math.max(0, Math.min(127, program)) / 8)];
+}
+
+/**
+ * Programs offered by the instrument picker.
+ *
+ * All 128, grouped by family — a scrolling list of every GM program is genuinely what this
+ * needs to be, since which instrument a track should sound like is the user's call and
+ * abridging the list would just mean the one they want is missing.
+ */
+export function gmProgramOptions(): { program: number; name: string; family: string }[] {
+  return Array.from({ length: 128 }, (_, program) => ({
+    program,
+    name:   instrumentName(program),
+    family: familyOf(program),
+  }));
+}
