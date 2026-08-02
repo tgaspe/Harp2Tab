@@ -39,7 +39,9 @@ import {
 } from '@/audio/notesToTabs';
 import { octaveShiftForMidiRange } from '@/audio/pitchRange';
 import { runAudioImport, type ImportStage } from '@/audio/runAudioImport';
-import { runMidiImport } from '@/audio/runMidiImport';
+import { runMidiImport, type MidiImportResult } from '@/audio/runMidiImport';
+import { projectFromSmfBytes } from '@/audio/midiProject';
+import { useMidiProjectsStore } from '@/store/useMidiProjectsStore';
 import { selectHarmonicaType, selectKey, useAppStore } from '@/store/useAppStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import type { Theme } from '@/theme';
@@ -58,7 +60,7 @@ type TrackSelection = number | 'all';
 type Phase =
   | { kind: 'working'; stage: ImportStage; fraction: number }
   | { kind: 'confirm'; detection: KeyDetectionResult; frames: RawFrame[]; chosenKey: HarmonicaKey }
-  | { kind: 'midiConfirm'; parsed: ParsedMidi; selection: TrackSelection; chosenKey: HarmonicaKey }
+  | { kind: 'midiConfirm'; parsed: MidiImportResult; selection: TrackSelection; chosenKey: HarmonicaKey }
   | { kind: 'error';   code: ImportErrorCode; message: string };
 
 /** How many candidate keys the confirm step offers. The winner plus the two next-best,
@@ -155,6 +157,7 @@ export default function ImportScreen() {
   const addTabNotes          = useAppStore((s) => s.addTabNotes);
   const setBpm               = useAppStore((s) => s.setBpm);
   const incrementRecordingCount = useSettingsStore((s) => s.incrementRecordingCount);
+  const saveProject             = useMidiProjectsStore((s) => s.saveProject);
 
   const [phase, setPhase] = useState<Phase>({ kind: 'working', stage: 'decoding', fraction: 0 });
   const [fileName, setFileName] = useState(getPendingImport()?.name ?? '');
@@ -333,6 +336,30 @@ export default function ImportScreen() {
 
   /** MIDI's sibling of `commit`. No frames are retained — a MIDI import has no audio to
    *  inspect at all, which Frame Inspector reports via the session's `source`. */
+  /**
+   * Take the file into the Studio instead of straight to tabs.
+   *
+   * Built from the original bytes rather than from `parsed`, because the two answer
+   * different questions: `parseMidiFile` drops percussion and note-less tracks since they
+   * can't become a harmonica part, while the Studio is an editor and has to show every
+   * track the file declares.
+   *
+   * Deliberately doesn't consume a free-tier session or touch the tab session — nothing has
+   * been transcribed yet. The gate applies at conversion, where a tab is actually produced.
+   */
+  function openInStudio() {
+    if (phase.kind !== 'midiConfirm') return;
+    preview.stop();
+
+    const project = projectFromSmfBytes(
+      phase.parsed.bytes,
+      fileName.replace(/\.[^.]+$/, '') || 'Untitled project',
+    );
+    saveProject(project);
+    clearPendingImport();
+    router.replace({ pathname: '/studio', params: { projectId: project.id } });
+  }
+
   function commitMidi(notes: MidiNote[], key: HarmonicaKey, bpm: number | null) {
     preview.stop();
     const tabbed = notesToTabs(notes, key, harmonicaType);
@@ -658,6 +685,24 @@ export default function ImportScreen() {
             >
               <Text style={styles.primaryBtnText}>Continue with {chosenKey}</Text>
               <Ionicons name="arrow-forward" size={16} color="#fff" />
+            </Pressable>
+
+            {/* The Studio is the powerful path, not the default one: someone importing a
+                single-track melody shouldn't have to get through a multi-track editor to
+                reach their tabs. Offered alongside the direct route, never in place of it.
+                Enabled even when nothing maps to a harp — the Studio has no harmonica, so
+                "no key fits" says nothing about whether the file is worth opening there. */}
+            <Pressable
+              onPress={openInStudio}
+              style={({ pressed, hovered }: any) => [
+                styles.studioBtn,
+                (pressed || hovered) && styles.studioBtnPressed,
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel="Open this file in the MIDI Studio"
+            >
+              <Ionicons name="options-outline" size={16} color={theme.accent} />
+              <Text style={styles.studioBtnText}>Open in Studio</Text>
             </Pressable>
 
             <Pressable
@@ -1104,6 +1149,26 @@ function createStyles(theme: Theme) {
     },
     primaryBtnPressed: {
       backgroundColor: theme.accentDim,
+    },
+    studioBtn: {
+      flexDirection:   'row',
+      alignItems:      'center',
+      justifyContent:  'center',
+      gap:             8,
+      width:           '100%',
+      paddingVertical: 12,
+      borderRadius:    10,
+      backgroundColor: theme.accentSoft,
+      borderWidth:     1,
+      borderColor:     theme.accentDim,
+    },
+    studioBtnPressed: {
+      backgroundColor: theme.surfaceAlt,
+    },
+    studioBtnText: {
+      fontFamily: Poppins.bold,
+      fontSize:   14,
+      color:      theme.accent,
     },
     primaryBtnDisabled: {
       backgroundColor: theme.surfaceAlt,

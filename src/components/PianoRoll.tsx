@@ -18,7 +18,10 @@ import { getGridRows, type GridRow } from '@/audio/HarmonicaMapper';
 import { getFrames } from '@/audio/frameBuffer';
 import { selectRecordingId, useAppStore } from '@/store/useAppStore';
 import { selectRecordings, useRecordingsStore } from '@/store/useRecordingsStore';
-import { barDurationMs, beatDurationMs, BEATS_PER_BAR, msToBar, snapDivisionMs, snapMsToGrid, type SnapDivision } from '@/audio/tempo';
+import {
+  constantTempoMap, gridLines, msToBarInMap, snapMsToGridInMap,
+  type SnapDivision, type TempoMap,
+} from '@/audio/tempo';
 import { FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { WEB_CONTENT_WIDTH } from '@/constants/layout';
@@ -313,8 +316,11 @@ function ToolButton({
 // purpose, and a vivid hue used as small text fails contrast badly (yellow on white
 // measures ~1.5:1); a swatch is a graphical mark, so it carries the same legend role
 // safely, and the tooltip is what names the color.
-function LabelRailCell({ row, isOctaveBoundary, styles }: {
+function LabelRailCell({ row, top, isOctaveBoundary, styles }: {
   row: GridRow;
+  /** Absolute offset in the rail — the cell's own row index times ROW_HEIGHT. Positioned
+   *  rather than laid out in flow so off-screen cells can be culled. */
+  top: number;
   isOctaveBoundary: boolean;
   styles: ReturnType<typeof createStyles>;
 }) {
@@ -324,6 +330,7 @@ function LabelRailCell({ row, isOctaveBoundary, styles }: {
     <View
       style={[
         styles.labelCell,
+        { position: 'absolute', top, left: 0, right: 0 },
         !isNaturalNote(row.note) && styles.rowStripeAlt,
         isOctaveBoundary && styles.octaveBoundary,
         !row.playable && styles.rowUnplayable,
@@ -362,6 +369,19 @@ interface PianoRollProps {
   harmonicaKey:   HarmonicaKey | null;
   harmonicaType:  HarmonicaType;
   bpm:            number;
+  /** Piecewise tempo/meter map. A tab session has exactly one tempo, so the editor passes
+   *  nothing and gets `constantTempoMap(bpm)`; the MIDI Studio passes a real map parsed
+   *  from the file. Everything below is written against the map, so both stages share one
+   *  code path rather than the grid having a constant-tempo and a variable-tempo version. */
+  tempoMap?:      TempoMap;
+  /** Overrides the harmonica-derived pitch axis. The Studio passes `getChromaticRows()`;
+   *  the tab editor passes nothing and keeps deriving rows from its key and type. */
+  rows?:          GridRow[];
+  /** Tracks other than the one being edited, drawn behind it and completely inert. Keeping
+   *  them non-interactive is a hard requirement, not a simplification: interactivity here
+   *  means a gesture-handler instance per note, which is what the note culling below exists
+   *  to limit in the first place. */
+  backgroundLanes?: { id: string; color: string; notes: TabNote[] }[];
   selectedId:     string | null;
   onSelect:       (id: string) => void;
   onCreate:       (note: Omit<TabNote, 'id'>) => void;
@@ -381,11 +401,15 @@ interface PianoRollProps {
 }
 
 export function PianoRoll({
-  notes, harmonicaKey, harmonicaType, bpm, selectedId, onSelect, onCreate, onUpdate, onDelete, isPlaying, currentTimeMs, onSeek,
+  notes, harmonicaKey, harmonicaType, bpm, tempoMap, rows, backgroundLanes, selectedId, onSelect, onCreate, onUpdate, onDelete, isPlaying, currentTimeMs, onSeek,
   loopRegion, onLoopRegionChange, headerLeft,
 }: PianoRollProps) {
   const theme  = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
+
+  // Compiling is a small cost but not a free one, and this feeds every snap and every grid
+  // line — memoized so a re-render for an unrelated reason doesn't rebuild it.
+  const map = useMemo(() => tempoMap ?? constantTempoMap(bpm), [tempoMap, bpm]);
 
   // Two separate ideas that used to be crammed into one cycling control: `snapEnabled` is
   // just on/off — whether placing/moving/dragging a note quantizes to the grid at all, or
@@ -406,6 +430,8 @@ export function PianoRoll({
   useEffect(() => () => { if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current); }, []);
   const [metricTab, setMetricTab] = useState<'breath' | 'duration' | 'confidence' | 'pitchBend'>('breath');
   const [scrollX, setScrollX] = useState(0);
+  // Vertical offset, tracked only so rows can be culled — nothing else reads it.
+  const [scrollY, setScrollY] = useState(0);
   const [viewportWidth, setViewportWidth] = useState(0);
   // Height of the scrollable grid viewport (not the full row ladder) — needed to center
   // the notes vertically on first paint, see the auto-fit effect below.
@@ -491,10 +517,16 @@ export function PianoRoll({
   // Always the full chromatic row ladder, not just the current instrument's own
   // positions — see getGridRows. `positions` keeps its name since most of this file
   // still just treats it as "the row list"; `row.playable` is what's new.
-  const positions = useMemo(
+  //
+  // Injected wholesale by the MIDI Studio (`getChromaticRows`), which has no harmonica and
+  // so no key to derive rows from. Everything below indexes rows positionally and reads
+  // `note`/`midi`/`playable`, none of which are harmonica-specific — which is why one
+  // component can serve both stages.
+  const derivedRows = useMemo(
     () => (harmonicaKey ? getGridRows(harmonicaKey, harmonicaType) : []),
     [harmonicaKey, harmonicaType],
   );
+  const positions = rows ?? derivedRows;
 
   const dataAxisLabels = useMemo(() => getDataAxisLabels(metricTab, notes), [metricTab, notes]);
 
@@ -545,6 +577,60 @@ export function PianoRoll({
     [notes, visibleStartMs, visibleEndMs],
   );
 
+  // The vertical counterpart, added for the Studio: a harmonica ladder is ~40 rows and
+  // could be drawn in full, but a full-range chromatic one is 128, each producing a label
+  // cell (with its own hover state) and a stripe. Rows are uniform height and absolutely
+  // positioned by index, so culling them is a slice — no measurement, no spacers.
+  const CULL_MARGIN_ROWS = 4;
+  const firstVisibleRow = Math.max(
+    0,
+    Math.floor(scrollY / ROW_HEIGHT) - CULL_MARGIN_ROWS,
+  );
+  const lastVisibleRow = Math.min(
+    positions.length - 1,
+    Math.ceil((scrollY + (gridViewportHeight || positions.length * ROW_HEIGHT)) / ROW_HEIGHT) + CULL_MARGIN_ROWS,
+  );
+  const visibleRows = useMemo(
+    () => positions
+      .slice(firstVisibleRow, lastVisibleRow + 1)
+      // The absolute index is what every position calculation is in terms of, so it has to
+      // survive the slice.
+      .map((row, i) => ({ row, index: firstVisibleRow + i })),
+    [positions, firstVisibleRow, lastVisibleRow],
+  );
+
+  // Pitch name → row index. Built once per row list rather than a `findIndex` per note:
+  // background lanes can hold thousands of notes across a whole arrangement, where the
+  // linear scan the interactive path uses would be quadratic.
+  const rowIndexByNote = useMemo(() => {
+    const index = new Map<string, number>();
+    positions.forEach((p, i) => index.set(p.note, i));
+    return index;
+  }, [positions]);
+
+  // Culled on both axes before any View is created — an orchestral file has far more
+  // background notes than foreground ones, so this is the loop that has to stay cheap.
+  const backgroundNoteBlocks = useMemo(() => {
+    if (!backgroundLanes?.length) return [];
+    const blocks: { key: string; left: number; top: number; width: number; color: string }[] = [];
+
+    for (const lane of backgroundLanes) {
+      for (const note of lane.notes) {
+        if (note.start_time + note.duration < visibleStartMs || note.start_time > visibleEndMs) continue;
+        const rowIndex = rowIndexByNote.get(note.note);
+        if (rowIndex === undefined || rowIndex < firstVisibleRow || rowIndex > lastVisibleRow) continue;
+        blocks.push({
+          key:   `${lane.id}:${note.id}`,
+          left:  (note.start_time / 1000) * pxPerSecond,
+          top:   rowIndex * ROW_HEIGHT,
+          width: Math.max(3, (note.duration / 1000) * pxPerSecond),
+          color: lane.color,
+        });
+      }
+    }
+    return blocks;
+  }, [backgroundLanes, rowIndexByNote, visibleStartMs, visibleEndMs, firstVisibleRow, lastVisibleRow, pxPerSecond]);
+
   // Shared by the marquee hit-test and the group-selection bounding box — content-space
   // {left, top, width, height} for a note, or null if its pitch doesn't match any row
   // (shouldn't normally happen, but positions can lag a stale note during a key change).
@@ -579,7 +665,7 @@ export function PianoRoll({
     const rowIndex = Math.min(positions.length - 1, Math.max(0, Math.floor(y / ROW_HEIGHT)));
     const pos = positions[rowIndex];
     const rawStart = Math.max(0, (x / pxPerSecond) * 1000);
-    const start = snapMsToGrid(Math.round(rawStart), snapDivision, bpm);
+    const start = snapMsToGridInMap(map, Math.round(rawStart), snapDivision);
     onCreate({ tab: pos.tab, note: pos.note, start_time: start, duration: DEFAULT_NEW_NOTE_DURATION_MS, confidence: 100 });
     const updated = useAppStore.getState().tabNotes;
     const created = updated[updated.length - 1];
@@ -662,7 +748,7 @@ export function PianoRoll({
     if (applyTo.length === 0) return;
     useAppStore.getState().updateNotes(applyTo.map((n) => ({
       id: n.id,
-      changes: { start_time: snapMsToGrid(n.start_time, snapSubdivision, bpm) },
+      changes: { start_time: snapMsToGridInMap(map, n.start_time, snapSubdivision) },
     })));
   }
 
@@ -701,11 +787,13 @@ export function PianoRoll({
       hScrollRef.current?.scrollTo({ x: 0, animated: false });
     }
 
-    const rows = notes
+    // Renamed off `rows` once that became a prop — this is the set of row *indices* the
+    // notes occupy, not the row list itself.
+    const occupiedRows = notes
       .map((n) => positions.findIndex((p) => p.note === n.note))
       .filter((i) => i >= 0);
-    if (rows.length === 0 || gridViewportHeight === 0) return;
-    const centerPx = ((Math.min(...rows) + Math.max(...rows) + 1) / 2) * ROW_HEIGHT;
+    if (occupiedRows.length === 0 || gridViewportHeight === 0) return;
+    const centerPx = ((Math.min(...occupiedRows) + Math.max(...occupiedRows) + 1) / 2) * ROW_HEIGHT;
     const maxY = Math.max(0, positions.length * ROW_HEIGHT - gridViewportHeight);
     vScrollRef.current?.scrollTo({
       y: Math.max(0, Math.min(maxY, centerPx - gridViewportHeight / 2)),
@@ -1069,7 +1157,7 @@ export function PianoRoll({
 
   function commitPinDrop(contentX: number) {
     if (pinDockCanceledRef.current) { pinDockCanceledRef.current = false; return; }
-    const ms = Math.max(0, snapMsToGrid(Math.round((contentX / pxPerSecond) * 1000), snapDivision, bpm));
+    const ms = Math.max(0, snapMsToGridInMap(map, Math.round((contentX / pxPerSecond) * 1000), snapDivision));
     if (firstPinMsRef.current === null) {
       setFirstPinMs(ms);
       return;
@@ -1135,8 +1223,8 @@ export function PianoRoll({
 
   function commitLoopRegionResize(dLeftPx: number, dRightPx: number) {
     if (!loopRegion) return;
-    const rawStart = snapMsToGrid(Math.round(loopRegion.startMs + (dLeftPx / pxPerSecond) * 1000), snapDivision, bpm);
-    const rawEnd   = snapMsToGrid(Math.round(loopRegion.endMs + (dRightPx / pxPerSecond) * 1000), snapDivision, bpm);
+    const rawStart = snapMsToGridInMap(map, Math.round(loopRegion.startMs + (dLeftPx / pxPerSecond) * 1000), snapDivision);
+    const rawEnd   = snapMsToGridInMap(map, Math.round(loopRegion.endMs + (dRightPx / pxPerSecond) * 1000), snapDivision);
     const startMs = Math.max(0, Math.min(rawStart, rawEnd - 1));
     const endMs   = Math.max(startMs + 1, rawEnd);
     onLoopRegionChange({ startMs, endMs });
@@ -1433,7 +1521,7 @@ export function PianoRoll({
         <View style={styles.rulerClip}>
           <GestureDetector gesture={rulerTapGesture}>
             <View style={[styles.rulerContent, { width: gridWidth, transform: [{ translateX: -scrollX }] }]}>
-              <BarRuler bpm={bpm} durationMs={totalMs} pxPerSecond={pxPerSecond} theme={theme} />
+              <BarRuler map={map} durationMs={totalMs} pxPerSecond={pxPerSecond} theme={theme} />
 
               {loopRegion && (
                 <Animated.View style={[styles.loopRegionBand, loopRegionAnimatedStyle]}>
@@ -1483,18 +1571,23 @@ export function PianoRoll({
         ref={vScrollRef}
         showsVerticalScrollIndicator={Platform.OS === 'web'}
         style={styles.gridVScroll}
+        onScroll={(e) => setScrollY(e.nativeEvent.contentOffset.y)}
+        scrollEventThrottle={16}
         onLayout={(e) => setGridViewportHeight(e.nativeEvent.layout.height)}
       >
         <View style={styles.gridRow}>
-          <View style={styles.labelRail}>
-            {positions.map((p, i) => {
-              const next = positions[i + 1];
+          {/* Explicit height + absolutely positioned cells, so culling the off-screen ones
+              doesn't collapse the rail or shift the rows that remain. */}
+          <View style={[styles.labelRail, { height: gridHeight }]}>
+            {visibleRows.map(({ row: p, index }) => {
+              const next = positions[index + 1];
               return (
                 <LabelRailCell
                   // Keyed by pitch, not tab — every unplayable row shares tab: '', which
                   // would otherwise collide as a React key.
                   key={p.note}
                   row={p}
+                  top={index * ROW_HEIGHT}
                   isOctaveBoundary={next ? getOctave(p.note) !== getOctave(next.note) : false}
                   styles={styles}
                 />
@@ -1511,8 +1604,8 @@ export function PianoRoll({
           >
             <GestureDetector gesture={backgroundGesture}>
               <View style={[styles.grid, { width: gridWidth, height: gridHeight }]}>
-                {positions.map((p, i) => {
-                  const next = positions[i + 1];
+                {visibleRows.map(({ row: p, index }) => {
+                  const next = positions[index + 1];
                   const isOctaveBoundary = next ? getOctave(p.note) !== getOctave(next.note) : false;
                   return (
                     <View
@@ -1520,7 +1613,7 @@ export function PianoRoll({
                       pointerEvents="none"
                       style={[
                         styles.rowStripe,
-                        { top: i * ROW_HEIGHT, width: gridWidth },
+                        { top: index * ROW_HEIGHT, width: gridWidth },
                         !isNaturalNote(p.note) && styles.rowStripeAlt,
                         isOctaveBoundary && styles.octaveBoundary,
                         !p.playable && styles.rowUnplayable,
@@ -1530,13 +1623,34 @@ export function PianoRoll({
                 })}
 
                 <BeatGridLines
-                  bpm={bpm}
+                  map={map}
                   durationMs={totalMs}
                   pxPerSecond={pxPerSecond}
                   height={gridHeight}
                   theme={theme}
                   snapSubdivision={snapSubdivision}
                 />
+
+                {/* Non-selected tracks: plain Views, no gesture handlers, no per-note
+                    state. This is the whole reason a multi-track roll is affordable here —
+                    the cost that made note culling necessary in the first place is the
+                    gesture-handler instance per note, and a backing lane needs none. */}
+                {backgroundNoteBlocks.map((block) => (
+                  <View
+                    key={block.key}
+                    pointerEvents="none"
+                    style={{
+                      position: 'absolute',
+                      left:   block.left,
+                      top:    block.top + 6,
+                      width:  block.width,
+                      height: ROW_HEIGHT - 12,
+                      borderRadius: 3,
+                      backgroundColor: block.color,
+                      opacity: 0.32,
+                    }}
+                  />
+                ))}
 
                 {visibleNotes.map((note) => {
                   // Marquee-selected notes render as live-following ghosts inside
@@ -1551,7 +1665,7 @@ export function PianoRoll({
                       note={note}
                       rowIndex={rowIndex}
                       positions={positions}
-                      bpm={bpm}
+                      map={map}
                       pxPerSecond={pxPerSecond}
                       snapDivision={snapDivision}
                       interactive={mouseMode === 'pencil'}
@@ -1579,7 +1693,7 @@ export function PianoRoll({
                     bounds={selectedGroupBounds}
                     selectedNotes={notes.filter((n) => selectedIds.includes(n.id))}
                     positions={positions}
-                    bpm={bpm}
+                    map={map}
                     pxPerSecond={pxPerSecond}
                     snapDivision={snapDivision}
                     styles={styles}
@@ -1810,31 +1924,45 @@ function HelpModal({ visible, onClose, theme, styles }: {
 
 // ─── Bar ruler ─────────────────────────────────────────────────────────────────
 
-function BarRuler({ bpm, durationMs, pxPerSecond, theme }: {
-  bpm: number; durationMs: number; pxPerSecond: number; theme: Theme;
+function BarRuler({ map, durationMs, pxPerSecond, theme }: {
+  map: TempoMap; durationMs: number; pxPerSecond: number; theme: Theme;
 }) {
-  const barMs = barDurationMs(bpm);
-  const pxPerBar = (barMs / 1000) * pxPerSecond;
-  const barCount = Math.ceil(durationMs / barMs) + 4;
+  // Bars are asked for rather than computed from a bar length, because with a tempo or
+  // meter map there is no single bar length: each bar's width and position depend on
+  // what's in force where it sits.
+  const bars = useMemo(
+    // A few bars past the end so the ruler doesn't stop short of the scrollable area.
+    () => gridLines(map, 0, durationMs + 8000, 4).filter((l) => l.isBar),
+    [map, durationMs],
+  );
+
+  // Label density is driven by the narrowest bar on screen, so a ritardando that stretches
+  // later bars can't make early ones collide.
+  const minBarPx = bars.reduce((min, line, i) => {
+    if (i === 0) return min;
+    return Math.min(min, ((line.ms - bars[i - 1].ms) / 1000) * pxPerSecond);
+  }, Infinity);
 
   let tickEvery = 1;
   for (const n of [1, 2, 4, 8, 16, 32]) {
-    if (n * pxPerBar >= 50) { tickEvery = n; break; }
     tickEvery = n;
+    if (n * (Number.isFinite(minBarPx) ? minBarPx : 0) >= 50) break;
   }
-
-  const ticks: number[] = [];
-  for (let bar = 0; bar <= barCount; bar += tickEvery) ticks.push(bar);
 
   return (
     <>
-      {ticks.map((bar) => (
-        <View key={bar} style={{ position: 'absolute', left: bar * pxPerBar, top: 0, bottom: 0 }}>
-          <Text style={{ fontSize: 12, fontFamily: Poppins.bold, color: theme.textSub, marginBottom: 3 }}>
-            {msToBar(bar * barMs, bpm).toFixed(0)}
-          </Text>
-          <View style={{ width: 1.5, height: 10, backgroundColor: theme.textSub }} />
-        </View>
+      {bars.map((line, i) => (
+        i % tickEvery !== 0 ? null : (
+          <View
+            key={line.bar}
+            style={{ position: 'absolute', left: (line.ms / 1000) * pxPerSecond, top: 0, bottom: 0 }}
+          >
+            <Text style={{ fontSize: 12, fontFamily: Poppins.bold, color: theme.textSub, marginBottom: 3 }}>
+              {msToBarInMap(map, line.ms).toFixed(0)}
+            </Text>
+            <View style={{ width: 1.5, height: 10, backgroundColor: theme.textSub }} />
+          </View>
+        )
       ))}
     </>
   );
@@ -1847,30 +1975,22 @@ function BarRuler({ bpm, durationMs, pxPerSecond, theme }: {
 // Draws lines for the current subdivision regardless of whether the Snap toggle is on —
 // the grid is a visual reference either way, matching how DAWs keep the grid visible even
 // with "snap to grid" switched off.
-function BeatGridLines({ bpm, durationMs, pxPerSecond, height, theme, snapSubdivision }: {
-  bpm: number; durationMs: number; pxPerSecond: number; height: number; theme: Theme;
+function BeatGridLines({ map, durationMs, pxPerSecond, height, theme, snapSubdivision }: {
+  map: TempoMap; durationMs: number; pxPerSecond: number; height: number; theme: Theme;
   snapSubdivision: Exclude<SnapDivision, 'off'>;
 }) {
-  const beatMs    = beatDurationMs(bpm);
-  const pxPerBeat = (beatMs / 1000) * pxPerSecond;
-  const totalBeats = Math.ceil(durationMs / beatMs) + BEATS_PER_BAR * 2;
+  // One walk produces all three tiers already classified, so the "is this subdivision also
+  // a beat?" test is an index check inside `gridLines` rather than the modulo-on-pixels
+  // approximation this used to do (which drifted at fractional pixel spacings).
+  const all = useMemo(
+    () => gridLines(map, 0, durationMs + 8000, snapSubdivision),
+    [map, durationMs, snapSubdivision],
+  );
 
-  const subMs = snapDivisionMs(snapSubdivision, bpm);
-  const subdivisionLines: number[] = [];
-  if (subMs) {
-    const pxPerSub = (subMs / 1000) * pxPerSecond;
-    const totalSubs = Math.ceil(durationMs / subMs) + BEATS_PER_BAR * 4;
-    for (let s = 0; s <= totalSubs; s++) {
-      // Skip ticks that land on (or effectively on) a beat line — those are drawn by the
-      // stronger tier below, a subdivision line under it would just be wasted opacity.
-      if (Math.abs((s * pxPerSub) % pxPerBeat) > 1) subdivisionLines.push(s * pxPerSub);
-    }
-  }
-
-  const lines: { x: number; isBar: boolean }[] = [];
-  for (let b = 0; b <= totalBeats; b++) {
-    lines.push({ x: b * pxPerBeat, isBar: b % BEATS_PER_BAR === 0 });
-  }
+  const subdivisionLines = all.filter((l) => !l.isBeat).map((l) => (l.ms / 1000) * pxPerSecond);
+  const lines = all
+    .filter((l) => l.isBeat)
+    .map((l) => ({ x: (l.ms / 1000) * pxPerSecond, isBar: l.isBar }));
 
   return (
     <>
@@ -2037,7 +2157,7 @@ interface NoteBlockProps {
   note:         TabNote;
   rowIndex:     number;
   positions:    GridRow[];
-  bpm:          number;
+  map:          TempoMap;
   pxPerSecond:  number;
   snapDivision: SnapDivision;
   isSelected:   boolean;
@@ -2052,7 +2172,7 @@ interface NoteBlockProps {
 }
 
 function PianoRollNoteBlock({
-  note, rowIndex, positions, bpm, pxPerSecond, snapDivision, isSelected, interactive, onSelect, onUpdate, styles,
+  note, rowIndex, positions, map, pxPerSecond, snapDivision, isSelected, interactive, onSelect, onUpdate, styles,
 }: NoteBlockProps) {
   // react-native-gesture-handler's Gesture.Pan() instead of the old PanResponder —
   // PanResponder turned out unreliable on web for two compounding reasons: (1) it only
@@ -2081,7 +2201,7 @@ function PianoRollNoteBlock({
   function commitMove(dxPx: number, dyPx: number) {
     const dtMs      = (dxPx / pxPerSecond) * 1000;
     const rawStart  = Math.max(0, Math.round(note.start_time + dtMs));
-    const newStart  = snapMsToGrid(rawStart, snapDivision, bpm);
+    const newStart  = snapMsToGridInMap(map, rawStart, snapDivision);
     const rowDelta  = Math.round(dyPx / ROW_HEIGHT);
     const newRow    = Math.min(positions.length - 1, Math.max(0, rowIndex + rowDelta));
     const newPos    = positions[newRow];
@@ -2264,12 +2384,12 @@ function PianoRollNoteBlock({
 // during a resize each one (GroupGhostNote) independently re-derives its left/width from
 // the shared resize deltas, since different notes need different amounts of stretch.
 function GroupSelectionOverlay({
-  bounds, selectedNotes, positions, bpm, pxPerSecond, snapDivision, styles,
+  bounds, selectedNotes, positions, map, pxPerSecond, snapDivision, styles,
 }: {
   bounds: { left: number; top: number; width: number; height: number };
   selectedNotes: TabNote[];
   positions: GridRow[];
-  bpm: number;
+  map: TempoMap;
   pxPerSecond: number;
   snapDivision: SnapDivision;
   styles: ReturnType<typeof createStyles>;
@@ -2296,7 +2416,7 @@ function GroupSelectionOverlay({
       const rowIndex = positions.findIndex((p) => p.note === note.note);
       if (rowIndex === -1) continue;
       const rawStart = Math.max(0, Math.round(note.start_time + dtMs));
-      const newStart = snapMsToGrid(rawStart, snapDivision, bpm);
+      const newStart = snapMsToGridInMap(map, rawStart, snapDivision);
       const newRow = Math.min(positions.length - 1, Math.max(0, rowIndex + rowDelta));
       const newPos = positions[newRow];
       const changes: NoteUpdate = {};

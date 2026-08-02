@@ -15,8 +15,15 @@
 > - [ ] Phase 8 — Better monetization + remaining web billing
 > - [ ] Phase 9 — iOS version
 > - [ ] Phase 10 — Improve web UI polish
-> - [ ] Phase 11 — MIDI Studio (multi-track DAW) — the largest remaining phase; depends on
->       nothing in 7–10 and can be built before or in parallel with them
+> - [~] Phase 11 — MIDI Studio (multi-track DAW) — the largest remaining phase; depends on
+>       nothing in 7–10 and can be built before or in parallel with them.
+>       **11-1, 11-2, 11-3, 11-5 implemented; 11-4 partial**
+>       (`scripts/verify-midi-studio.ts`, 53 cases). The end-to-end path works:
+>       import MIDI → "Open in Studio" → pick a track → Convert to tabs → Edit.
+>       Still open in 11-4: per-track GM instrument *selection* (the panel shows the
+>       instrument but can't change it), GM-family timbre mapping in the web scheduler
+>       (still one sine for every track), and the orchestral-file perf spike.
+>       11-6…11-10 not started.
 >
 > The phase write-ups below are left as originally planned/approved (before implementation) —
 > they're the design record, not a changelog. Notable deviations from the original plan that

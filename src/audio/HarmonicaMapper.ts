@@ -137,6 +137,17 @@ export function midiToNoteName(midi: number): string {
   return NOTE_NAMES[((rounded % 12) + 12) % 12] + (Math.floor(rounded / 12) - 1);
 }
 
+/** Inverse of `midiToNoteName`, for the Studio, which stores pitch as a MIDI number while
+ *  the piano roll matches rows by name. Returns null rather than a fallback pitch for an
+ *  unparseable name — a caller silently getting middle C would be worse than knowing. */
+export function noteNameToMidi(name: string): number | null {
+  const match = name.match(/^([A-G]#?)(-?\d+)$/);
+  if (!match) return null;
+  const semitone = NOTE_NAMES.indexOf(match[1]);
+  if (semitone === -1) return null;
+  return (parseInt(match[2], 10) + 1) * 12 + semitone;
+}
+
 export function frequencyToTab(
   frequency: number,
   key: HarmonicaKey,
@@ -229,4 +240,35 @@ export function getGridRows(key: HarmonicaKey, harmonicaType: HarmonicaType): Gr
     const tab = noteToTab(p.note, key, 'diatonic');
     return tab ? { ...p, tab, playable: true } : { ...p, tab: '', playable: false };
   });
+}
+
+/** Widest range worth drawing — the full MIDI span, which is what a piano roll editing
+ *  arbitrary MIDI has to be able to reach. */
+export const FULL_RANGE_LOW_MIDI  = 0;
+export const FULL_RANGE_HIGH_MIDI = 127;
+
+/**
+ * The MIDI Studio's row ladder: every semitone in range, with no harmonica attached.
+ *
+ * Same `GridRow` shape as `getGridRows` deliberately, so the piano roll takes one kind of
+ * row list and doesn't grow a second layout path. The difference is what the fields mean —
+ * here `tab` is empty because there is no tab vocabulary at this stage (the music hasn't
+ * been assigned to an instrument yet), and every row is `playable` because a pitch outside
+ * a harmonica's reach is still perfectly real music. Harmonica constraints apply at the
+ * conversion boundary, not in the Studio.
+ */
+export function getChromaticRows(
+  lowMidi:  number = FULL_RANGE_LOW_MIDI,
+  highMidi: number = FULL_RANGE_HIGH_MIDI,
+): GridRow[] {
+  const low  = Math.max(0, Math.min(127, Math.round(lowMidi)));
+  const high = Math.max(low, Math.min(127, Math.round(highMidi)));
+
+  const rows: GridRow[] = [];
+  // Highest pitch first, matching `getPlayablePositions`' ordering — row index 0 is the
+  // top of the grid in both models.
+  for (let midi = high; midi >= low; midi--) {
+    rows.push({ tab: '', note: midiToNoteName(midi), midi, playable: true });
+  }
+  return rows;
 }

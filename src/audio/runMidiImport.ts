@@ -12,9 +12,16 @@ import { assertSizeWithinLimit, type PickedAudioFile } from './audioImport';
 import { parseMidiFile, type ParsedMidi } from './midiToNotes';
 import { readFileBytes } from './readFileBytes';
 
-export async function runMidiImport(picked: PickedAudioFile): Promise<ParsedMidi> {
+export interface MidiImportResult extends ParsedMidi {
+  /** The original file, retained so "Open in Studio" can build a project from it.
+   *  `ParsedMidi` can't stand in: it drops percussion and note-less tracks for tab import,
+   *  and the Studio has to keep every track a file declares. */
+  bytes: Uint8Array;
+}
+
+export async function runMidiImport(picked: PickedAudioFile): Promise<MidiImportResult> {
   // Checked before reading, so an oversized file is rejected rather than loaded.
   assertSizeWithinLimit(picked.size, picked.name);
   const bytes = await readFileBytes(picked);
-  return parseMidiFile(bytes, picked.name);
+  return { ...parseMidiFile(bytes, picked.name), bytes };
 }

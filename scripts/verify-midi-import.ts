@@ -273,6 +273,18 @@ function tempoChange(): void {
       near(n.timeMs, expected[i].timeMs, 2) && near(n.durationMs, expected[i].durationMs, 2)),
     notes.map((n) => `${Math.round(n.timeMs)}+${Math.round(n.durationMs)}`).join(' '),
   );
+
+  // Phase 11: the whole map is retained, not just `tempos[0]`. `bpm` still reports the
+  // opening tempo, since that's the single value a tab session commits.
+  check(
+    'the parser keeps every tempo change, not just the first',
+    parsed.tempos.length === 2
+      && Math.round(parsed.tempos[0].bpm) === 120
+      && Math.round(parsed.tempos[1].bpm) === 60
+      && near(parsed.tempos[1].timeMs, 1000, 2)
+      && parsed.bpm !== null && near(parsed.bpm, 120, 0.5),
+    `${parsed.tempos.map((t) => `${Math.round(t.bpm)}@${Math.round(t.timeMs)}ms`).join(', ')}; opening bpm ${parsed.bpm}`,
+  );
 }
 
 /** Percussion is pitchless, so channel 10 must never reach the track picker. */

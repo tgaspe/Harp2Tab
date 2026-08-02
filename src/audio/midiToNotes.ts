@@ -10,13 +10,12 @@
 import { Midi } from '@tonejs/midi';
 import { AudioImportError } from './audioImport';
 import { midiToNoteName } from './HarmonicaMapper';
+import type { MidiNote } from '@/types';
+import type { TempoEvent, TimeSignatureEvent } from './tempo';
 
-/** A single MIDI note, in the app's own units (ms from the start of the file). */
-export interface MidiNote {
-  midi:       number;
-  timeMs:     number;
-  durationMs: number;
-}
+/** Canonical since Phase 11 gave the Studio the same note shape — re-exported here so the
+ *  import pipeline's existing `from './midiToNotes'` imports keep working. */
+export type { MidiNote };
 
 /** Everything the track picker needs to describe a track without re-parsing the file. */
 export interface MidiTrack {
@@ -35,8 +34,15 @@ export interface ParsedMidi {
   /** Note-bearing, non-percussion tracks, in file order. Never empty (parse throws). */
   tracks:     MidiTrack[];
   /** Tempo at the start of the file, when it declares one — MIDI carries a real tempo map,
-   *  so the session's BPM doesn't have to default to 100 the way an audio import's does. */
+   *  so the session's BPM doesn't have to default to 100 the way an audio import's does.
+   *  A tab session has exactly one tempo, so this is what the *import* path commits; the
+   *  full map below is what the Studio opens with. */
   bpm:        number | null;
+  /** Every tempo change in the file, not just the first. Before Phase 11 the rest were
+   *  discarded, which left bar lines drifting further from the music with each change —
+   *  and since snapping quantizes against those bars, editing degraded with them. */
+  tempos:         TempoEvent[];
+  timeSignatures: TimeSignatureEvent[];
   durationMs: number;
 }
 
@@ -87,6 +93,9 @@ export function parseMidiFile(bytes: Uint8Array, fileName: string): ParsedMidi {
       midi:       note.midi,
       timeMs:     note.time * 1000,
       durationMs: note.duration * 1000,
+      // @tonejs/midi normalises velocity to 0–1; the app stores MIDI's own 0–127 so the
+      // breath-force lane and the SMF writer share one convention.
+      velocity:   Math.round(note.velocity * 127),
     }));
 
     const pitches = notes.map((n) => n.midi);
@@ -111,9 +120,19 @@ export function parseMidiFile(bytes: Uint8Array, fileName: string): ParsedMidi {
     );
   }
 
+  const header = midi.header;
   return {
     tracks,
-    bpm:        midi.header.tempos.length > 0 ? midi.header.tempos[0].bpm : null,
+    bpm:    header.tempos.length > 0 ? header.tempos[0].bpm : null,
+    tempos: header.tempos.map((t) => ({
+      timeMs: header.ticksToSeconds(t.ticks) * 1000,
+      bpm:    t.bpm,
+    })),
+    timeSignatures: header.timeSignatures.map((s) => ({
+      timeMs:      header.ticksToSeconds(s.ticks) * 1000,
+      numerator:   s.timeSignature[0],
+      denominator: s.timeSignature[1],
+    })),
     durationMs: midi.duration * 1000,
   };
 }

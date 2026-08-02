@@ -1,5 +1,5 @@
 import { noteNameToFrequency } from '@/audio/synthesizeWav';
-import { BEATS_PER_BAR, beatDurationMs, type PlaybackOptions } from '@/audio/tempo';
+import { constantTempoMap, gridLines, type PlaybackOptions } from '@/audio/tempo';
 import type { TabNote } from '@/types';
 
 // Web gets real-time OscillatorNode scheduling — no pre-render/file-write round-trip
@@ -9,18 +9,29 @@ const AMPLITUDE = 0.3;
 let audioContext: AudioContext | null = null;
 let activeOscillators: OscillatorNode[] = [];
 
-function scheduleMetronome(ctx: AudioContext, now: number, totalMs: number, bpm: number, rate: number, startAtMs: number): void {
-  // beatSec and the loop bound stay in nominal (unscaled) units — only the actual
-  // schedule time is compressed/stretched by rate, otherwise the loop would run
-  // ~rate× too many iterations past the (now shorter/longer) note audio itself.
-  const beatSec = beatDurationMs(bpm) / 1000;
+function scheduleMetronome(
+  ctx: AudioContext,
+  now: number,
+  totalMs: number,
+  options: PlaybackOptions,
+  rate: number,
+  startAtMs: number,
+): void {
+  // Beats come from the tempo map rather than a fixed step, so a click still lands on the
+  // beat after a tempo change and the accent still lands on beat 1 of the bar — including
+  // when the bar length itself changes. `options.tempoMap` is absent for a tab session,
+  // which has one tempo by construction.
+  const map = options.tempoMap ?? constantTempoMap(options.bpm);
+  const beats = gridLines(map, 0, totalMs, 4).filter((l) => l.isBeat);
+
+  // Positions stay in nominal (unscaled) units — only the actual schedule time is
+  // compressed/stretched by rate, otherwise the loop would run ~rate× too many iterations
+  // past the (now shorter/longer) note audio itself.
   const startAtSec = startAtMs / 1000;
-  let beatIndex = 0;
-  for (let t = 0; t <= totalMs / 1000; t += beatSec, beatIndex++) {
-    // Still increments beatIndex for skipped beats so the accent phase (every
-    // BEATS_PER_BAR-th click) lines up with where it would've landed from t=0.
+  for (const beat of beats) {
+    const t = beat.ms / 1000;
     if (t < startAtSec) continue;
-    const accented = beatIndex % BEATS_PER_BAR === 0;
+    const accented = beat.isBar;
     const startSec = now + (t - startAtSec) / rate;
     const osc  = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -81,7 +92,7 @@ export async function playNotes(notes: TabNote[], options?: PlaybackOptions, sta
 
   if (options?.metronomeEnabled) {
     const totalMs = notes.reduce((max, n) => Math.max(max, n.start_time + n.duration), 0);
-    scheduleMetronome(ctx, now, totalMs, options.bpm, rate, startAtMs);
+    scheduleMetronome(ctx, now, totalMs, options, rate, startAtMs);
   }
 }
 

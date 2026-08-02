@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { noteToTab, tabToNote } from '@/audio/HarmonicaMapper';
+import { DEFAULT_BPM } from '@/audio/tempo';
 import type { HarmonicaKey, HarmonicaType, RecordingSource, TabNote, TabRecording, ExportFormat } from '@/types';
 
 const MAX_HISTORY = 50; // bounded for hygiene; snapshots are cheap (array of refs) so this is generous
@@ -91,7 +92,9 @@ interface AppActions {
   reset:          () => void;
 }
 
-export const DEFAULT_BPM = 100;
+// Lives in `tempo.ts` alongside the rest of the tempo vocabulary; re-exported here so the
+// existing `useAppStore` import path keeps working.
+export { DEFAULT_BPM };
 
 const initialState: AppState = {
   harmonicaType:      'diatonic',
