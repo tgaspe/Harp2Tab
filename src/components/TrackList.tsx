@@ -1,8 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { audibleTracks, familyOf, gmProgramOptions, instrumentName } from '@/audio/studioTracks';
+import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { audibleTracks, GM_FAMILIES, gmProgramOptions, instrumentName } from '@/audio/studioTracks';
 import { useTheme } from '@/hooks/useTheme';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
+import { WEB_CONTENT_WIDTH } from '@/constants/layout';
 import type { Theme } from '@/theme';
 import type { MidiTrackData } from '@/types';
 
@@ -34,12 +36,16 @@ export function TrackList({
   tracks, selectedTrackId, onSelectTrack, onToggleMute, onToggleSolo, onSetProgram,
   onAddTrack, onDeleteTrack, collapsed, onToggleCollapsed, onConvert,
 }: TrackListProps) {
-  // Which track's instrument picker is open, if any. One at a time — the panel is narrow
-  // and two open lists would push everything else off-screen.
+  // Which track's instrument picker is open, if any. Still one at a time, but now because
+  // it's a modal rather than because the 240px panel couldn't hold two inline lists.
   const [pickerFor, setPickerFor] = useState<string | null>(null);
   // Collapsed-rail hover, held here rather than per row so the tooltip can render outside
   // the scroll container that would otherwise clip it.
   const [hovered, setHovered] = useState<{ index: number } | null>(null);
+  // Expanded-list hover (web) — reveals the delete X on a row you're pointing at, so it
+  // stays reachable without first selecting the track, while keeping the panel free of 29
+  // permanently-visible delete buttons.
+  const [hoveredRowId, setHoveredRowId] = useState<string | null>(null);
   const [railScrollY, setRailScrollY] = useState(0);
   const theme  = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
@@ -156,7 +162,34 @@ export function TrackList({
           const silenced = track.muted || (anySoloed && !track.soloed);
 
           return (
-            <View key={track.id} style={[styles.row, selected && styles.rowSelected]}>
+            <View
+              key={track.id}
+              style={[styles.row, selected && styles.rowSelected]}
+              {...(Platform.OS === 'web'
+                ? ({
+                    onMouseEnter: () => setHoveredRowId(track.id),
+                    onMouseLeave: () => setHoveredRowId((id) => (id === track.id ? null : id)),
+                  } as any)
+                : null)}
+            >
+              {/* Top-right X rather than a "Delete" button down in the row's actions: it's
+                  the corner every closable card in the app puts its dismiss control, and
+                  at 18px it costs the row no vertical space at all. `rowMain` reserves the
+                  width permanently (see its paddingRight) so a long track name never
+                  reflows when the X appears. */}
+              {onDeleteTrack && tracks.length > 1 && (selected || hoveredRowId === track.id) && (
+                <Pressable
+                  onPress={() => onDeleteTrack(track.id)}
+                  style={styles.deleteTrack}
+                  hitSlop={6}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Delete track ${track.name}`}
+                  {...(Platform.OS === 'web' ? ({ title: `Delete ${track.name}` } as any) : null)}
+                >
+                  <Ionicons name="close" size={13} color={theme.textMuted} />
+                </Pressable>
+              )}
+
               <Pressable
                 style={styles.rowMain}
                 onPress={() => onSelectTrack(track.id)}
@@ -185,8 +218,17 @@ export function TrackList({
                   accessibilityRole="switch"
                   accessibilityState={{ checked: track.muted }}
                   accessibilityLabel={`Mute ${track.name}`}
+                  {...(Platform.OS === 'web'
+                    ? ({ title: track.muted ? 'Unmute this track' : 'Mute — silence this track' } as any)
+                    : null)}
                 >
-                  <Text style={[styles.toggleText, track.muted && styles.toggleTextActive]}>M</Text>
+                  {/* A speaker, crossed out when muted — the state is the icon, so a muted
+                      track reads as silenced without having to notice the tint behind it. */}
+                  <Ionicons
+                    name={track.muted ? 'volume-mute' : 'volume-medium'}
+                    size={14}
+                    color={track.muted ? theme.record : theme.textMuted}
+                  />
                 </Pressable>
                 <Pressable
                   style={[styles.toggle, track.soloed && styles.toggleSoloed]}
@@ -194,88 +236,174 @@ export function TrackList({
                   accessibilityRole="switch"
                   accessibilityState={{ checked: track.soloed }}
                   accessibilityLabel={`Solo ${track.name}`}
+                  {...(Platform.OS === 'web'
+                    ? ({ title: track.soloed ? 'Unsolo this track' : 'Solo — silence every track except the soloed ones' } as any)
+                    : null)}
                 >
-                  <Text style={[styles.toggleText, track.soloed && styles.toggleTextActive]}>S</Text>
+                  {/* Headphones for solo — "listen to this one on its own", the same
+                      shorthand every DAW's cue/solo control uses. */}
+                  <Ionicons
+                    name="headset"
+                    size={14}
+                    color={track.soloed ? theme.warning : theme.textMuted}
+                  />
                 </Pressable>
 
                 <Pressable
                   style={[styles.toggle, styles.toggleWide, pickerFor === track.id && styles.toggleOpen]}
-                  onPress={() => setPickerFor(pickerFor === track.id ? null : track.id)}
+                  onPress={() => setPickerFor(track.id)}
                   accessibilityRole="button"
                   accessibilityState={{ expanded: pickerFor === track.id }}
                   accessibilityLabel={`Change instrument for ${track.name}, currently ${instrumentName(track.program)}`}
+                  {...(Platform.OS === 'web'
+                    ? ({ title: `Instrument — currently ${instrumentName(track.program)}` } as any)
+                    : null)}
                 >
-                  <Text style={styles.toggleText}>Inst</Text>
+                  <MaterialCommunityIcons
+                    name="guitar-acoustic"
+                    size={14}
+                    color={pickerFor === track.id ? theme.accent : theme.textMuted}
+                  />
+                  <Text
+                    style={[styles.toggleText, pickerFor === track.id && styles.toggleTextOpen]}
+                    numberOfLines={1}
+                  >Instrument</Text>
                 </Pressable>
               </View>
 
-              {pickerFor === track.id && (
-                <View style={styles.picker}>
-                  <ScrollView
-                    style={styles.pickerList}
-                    showsVerticalScrollIndicator
-                    // Nested scrolling matters on the panel's own ScrollView: without it,
-                    // Android hands the gesture to the parent and the list can't move.
-                    nestedScrollEnabled
-                  >
-                    {gmProgramOptions().map((option, i, all) => {
-                      const startsFamily = i === 0 || all[i - 1].family !== option.family;
-                      const chosen = option.program === track.program;
-                      return (
-                        <View key={option.program}>
-                          {startsFamily && <Text style={styles.pickerFamily}>{option.family}</Text>}
-                          <Pressable
-                            style={[styles.pickerItem, chosen && styles.pickerItemChosen]}
-                            onPress={() => { onSetProgram(track.id, option.program); setPickerFor(null); }}
-                            accessibilityRole="radio"
-                            accessibilityState={{ selected: chosen }}
-                          >
-                            <Text
-                              style={[styles.pickerItemText, chosen && styles.pickerItemTextChosen]}
-                              numberOfLines={1}
-                            >
-                              {option.name}
-                            </Text>
-                          </Pressable>
-                        </View>
-                      );
-                    })}
-                  </ScrollView>
-                </View>
-              )}
-
-              {/* Row actions only on the selected track. Repeating "Convert to tabs" and
-                  "Delete" down all 29 rows turned the panel into a wall of buttons and
-                  buried the thing it exists for — the track names. */}
-              {selected && (
+              {/* Row actions only on the selected track. Repeating "Convert to tabs" down
+                  all 29 rows turned the panel into a wall of buttons and buried the thing
+                  it exists for — the track names. */}
+              {selected && onConvert && track.notes.length > 0 && (
                 <View style={styles.rowActions}>
-                  {onConvert && track.notes.length > 0 && (
-                    <Pressable
-                      style={styles.convert}
-                      onPress={() => onConvert(track.id)}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Convert ${track.name} to harmonica tabs`}
-                    >
-                      <Text style={styles.convertText}>Convert to tabs</Text>
-                    </Pressable>
-                  )}
-                  {onDeleteTrack && tracks.length > 1 && (
-                    <Pressable
-                      onPress={() => onDeleteTrack(track.id)}
-                      style={styles.deleteTrack}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Delete track ${track.name}`}
-                    >
-                      <Text style={styles.deleteTrackText}>Delete</Text>
-                    </Pressable>
-                  )}
+                  <Pressable
+                    style={styles.convert}
+                    onPress={() => onConvert(track.id)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Convert ${track.name} to harmonica tabs`}
+                  >
+                    <Text style={styles.convertText}>Convert to tabs</Text>
+                  </Pressable>
                 </View>
               )}
             </View>
           );
         })}
       </ScrollView>
+
+      <InstrumentPickerModal
+        track={tracks.find((t) => t.id === pickerFor) ?? null}
+        onPick={(program) => {
+          if (pickerFor) onSetProgram(pickerFor, program);
+          setPickerFor(null);
+        }}
+        onClose={() => setPickerFor(null)}
+        theme={theme}
+        styles={styles}
+      />
     </View>
+  );
+}
+
+/**
+ * Instrument picker — a centred modal laid out as sixteen General MIDI family blocks.
+ *
+ * It used to be a 220px-tall scrolling list inside the track row itself, which made all
+ * 128 programs reachable but organised only in the sense that they were in order: finding
+ * "Overdriven Guitar" meant scrolling a narrow column past everything before it, in a panel
+ * that also had to keep showing the tracks. GM's own structure is exactly eight programs
+ * per family, so laying the families out side by side turns that one long scroll into
+ * sixteen short, scannable groups — and the modal has the width to actually show them.
+ */
+function InstrumentPickerModal({ track, onPick, onClose, theme, styles }: {
+  /** The track being changed, or null when the picker is closed. */
+  track: MidiTrackData | null;
+  onPick: (program: number) => void;
+  onClose: () => void;
+  theme: Theme;
+  styles: ReturnType<typeof createStyles>;
+}) {
+  // Grouped once per render of an open picker rather than per family block, which would
+  // otherwise walk all 128 programs sixteen times.
+  const byFamily = useMemo(() => {
+    const groups = new Map<string, { program: number; name: string }[]>();
+    for (const option of gmProgramOptions()) {
+      const group = groups.get(option.family) ?? [];
+      group.push(option);
+      groups.set(option.family, group);
+    }
+    return groups;
+  }, []);
+
+  return (
+    <Modal
+      visible={track !== null}
+      transparent
+      animationType="fade"
+      statusBarTranslucent
+      onRequestClose={onClose}
+    >
+      {/* No accessibilityRole="button" on the backdrop/card — that's what makes
+          react-native-web render a real <button>, and the rows inside genuinely need the
+          role, which would nest one button in another. Same reasoning as the piano roll's
+          own help modal. */}
+      <Pressable style={styles.modalBackdrop} onPress={onClose}>
+        <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+          <View style={styles.modalHeader}>
+            <View style={styles.modalHeaderText}>
+              <Text style={styles.modalTitle}>Instrument</Text>
+              {track && (
+                <Text style={styles.modalSubtitle} numberOfLines={1}>
+                  {track.name} · currently {instrumentName(track.program)}
+                </Text>
+              )}
+            </View>
+            <Pressable
+              onPress={onClose}
+              style={styles.modalCloseBtn}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="Close instrument picker"
+            >
+              <Ionicons name="close" size={20} color={theme.textSub} />
+            </Pressable>
+          </View>
+
+          <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalScrollContent}>
+            <View style={styles.familyGrid}>
+              {GM_FAMILIES.map((family) => (
+                <View key={family} style={styles.familyBlock}>
+                  <Text style={styles.familyHeading}>{family}</Text>
+                  {(byFamily.get(family) ?? []).map((option) => {
+                    const chosen = track?.program === option.program;
+                    return (
+                      <Pressable
+                        key={option.program}
+                        style={({ hovered }: any) => [
+                          styles.pickerItem,
+                          hovered && !chosen && styles.pickerItemHovered,
+                          chosen && styles.pickerItemChosen,
+                        ]}
+                        onPress={() => onPick(option.program)}
+                        accessibilityRole="radio"
+                        accessibilityState={{ selected: chosen }}
+                      >
+                        <Text
+                          style={[styles.pickerItemText, chosen && styles.pickerItemTextChosen]}
+                          numberOfLines={1}
+                        >
+                          {option.name}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              ))}
+            </View>
+          </ScrollView>
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }
 
@@ -347,11 +475,20 @@ function createStyles(t: Theme) {
     },
     addTrackText: { fontFamily: Poppins.bold, fontSize: 14, color: t.accent, lineHeight: 16 },
     rowActions: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+    // Corner dismiss, matching every other closable surface in the app. Absolute so it
+    // costs the row no height and can't be pushed around by a long track name.
     deleteTrack: {
-      paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6,
-      borderWidth: 1, borderColor: t.border,
-    },
-    deleteTrackText: { fontFamily: Poppins.bold, fontSize: 11, color: t.textMuted },
+      position: 'absolute',
+      top: 6,
+      right: 6,
+      width: 18,
+      height: 18,
+      borderRadius: 5,
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex: 2,
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as any,
     list: { flex: 1 },
     row: {
       paddingHorizontal: 10,
@@ -359,9 +496,13 @@ function createStyles(t: Theme) {
       borderBottomWidth: 1,
       borderBottomColor: t.separator,
       gap: 6,
+      position: 'relative',
     },
     rowSelected: { backgroundColor: t.accentSoft },
-    rowMain: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    // paddingRight reserves the delete X's corner permanently, whether or not it's
+    // currently shown — otherwise every track name would reflow the moment the pointer
+    // entered its row.
+    rowMain: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingRight: 18 },
     swatch: { width: 10, height: 10, borderRadius: 3 },
     rowText: { flex: 1, minWidth: 0 },
     trackName: { fontFamily: Poppins.bold, fontSize: 13, color: t.textPrimary },
@@ -377,8 +518,10 @@ function createStyles(t: Theme) {
     },
     toggleMuted:  { backgroundColor: t.recordSoft,  borderColor: t.record },
     toggleSoloed: { backgroundColor: t.warningSoft, borderColor: t.warning },
-    toggleText:       { fontFamily: Poppins.bold, fontSize: 11, color: t.textMuted },
-    toggleTextActive: { color: t.textPrimary },
+    toggleText:     { fontFamily: Poppins.bold, fontSize: 11, color: t.textMuted },
+    // Matches the guitar glyph beside it, which goes accent while the picker is open —
+    // mute and solo carry their own state in the icon now and need no text variant.
+    toggleTextOpen: { color: t.accent },
     convert: {
       alignSelf: 'flex-start',
       paddingHorizontal: 8, paddingVertical: 4,
@@ -387,28 +530,73 @@ function createStyles(t: Theme) {
       borderWidth: 1, borderColor: t.accentDim,
     },
     convertText: { fontFamily: Poppins.bold, fontSize: 11, color: t.accent },
-    toggleWide: { width: 38 },
+    // Takes whatever the row has left after mute and solo, so the icon and the full word
+    // fit at any panel width instead of being budgeted for the abbreviation it used to show.
+    toggleWide: { flex: 1, flexDirection: 'row', gap: 5, paddingHorizontal: 6 },
     toggleOpen: { backgroundColor: t.accentSoft, borderColor: t.accentDim },
-    picker: {
-      marginTop: 4,
-      borderRadius: 8,
+
+    // ─── Instrument picker modal ──────────────────────────────────────────────
+    modalBackdrop: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.45)',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 24,
+    },
+    modalCard: {
+      width: '100%',
+      maxWidth: WEB_CONTENT_WIDTH.wide,
+      maxHeight: '85%',
+      backgroundColor: t.bg,
+      borderRadius: 16,
       borderWidth: 1,
       borderColor: t.border,
-      backgroundColor: t.surfaceAlt,
       overflow: 'hidden',
     },
-    // Bounded so the picker can't push the rest of the track list off-screen.
-    pickerList: { maxHeight: 220 },
-    pickerFamily: {
+    modalHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 12,
+      paddingHorizontal: 18,
+      paddingVertical: 14,
+      borderBottomWidth: 1,
+      borderBottomColor: t.border,
+    },
+    modalHeaderText: { flex: 1, minWidth: 0, gap: 2 },
+    modalTitle: { fontFamily: Poppins.bold, fontSize: 16, color: t.textPrimary },
+    modalSubtitle: { fontFamily: SpaceGrotesk.regular, fontSize: 12, color: t.textMuted },
+    modalCloseBtn: {
+      width: 30, height: 30, borderRadius: 8,
+      alignItems: 'center', justifyContent: 'center',
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as any,
+    modalScroll: { flexGrow: 0 },
+    modalScrollContent: { padding: 14 },
+    // Families wrap into as many columns as the card's width allows. 160px is wide enough
+    // for the longest GM name at this size ("Fretless Bass", "Synth Strings 1"), so a
+    // block never has to truncate at the widths this card actually reaches.
+    familyGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 14 },
+    familyBlock: { minWidth: 160, flexGrow: 1, flexBasis: 160, gap: 1 },
+    familyHeading: {
       fontFamily: Poppins.bold,
       fontSize: 10,
       color: t.textMuted,
-      paddingHorizontal: 8,
-      paddingTop: 8,
-      paddingBottom: 2,
       textTransform: 'uppercase',
+      letterSpacing: 0.5,
+      paddingHorizontal: 8,
+      paddingBottom: 4,
+      marginBottom: 2,
+      borderBottomWidth: 1,
+      borderBottomColor: t.separator,
     },
-    pickerItem: { paddingHorizontal: 10, paddingVertical: 5 },
+    pickerItem: {
+      paddingHorizontal: 8,
+      paddingVertical: 5,
+      borderRadius: 6,
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as any,
+    pickerItemHovered: { backgroundColor: t.surfaceAlt },
     pickerItemChosen: { backgroundColor: t.accentSoft },
     pickerItemText: { fontFamily: SpaceGrotesk.regular, fontSize: 12, color: t.textSub },
     pickerItemTextChosen: { fontFamily: Poppins.bold, color: t.accent },

@@ -61,7 +61,31 @@ const FIT_PADDING_PX        = 60;
 const MIN_DURATION_MS   = 60;
 const NUDGE_TIME_MS     = 50;
 const RESIZE_HANDLE_W   = 10;
+/**
+ * Floor on a note block's rendered width.
+ *
+ * This was 14px, which is why blocks looked like they stopped responding to zoom: at the
+ * default 90px/s a 300ms note is 27px, so anywhere below ~50% zoom every short note
+ * clamped to the same 14px and the grid stopped showing real durations — they only
+ * "returned" once you zoomed far enough in for the true width to exceed the floor.
+ * 2px is only there so a note can't vanish entirely at the 3px/s zoom floor; it never
+ * takes effect at a zoom you'd actually be editing at.
+ */
+const MIN_NOTE_WIDTH_PX = 2;
 const RULER_HEIGHT      = 30;
+/**
+ * The grid's own horizontal scrollbar.
+ *
+ * A custom one rather than the ScrollView's native indicator, because of where the native
+ * one ends up: the horizontal ScrollView sits *inside* the vertical one and its content is
+ * the full row ladder tall, so its scrollbar renders at the bottom of all 128 rows — you
+ * had to scroll to the very bottom of the pitch range to find out you could scroll
+ * sideways at all. Inverting the two ScrollViews just moves the problem onto the vertical
+ * bar, so the fix is a scrollbar that isn't a ScrollView's at all: this one is a sibling of
+ * the grid, pinned under it, driven from the `scrollX` state the roll already keeps.
+ */
+const H_SCROLLBAR_H         = 12;
+const H_SCROLLBAR_MIN_THUMB = 28;
 // One height for every toolbar control, so the row sits on a single baseline.
 const CONTROL_H         = 28;
 const DATA_BAR_HEIGHT   = 140;
@@ -219,6 +243,12 @@ const LOW_CONFIDENCE_THRESHOLD = 50;
 // Matches the existing "Add Note" toolbar button's default (edit.tsx) — the pencil tool's
 // click-to-create uses the same baseline duration for consistency.
 const DEFAULT_NEW_NOTE_DURATION_MS = 300;
+
+/** A note's rendered width. One helper rather than the same clamp written at five call
+ *  sites, which is how the hit-test and the block itself could have disagreed. */
+function noteWidthPx(durationMs: number, pxPerSecond: number): number {
+  return Math.max(MIN_NOTE_WIDTH_PX, (durationMs / 1000) * pxPerSecond);
+}
 
 function maxOf(nums: number[], floor: number): number {
   return nums.reduce((m, n) => (n > m ? n : m), floor);
@@ -395,7 +425,10 @@ function LabelRailCell({ row, top, height, swatchColor, isOctaveBoundary, styles
       <Text style={styles.labelTabSign} numberOfLines={1}>{sign}</Text>
       <Text style={styles.labelTabNumber} numberOfLines={1}>{number}</Text>
       <Text style={styles.labelTabModifier} numberOfLines={1}>{modifier}</Text>
-      <Text style={styles.labelNote} numberOfLines={1}>{row.note}</Text>
+      <Text
+        style={[styles.labelNote, !row.playable && styles.labelNoteUnplayable]}
+        numberOfLines={1}
+      >{row.note}</Text>
 
       {hovered && (
         <View pointerEvents="none" style={styles.labelTooltip}>
@@ -586,6 +619,14 @@ export function PianoRoll({
   // the resulting onScroll callback doesn't mistake it for the user manually scrolling.
   const isProgrammaticScrollRef = useRef(false);
   const autoScrollEnabledRef    = useRef(true);
+  // Where the pointer last was over the grid, so zoom can hold that spot still instead of
+  // the middle of the viewport. Stored as a raw clientX plus the grid's own DOM node
+  // rather than a resolved offset: the node's bounding rect moves with every scroll, so
+  // resolving on mousemove would bake in a scroll position that's stale by the time a
+  // zoom actually happens. Refs, not state — this updates on every mouse move and nothing
+  // renders from it.
+  const pointerClientXRef = useRef<number | null>(null);
+  const gridNodeRef = useRef<{ getBoundingClientRect?: () => DOMRect } | null>(null);
 
   function togglePanelCollapsed() {
     const next = !panelCollapsed;
@@ -736,7 +777,7 @@ export function PianoRoll({
     const rowIndex = positions.findIndex((p) => p.note === note.note);
     if (rowIndex === -1) return null;
     const left = (note.start_time / 1000) * pxPerSecond;
-    const width = Math.max(14, (note.duration / 1000) * pxPerSecond);
+    const width = noteWidthPx(note.duration, pxPerSecond);
     return { left, top: rowIndex * rowH, width, height: rowH };
   }
 
@@ -787,6 +828,12 @@ export function PianoRoll({
    * pointerEvents-transparent), so a per-block handler would miss exactly the notes a
    * user is most likely to aim at.
    */
+  /** Feeds `zoomAnchorX` — see the refs it writes for why it stores the raw clientX. */
+  function handleGridMouseMove(e: { clientX: number; currentTarget: unknown }) {
+    gridNodeRef.current = e.currentTarget as { getBoundingClientRect?: () => DOMRect };
+    pointerClientXRef.current = e.clientX;
+  }
+
   function handleGridContextMenu(e: {
     preventDefault: () => void; clientX: number; clientY: number; currentTarget: unknown;
   }) {
@@ -888,29 +935,70 @@ export function PianoRoll({
     })));
   }
 
-  // Viewport-center-anchored zoom (the +/- buttons and the %-pill's reset-to-default) —
-  // same math as the wheel handler below, just anchored to the middle of the visible
-  // area instead of the cursor, since a button press has no cursor position of its own.
+  /**
+   * The viewport-space x that zoom holds still — the timestamp under it stays put while
+   * everything else scales around it.
+   *
+   * Wherever the pointer last was over the grid, so zooming keeps whatever you were
+   * looking at under the cursor. Falls back to the middle of the viewport when there's no
+   * usable pointer position: before the mouse has ever been over the grid, on touch, and —
+   * the case that actually matters — when the last position has since been scrolled out of
+   * view, where anchoring to it would fling the grid somewhere the user isn't looking.
+   */
+  function zoomAnchorX(): number {
+    const center = viewportWidth / 2;
+    const clientX = pointerClientXRef.current;
+    const rect = gridNodeRef.current?.getBoundingClientRect?.();
+    if (clientX === null || !rect || viewportWidth === 0) return center;
+    // The grid element *is* the scrolling content, so its left edge moves with scrollX —
+    // clientX - rect.left is a content-space offset, and the scroll has to come back out
+    // of it to say where that lands on screen.
+    const viewportX = clientX - rect.left - scrollX;
+    return viewportX < 0 || viewportX > viewportWidth ? center : viewportX;
+  }
+
+  // Zoom for the +/- buttons and the %-pill's reset-to-default. Same anchored math as the
+  // wheel handler below — a button press has no cursor position of its own, so it borrows
+  // the last one over the grid (see zoomAnchorX).
   function zoomByFactor(factor: number) {
     const oldPx = pxPerSecond;
     const newPx = Math.max(MIN_PX_PER_SECOND, Math.min(MAX_PX_PER_SECOND, oldPx * factor));
     if (newPx === oldPx) return;
-    const centerTimeMs = viewportWidth > 0 ? ((scrollX + viewportWidth / 2) / oldPx) * 1000 : 0;
-    const newScrollX = Math.max(0, (centerTimeMs / 1000) * newPx - viewportWidth / 2);
+    const anchorX = zoomAnchorX();
+    const anchorTimeMs = ((scrollX + anchorX) / oldPx) * 1000;
+    const newScrollX = Math.max(0, (anchorTimeMs / 1000) * newPx - anchorX);
     setPxPerSecond(newPx);
     setScrollX(newScrollX);
     isProgrammaticScrollRef.current = true;
     hScrollRef.current?.scrollTo({ x: newScrollX, animated: false });
   }
 
-  // Zoom + scroll so the whole chart is actually on screen: horizontally the full
-  // duration fills the viewport, vertically the used pitch range is centered.
-  //
-  // Without this the editor looks empty even when it isn't. The row ladder is the full
-  // chromatic range (40+ rows, well past a viewport) and starts scrolled to its highest
-  // rows, while the default 90px/second means a two-second chart occupies the leftmost
-  // sliver of a five-bar-wide grid — so a saved chart opened onto blank high rows several
-  // seconds past where any of its notes were.
+  /**
+   * Scroll the pitch axis so the notes are actually in view, without touching the zoom.
+   *
+   * The row ladder is the full chromatic range (40 rows in the editor, 128 in the Studio)
+   * and starts scrolled to its highest rows, which for most music is empty sky — so
+   * without this a saved chart opens onto blank rows well above anything it contains.
+   */
+  function centerOnNotes() {
+    // Renamed off `rows` once that became a prop — this is the set of row *indices* the
+    // notes occupy, not the row list itself.
+    const occupiedRows = notes
+      .map((n) => positions.findIndex((p) => p.note === n.note))
+      .filter((i) => i >= 0);
+    if (occupiedRows.length === 0 || gridViewportHeight === 0) return;
+    const centerPx = ((Math.min(...occupiedRows) + Math.max(...occupiedRows) + 1) / 2) * rowH;
+    const maxY = Math.max(0, positions.length * rowH - gridViewportHeight);
+    vScrollRef.current?.scrollTo({
+      y: Math.max(0, Math.min(maxY, centerPx - gridViewportHeight / 2)),
+      animated: false,
+    });
+  }
+
+  // Zoom + scroll so the whole chart is on screen at once: horizontally the full duration
+  // fills the viewport, vertically the used pitch range is centred. The toolbar's
+  // "Fit to content" button, and only that — see the open effect below for why this is no
+  // longer what happens automatically.
   function fitToContent() {
     if (positions.length === 0) return;
 
@@ -928,35 +1016,38 @@ export function PianoRoll({
       hScrollRef.current?.scrollTo({ x: 0, animated: false });
     }
 
-    // Renamed off `rows` once that became a prop — this is the set of row *indices* the
-    // notes occupy, not the row list itself.
-    const occupiedRows = notes
-      .map((n) => positions.findIndex((p) => p.note === n.note))
-      .filter((i) => i >= 0);
-    if (occupiedRows.length === 0 || gridViewportHeight === 0) return;
-    const centerPx = ((Math.min(...occupiedRows) + Math.max(...occupiedRows) + 1) / 2) * rowH;
-    const maxY = Math.max(0, positions.length * rowH - gridViewportHeight);
-    vScrollRef.current?.scrollTo({
-      y: Math.max(0, Math.min(maxY, centerPx - gridViewportHeight / 2)),
-      animated: false,
-    });
+    centerOnNotes();
   }
 
-  // Runs fitToContent once, on the first render where both viewport dimensions have been
-  // measured and there's something to fit. Ref-guarded rather than dependency-guarded:
-  // after that first fit, the view belongs to the user, and neither editing notes nor a
-  // window resize should yank their zoom/scroll back.
+  /**
+   * What happens when a chart opens: start at the beginning, at 100% zoom, scrolled to
+   * where the notes are.
+   *
+   * This used to run the full `fitToContent`, which meant the zoom you landed on was
+   * whatever it took to fit that particular piece — a short take opened zoomed way in, a
+   * long one zoomed way out, and the reading on the zoom pill was a different number every
+   * time. A fixed 100% is a frame of reference: bar widths mean the same thing across every
+   * chart and every session, and "Fit to content" is right there in the toolbar for when
+   * the whole piece at once is what you actually want.
+   *
+   * Ref-guarded rather than dependency-guarded: after this first pass the view belongs to
+   * the user, and neither editing notes nor resizing the window should yank it back.
+   */
   const didAutoFitRef = useRef(false);
-  // ...but a different chart is a different thing to look at, so loading one re-arms the
-  // fit. Declared above the fit effect so that on a recording change this clears the flag
-  // before the effect below gets its chance to act on it.
+  // ...but a different chart is a different thing to look at, so loading one re-arms it.
+  // Declared above the effect so that on a recording change this clears the flag before
+  // the effect below gets its chance to act on it.
   useEffect(() => { didAutoFitRef.current = false; }, [recordingId]);
   useEffect(() => {
     if (didAutoFitRef.current) return;
     if (notes.length === 0 || positions.length === 0) return;
     if (viewportWidth === 0 || gridViewportHeight === 0) return;
     didAutoFitRef.current = true;
-    fitToContent();
+    setPxPerSecond(DEFAULT_PX_PER_SECOND);
+    setScrollX(0);
+    isProgrammaticScrollRef.current = true;
+    hScrollRef.current?.scrollTo({ x: 0, animated: false });
+    centerOnNotes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notes.length, positions.length, viewportWidth, gridViewportHeight]);
 
@@ -1174,7 +1265,7 @@ export function PianoRoll({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [positions, onUpdate, onDelete, onSelect]);
 
-  // Option/Alt + scroll to zoom, cursor-anchored so the timestamp under the pointer stays
+  // Modifier + scroll to zoom, cursor-anchored so the timestamp under the pointer stays
   // fixed on screen as the scale changes (the same technique used by Signal/most DAWs) —
   // a flat zoom-from-the-left-edge feels wrong the moment you're zoomed into the middle of
   // a long recording. Registered once as a raw DOM listener (not the `onWheel` prop) since
@@ -1195,7 +1286,11 @@ export function PianoRoll({
     }
 
     function onWheel(e: WheelEvent) {
-      if (!e.altKey) return;
+      // Ctrl/Cmd as well as Alt, because a trackpad pinch is delivered as a wheel event
+      // with ctrlKey set — so this is what makes pinch-to-zoom work at all, on top of
+      // being the modifier most people reach for. Without the preventDefault below, the
+      // browser would take that same gesture as a page zoom.
+      if (!e.altKey && !e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
 
       const rect = node!.getBoundingClientRect();
@@ -1419,6 +1514,59 @@ export function PianoRoll({
 
   // Grid-background gesture — rebuilt each render (same convention as the note-block
   // gestures below) so it always closes over the current pxPerSecond/snapDivision/etc.
+  // ─── Horizontal scrollbar geometry ───────────────────────────────────────────
+  // All derived from state the roll already holds (see H_SCROLLBAR_H for why this isn't a
+  // native ScrollView indicator). The track spans exactly the grid's viewport, so its
+  // width and the scrollable width are the same two numbers the culling already uses.
+  const hTrackW    = Math.max(0, viewportWidth);
+  const maxScrollX = Math.max(0, gridWidth - hTrackW);
+  // A full-width thumb when the whole chart already fits, rather than hiding the bar: it
+  // being always present is the point, and a bar that comes and goes shifts the layout
+  // under the grid every time you zoom past the fit threshold.
+  const hThumbW = hTrackW === 0 ? 0
+    : maxScrollX === 0 ? hTrackW
+    : Math.min(hTrackW, Math.max(H_SCROLLBAR_MIN_THUMB, (hTrackW / gridWidth) * hTrackW));
+  const hThumbTravel = Math.max(0, hTrackW - hThumbW);
+  const hThumbX = maxScrollX === 0 ? 0 : Math.min(hThumbTravel, (scrollX / maxScrollX) * hThumbTravel);
+  const hDragStartXRef = useRef(0);
+
+  /** The one place that moves the grid horizontally on the scrollbar's behalf — keeps the
+   *  `scrollX` mirror, the real ScrollView and the autoscroll flag in agreement. */
+  function scrollGridToX(x: number) {
+    const clamped = Math.max(0, Math.min(maxScrollX, x));
+    // Dragging the scrollbar is the user taking over the view, exactly like scrolling the
+    // grid itself — playback autoscroll stands down until the next play (see
+    // handleGridScroll, which can't infer it here because the scroll *is* programmatic).
+    autoScrollEnabledRef.current = false;
+    isProgrammaticScrollRef.current = true;
+    setScrollX(clamped);
+    hScrollRef.current?.scrollTo({ x: clamped, animated: false });
+  }
+
+  function beginThumbDrag() { hDragStartXRef.current = scrollXRef.current; }
+
+  function dragThumbBy(dx: number) {
+    if (hThumbTravel <= 0) return;
+    scrollGridToX(hDragStartXRef.current + (dx / hThumbTravel) * maxScrollX);
+  }
+
+  /** Click the empty track to jump — lands the thumb centred on the click, the convention
+   *  every native scrollbar's page-jump approximates. Clicks that land on the thumb itself
+   *  are ignored so a stationary press before a drag doesn't first teleport the view. */
+  function jumpThumbTo(x: number) {
+    if (hThumbTravel <= 0) return;
+    if (x >= hThumbX && x <= hThumbX + hThumbW) return;
+    scrollGridToX(((x - hThumbW / 2) / hThumbTravel) * maxScrollX);
+  }
+
+  const hThumbGesture = Gesture.Pan()
+    .onStart(() => { runOnJS(beginThumbDrag)(); })
+    .onUpdate((e) => { runOnJS(dragThumbBy)(e.translationX); });
+
+  const hTrackGesture = Gesture.Tap().onEnd((e, success) => {
+    if (success) runOnJS(jumpThumbTo)(e.x);
+  });
+
   // Pencil: tap empty background to create a note (or select an existing one — see
   // handleCreateNoteAt's own hit-test). Selection: a Race between a plain click (select/
   // toggle a single note, or clear) and a drag (marquee) — individual notes have no
@@ -1713,7 +1861,7 @@ export function PianoRoll({
 
               {showPlayhead && (
                 <View pointerEvents="none" style={[styles.playheadWrap, { left: playheadLeft - 4 }]}>
-                  <View style={[styles.playheadRulerLine, { height: RULER_HEIGHT - 10 }]} />
+                  <View style={styles.playheadRulerLine} />
                 </View>
               )}
             </View>
@@ -1760,14 +1908,18 @@ export function PianoRoll({
           <ScrollView
             ref={hScrollRef}
             horizontal
-            showsHorizontalScrollIndicator={Platform.OS === 'web'}
+            // The native indicator would render at the bottom of the full row ladder,
+            // off-screen — replaced by the pinned scrollbar below the grid.
+            showsHorizontalScrollIndicator={false}
             onScroll={handleGridScroll}
             scrollEventThrottle={16}
           >
             <GestureDetector gesture={backgroundGesture}>
               <View
                 style={[styles.grid, { width: gridWidth, height: gridHeight }]}
-                {...(Platform.OS === 'web' ? ({ onContextMenu: handleGridContextMenu } as object) : null)}
+                {...(Platform.OS === 'web'
+                  ? ({ onContextMenu: handleGridContextMenu, onMouseMove: handleGridMouseMove } as object)
+                  : null)}
               >
                 {visibleRows.map(({ row: p, index }) => {
                   const next = positions[index + 1];
@@ -1892,6 +2044,21 @@ export function PianoRoll({
         </View>
       </ScrollView>
 
+      {/* Horizontal scrollbar — pinned here, outside the vertical ScrollView, so it stays
+          on screen at any scroll position (see H_SCROLLBAR_H). The left segment matches
+          the label rail's width and treatment so the frozen column reads as continuing
+          all the way down. */}
+      <View style={styles.hScrollbarRow}>
+        <View style={styles.hScrollbarRail} />
+        <GestureDetector gesture={hTrackGesture}>
+          <View style={styles.hScrollbarTrack}>
+            <GestureDetector gesture={hThumbGesture}>
+              <View style={[styles.hScrollbarThumb, { left: hThumbX, width: hThumbW }]} />
+            </GestureDetector>
+          </View>
+        </GestureDetector>
+      </View>
+
       {/* Data panel — Breath Force / Duration / Confidence / Pitch Bend, x-synced with the
           grid above. Collapsible so it doesn't permanently eat vertical space when the
           user just wants the note grid. */}
@@ -2006,7 +2173,7 @@ const TOOL_HELP: ToolHelpEntry[] = [
   { icon: 'return-down-forward-outline', title: 'Quantize',
     desc: 'Snaps the selected notes (or every note, if none are selected) to the current grid resolution right now — independent of whether Snap itself is on.' },
   { icon: 'remove', title: 'Zoom (− / % / +)',
-    desc: 'Zooms the timeline in/out, centered on what’s currently in view. Click the percentage to reset to 100%.' },
+    desc: 'Zooms the timeline in/out, holding whatever is under the mouse still. Alt/Ctrl/Cmd + scroll (or a trackpad pinch) zooms straight from the grid. Click the percentage to reset to 100%.' },
   { icon: 'flag-outline', title: 'Loop-region pin',
     desc: 'The blue tab left of the ruler. Drag it out onto the timeline and release to drop a marker, then drag it again for the second one — the span between them (regardless of which you placed first) becomes the loop region, played back on repeat. Once placed, drag either edge of the blue band to adjust it, or its × to clear it. Esc cancels a pin mid-drag.' },
   { icon: 'chevron-up', title: 'Semitone / Octave shift',
@@ -2150,9 +2317,7 @@ function BarRuler({ map, durationMs, pxPerSecond, theme, snapSubdivision, visibl
   const showBeats        = minSpacing(beats) >= MIN_RULER_TICK_SPACING_PX;
 
   // Label density is driven by the narrowest bar on screen, so a ritardando that stretches
-  // later bars can't make early ones collide. Only the *number* thins out — every bar
-  // still gets its tick, which is what keeps the ruler's rhythm intact when the numbers
-  // start skipping.
+  // later bars can't make early ones collide.
   const minBarPx = minSpacing(bars);
 
   let labelEvery = 1;
@@ -2183,26 +2348,37 @@ function BarRuler({ map, durationMs, pxPerSecond, theme, snapSubdivision, visibl
           }}
         />
       ))}
-      {bars.map((line) => (
-        <View
-          key={line.bar}
-          pointerEvents="none"
-          style={{ position: 'absolute', left: (line.ms / 1000) * pxPerSecond, top: 0, bottom: 0 }}
-        >
-          {/* Anchored to the absolute bar number, not the index within the visible slice —
-              otherwise which bars carry a label changes as you scroll, and the ruler
-              appears to shuffle itself. */}
-          {((line.bar ?? 1) - 1) % labelEvery === 0 && (
-            <Text style={{ fontSize: 12, fontFamily: Poppins.bold, color: theme.textSub }}>
-              {msToBarInMap(map, line.ms).toFixed(0)}
-            </Text>
-          )}
-          <View style={{
-            position: 'absolute', bottom: 0, left: 0,
-            width: 1.5, height: BAR_TICK_H, backgroundColor: theme.textSub,
-          }} />
-        </View>
-      ))}
+      {bars.map((line) => {
+        // Anchored to the absolute bar number, not the index within the visible slice —
+        // otherwise which bars carry a label changes as you scroll, and the ruler appears
+        // to shuffle itself.
+        const labelled = ((line.bar ?? 1) - 1) % labelEvery === 0;
+        return (
+          <View
+            key={line.bar}
+            pointerEvents="none"
+            style={{ position: 'absolute', left: (line.ms / 1000) * pxPerSecond, top: 0, bottom: 0 }}
+          >
+            {labelled && (
+              <Text style={{ fontSize: 12, fontFamily: Poppins.bold, color: theme.textSub }}>
+                {msToBarInMap(map, line.ms).toFixed(0)}
+              </Text>
+            )}
+            {/* The tall/wide tick is reserved for bars that actually carry a number, so a
+                heavy mark always means "this is the bar the number above it names". Once
+                the view zooms out far enough that numbers start skipping, the bars in
+                between drop to the beat tick's weight rather than staying heavy — leaving
+                them heavy is what made the wide ticks look like they'd drifted off the
+                numbered bars. */}
+            <View style={{
+              position: 'absolute', bottom: 0, left: 0,
+              width:  labelled ? 1.5 : 1,
+              height: labelled ? BAR_TICK_H : BEAT_TICK_H,
+              backgroundColor: labelled ? theme.textSub : theme.textMuted,
+            }} />
+          </View>
+        );
+      })}
     </>
   );
 }
@@ -2549,7 +2725,7 @@ function PianoRollNoteBlock({
   const left   = (note.start_time / 1000) * pxPerSecond;
   // Blocks fill their row edge to edge — no inset margin, no rounding (see noteBlock).
   const top    = rowIndex * rowHeight;
-  const width  = Math.max(14, (note.duration / 1000) * pxPerSecond);
+  const width  = noteWidthPx(note.duration, pxPerSecond);
   const height = rowHeight;
   // Technique still drives the color, but as an edge accent + text on a quiet tinted
   // body rather than a solid slab — see techniqueSkin. Selection gets its own signal via
@@ -2563,6 +2739,11 @@ function PianoRollNoteBlock({
   const skin = techniqueSkin(note.tab, theme.isDark, noteColor);
   const labelInset = labelInsetFor(width);
   const lowConfidence = note.confidence < LOW_CONFIDENCE_THRESHOLD;
+  // The two edge handles can't be allowed to cover the whole block, or there's no middle
+  // left to grab and the note can only ever be resized, never moved. At a fixed 10px each
+  // that was already true of anything under 20px wide — which, now that blocks shrink
+  // honestly with zoom, is most of them at low zoom rather than none of them.
+  const handleW = Math.min(RESIZE_HANDLE_W, Math.max(1, width / 3));
 
   // Horizontal (time) follows the finger continuously; vertical (pitch) snaps to whole
   // rows during the drag itself (computed on the UI thread, inside the worklet) rather
@@ -2581,7 +2762,7 @@ function PianoRollNoteBlock({
   // but both need to feed the same left/width computation to compose correctly.
   const boxAnimatedStyle = useAnimatedStyle(() => ({
     left: left + resizeLeftDelta.value,
-    width: Math.max(14, width - resizeLeftDelta.value + resizeDelta.value),
+    width: Math.max(MIN_NOTE_WIDTH_PX, width - resizeLeftDelta.value + resizeDelta.value),
   }));
 
   // Selection tool: static visual only — no gesture/handles/pill, so a touch anywhere on
@@ -2634,10 +2815,10 @@ function PianoRollNoteBlock({
         )}
 
         <GestureDetector gesture={resizeLeftGesture}>
-          <View style={styles.resizeHandleLeft} />
+          <View style={[styles.resizeHandleLeft, { width: handleW }]} />
         </GestureDetector>
         <GestureDetector gesture={resizeRightGesture}>
-          <View style={styles.resizeHandle} />
+          <View style={[styles.resizeHandle, { width: handleW }]} />
         </GestureDetector>
       </Animated.View>
     </GestureDetector>
@@ -2717,7 +2898,7 @@ function GroupSelectionOverlay({
     const updates: { id: string; changes: NoteUpdate }[] = [];
     for (const note of selectedNotes) {
       const left  = (note.start_time / 1000) * pxPerSecond;
-      const width = Math.max(14, (note.duration / 1000) * pxPerSecond);
+      const width = noteWidthPx(note.duration, pxPerSecond);
       const t0 = (left - bounds.left) / bounds.width;
       const t1 = (left + width - bounds.left) / bounds.width;
       const newLeft  = newGroupLeft + t0 * newGroupWidth;
@@ -2811,7 +2992,7 @@ function GroupSelectionOverlay({
         const rowIndex = positions.findIndex((p) => p.note === note.note);
         if (rowIndex === -1) return null;
         const left  = (note.start_time / 1000) * pxPerSecond;
-        const width = Math.max(14, (note.duration / 1000) * pxPerSecond);
+        const width = noteWidthPx(note.duration, pxPerSecond);
         const t0 = (left - bounds.left) / bounds.width;
         const t1 = (left + width - bounds.left) / bounds.width;
         return (
@@ -2858,7 +3039,7 @@ function GroupGhostNote({ note, rowIndex, rowHeight, noteColor, t0, t1, bounds, 
     const newGroupWidth = Math.max(1, bounds.width - resizeLeftDelta.value + resizeRightDelta.value);
     return {
       left:  newGroupLeft + t0 * newGroupWidth,
-      width: Math.max(4, (t1 - t0) * newGroupWidth),
+      width: Math.max(MIN_NOTE_WIDTH_PX, (t1 - t0) * newGroupWidth),
     };
   });
 
@@ -3198,7 +3379,11 @@ function createStyles(t: Theme) {
       borderBottomColor: t.border,
     },
     rulerContent: {
-      height: RULER_HEIGHT,
+      // 100% of rulerClip's *content* box, not RULER_HEIGHT — the clip's own bottom border
+      // eats a pixel of it, so a fixed RULER_HEIGHT here overflowed by 1px and the bottom
+      // of everything anchored to this box (the tick baseline, the playhead marker) was
+      // clipped just short of the border it's supposed to meet.
+      height: '100%',
       position: 'relative',
       ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
     } as any,
@@ -3327,6 +3512,41 @@ function createStyles(t: Theme) {
     labelNote: { width: 28, marginLeft: 4, fontSize: 10, fontFamily: Poppins.medium, color: t.textSub, textAlign: 'right' },
     gridVScroll: { flex: 1 },
 
+    // Pinned horizontal scrollbar. Fixed height and always rendered, so nothing below it
+    // moves as the chart's width changes — the reason it isn't hidden when the content
+    // already fits.
+    hScrollbarRow: {
+      flexDirection: 'row',
+      height: H_SCROLLBAR_H,
+      borderTopWidth: 1,
+      borderTopColor: t.separator,
+    },
+    // Continues the label rail's frozen-column treatment past the bottom of the grid, so
+    // the rail's right edge runs unbroken from the ruler to the data panel.
+    hScrollbarRail: {
+      width: LABEL_WIDTH,
+      backgroundColor: t.surface,
+      borderRightWidth: 2,
+      borderRightColor: t.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)',
+    },
+    hScrollbarTrack: {
+      flex: 1,
+      backgroundColor: t.surface,
+      // The thumb's geometry is computed from `viewportWidth`, which is measured off the
+      // panel rather than off this track and so can differ from it by the panel's own
+      // border. Clipping keeps that couple of pixels from ever showing as overhang.
+      overflow: 'hidden',
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as any,
+    hScrollbarThumb: {
+      position: 'absolute',
+      top: 2,
+      bottom: 2,
+      borderRadius: 4,
+      backgroundColor: t.textMuted,
+      ...(Platform.OS === 'web' ? { cursor: 'grab' } : null),
+    } as any,
+
     grid: { position: 'relative' },
     emptyGridHint: {
       position: 'absolute',
@@ -3360,10 +3580,23 @@ function createStyles(t: Theme) {
     // (diatonic) instrument — deliberately flatter/lower-contrast than the natural/
     // accidental striping above, so unplayable rows read as visually "further back"
     // even though they're still fully visible and still take notes.
+    //
+    // Background only. This used to also carry `opacity: 0.6`, which dimmed the row's own
+    // bottom border along with its fill — taking the separator hairline from rgba(...,0.09)
+    // down to an effective 0.054 and, where two unplayable rows sat next to each other,
+    // erasing the line between them almost entirely. The rows were always exactly `rowH`
+    // tall, but a pair with no visible divider reads as one cell of double height, which
+    // is why the ladder looked unevenly spaced on the tab editor specifically: it's the
+    // only stage that has unplayable rows at all (the Studio's chromatic ladder is
+    // entirely playable, so it never showed the effect).
     rowUnplayable: {
       backgroundColor: t.isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.025)',
-      opacity: 0.6,
     },
+    // The "quieter" signal the opacity used to give, done with colour instead so it can't
+    // touch a border. Only the pitch name is ever visible on an unplayable row (its tab
+    // columns are all empty strings, and the swatch is replaced by a muted dash), so this
+    // one label is the whole of what there was to dim.
+    labelNoteUnplayable: { color: t.textMuted },
     // Heavier divider where the octave number actually changes (e.g. B4 -> C5) —
     // a structural landmark, distinct from the plain per-row separator line.
     octaveBoundary: {
@@ -3373,8 +3606,12 @@ function createStyles(t: Theme) {
 
     // Wrapper carries horizontal position; the line is centered inside it via regular flex
     // flow rather than its own separate left math.
-    playheadWrap: { position: 'absolute', top: 0, width: 8, alignItems: 'center' },
-    playheadRulerLine: { width: 1.5, backgroundColor: t.record },
+    // top+bottom rather than a height: the ruler marker has to reach the ruler's bottom
+    // edge so it meets the grid playhead directly below it and the two read as one line.
+    // It used to be `RULER_HEIGHT - 10` tall from the top, leaving a 10px gap above the
+    // ruler's lower border that made the marker look like it stopped short.
+    playheadWrap: { position: 'absolute', top: 0, bottom: 0, width: 8, alignItems: 'center' },
+    playheadRulerLine: { width: 1.5, flex: 1, backgroundColor: t.record },
     // Long vertical line spanning the note grid — a separate, absolutely-positioned usage
     // from the short in-ruler line above (that one lives inside a centering flex wrapper).
     playheadLine: {

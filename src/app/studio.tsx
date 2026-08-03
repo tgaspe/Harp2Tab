@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { TrackList } from '@/components/TrackList';
@@ -8,7 +8,8 @@ import { PianoRoll } from '@/components/PianoRoll';
 // Rebuilding these was the mistake the first version of this screen made: the Studio ended
 // up with a single "Play" text button while the editor next door had loop, tempo,
 // metronome, skip, stop, play/pause, rate and a time readout.
-import { WebTransportBar, createStyles as createEditStyles } from '@/app/edit';
+import { WebTransportBar } from '@/components/TransportBar';
+import { createStyles as createEditStyles } from '@/app/editStyles';
 import { audibleTracks, instrumentName } from '@/audio/studioTracks';
 import { getChromaticRows } from '@/audio/HarmonicaMapper';
 import { createTrack, tempoMapOf } from '@/audio/midiProject';
@@ -25,10 +26,10 @@ import { contentToBlob, triggerWebDownload } from '@/export/webDownload';
 import { useMidiProjectsStore } from '@/store/useMidiProjectsStore';
 import { useRecordingsStore } from '@/store/useRecordingsStore';
 import { selectExportFmt, useAppStore } from '@/store/useAppStore';
-import { usePlayback } from '@/hooks/usePlayback';
+import { useRollTransport, formatElapsed } from '@/hooks/useRollTransport';
+import { useEditHistory, useUndoRedoShortcuts } from '@/hooks/useEditHistory';
 import { useHeaderActionStore } from '@/store/useHeaderActionStore';
 import { useTheme } from '@/hooks/useTheme';
-import { barDurationMs, PLAYBACK_RATES } from '@/audio/tempo';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import type { Theme } from '@/theme';
 import type { MidiProject, MidiTrackData, TabNote } from '@/types';
@@ -56,10 +57,6 @@ import type { MidiProject, MidiTrackData, TabNote } from '@/types';
 /** Pitch-row height in the Studio. Roughly two-thirds the editor's, which puts about five
  *  octaves on screen instead of two while still leaving a note block clickable. */
 const STUDIO_ROW_HEIGHT = 18;
-
-/** Bounded for the same reason the tab editor's is (see `useAppStore`): a snapshot is an
- *  array of note references, so the depth is generous rather than costly. */
-const MAX_HISTORY = 50;
 
 /** Which track to open on. `tracks[0]` is a bad default and was: real files routinely lead
  *  with a conductor or marker track carrying no notes, so the editor opened blank, scrolled
@@ -96,12 +93,11 @@ export default function StudioScreen() {
 
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
   const [selectedNoteId, setSelectedNoteId]   = useState<string | null>(null);
-  const [loopRegion, setLoopRegion] = useState<{ startMs: number; endMs: number } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [tracksCollapsed, setTracksCollapsed] = useState(false);
+  // Session-local, unlike the tab editor's (which persists per-recording in useAppStore) —
+  // a project has no metronome setting of its own to save it into.
   const [metronomeEnabled, setMetronomeEnabled] = useState(false);
-
-  const playback = usePlayback();
 
   const tracks = project?.tracks ?? [];
   const selectedTrack = useMemo(() => {
@@ -136,7 +132,19 @@ export default function StudioScreen() {
     [tracks],
   );
 
-  const totalTimeMs = project?.durationMs ?? 0;
+  // Every rule about *when* playback restarts lives in the hook, shared with the tab
+  // editor — see `useRollTransport` for the three behaviours this screen was missing while
+  // it wired the transport up by hand. `durationMs` covers every track in the project, not
+  // just the one on screen, so it's passed rather than derived from the visible notes.
+  const transport = useRollTransport({
+    notes: audibleNotes,
+    bpm,
+    tempoMap,
+    totalTimeMs: project?.durationMs ?? 0,
+    metronomeEnabled,
+    setMetronomeEnabled,
+  });
+  const { loopRegion, setLoopRegion } = transport;
 
   const updateTrack = useCallback((trackId: string, changes: Partial<MidiTrackData>) => {
     if (!project) return;
@@ -147,76 +155,36 @@ export default function StudioScreen() {
   }, [project, saveProject]);
 
   /**
-   * Undo/redo for the Studio.
-   *
-   * The tab editor gets this from `useAppStore`, which owns the document it edits and
-   * snapshots it on every mutation. A project lives in `useMidiProjectsStore`, which is a
-   * *library* — it also holds every other project, and `saveProject` is what MIDI import
-   * itself calls, so history can't live there without Ctrl+Z being able to un-import a
-   * file. So the stack is screen-local (a session-lived editing convenience, exactly like
-   * the piano roll's own clipboard) and holds track arrays, the only thing this screen
-   * edits.
+   * Undo/redo for the Studio, over the generic stack in `useEditHistory` — see there for
+   * why the tab editor keeps its own history in `useAppStore` while this one is screen-
+   * local. A snapshot is the project's track array, the only thing this screen edits.
    *
    * Only *note* edits are recorded — see `commitNotes`. Mute/solo/program and add/delete
    * track go through `updateTrack`/`saveProject` untracked, matching what the tab editor's
    * history does and doesn't cover (musical content, not the state around it).
    */
-  const [history, setHistory] = useState<MidiTrackData[][]>([]);
-  const [future,  setFuture]  = useState<MidiTrackData[][]>([]);
+  const readTracks = useCallback(() => project?.tracks ?? null, [project]);
+  const writeTracks = useCallback((tracks: MidiTrackData[]) => {
+    if (!project) return;
+    saveProject({ ...project, tracks });
+  }, [project, saveProject]);
+  // A note's id is its index in the track's array (see `studioNotes.ts`), so it doesn't
+  // survive a jump that may have added or removed notes — dropping the selection is
+  // honest, where keeping it would leave it pointing at some unrelated note.
+  const clearSelection = useCallback(() => setSelectedNoteId(null), []);
+  const historyState = useEditHistory(readTracks, writeTracks, clearSelection);
+  const { record } = historyState;
+
+  useUndoRedoShortcuts(historyState);
 
   const commitNotes = useCallback((trackId: string, notes: MidiTrackData['notes']) => {
     if (!project) return;
-    setHistory((h) => [...h, project.tracks].slice(-MAX_HISTORY));
-    // A fresh edit invalidates whatever was available to redo.
-    setFuture([]);
+    record();
     saveProject({
       ...project,
       tracks: project.tracks.map((t) => (t.id === trackId ? { ...t, notes } : t)),
     });
-  }, [project, saveProject]);
-
-  /** Both directions are the same move in opposite stacks, so they share one body. */
-  const stepHistory = useCallback((direction: 'undo' | 'redo') => {
-    if (!project) return;
-    const [from, setFrom, setTo] = direction === 'undo'
-      ? ([history, setHistory, setFuture] as const)
-      : ([future,  setFuture,  setHistory] as const);
-    const target = from[from.length - 1];
-    if (target === undefined) return;
-    setFrom((s) => s.slice(0, -1));
-    setTo((s) => [...s, project.tracks].slice(-MAX_HISTORY));
-    // A note's id is its index in the track's array (see `studioNotes.ts`), so it doesn't
-    // survive a jump that may have added or removed notes — dropping the selection is
-    // honest, where keeping it would leave it pointing at some unrelated note.
-    setSelectedNoteId(null);
-    saveProject({ ...project, tracks: target });
-  }, [project, history, future, saveProject]);
-
-  // Ctrl/Cmd+Z and Shift+Ctrl/Cmd+Z (or Ctrl/Cmd+Y) — the Studio had no handler at all,
-  // so these fell through to the browser and did nothing. Screen-level and skipping text
-  // inputs, exactly as in the tab editor.
-  useEffect(() => {
-    if (Platform.OS !== 'web') return;
-
-    function isTextInput(target: EventTarget | null): boolean {
-      const el = target as HTMLElement | null;
-      return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
-    }
-
-    function onKeyDown(e: KeyboardEvent) {
-      if (!(e.ctrlKey || e.metaKey) || isTextInput(e.target)) return;
-      if (e.key === 'z' || e.key === 'Z') {
-        e.preventDefault();
-        stepHistory(e.shiftKey ? 'redo' : 'undo');
-      } else if (e.key === 'y' || e.key === 'Y') {
-        e.preventDefault();
-        stepHistory('redo');
-      }
-    }
-
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [stepHistory]);
+  }, [project, saveProject, record]);
 
   const handleCreate = useCallback((created: Omit<TabNote, 'id'>) => {
     if (!selectedTrack) return;
@@ -304,38 +272,6 @@ export default function StudioScreen() {
     triggerWebDownload(contentToBlob(content, encoding, mimeType), `${safeTitle}.${ext}`);
     setNotice(`Exported ${converted.length} track${converted.length === 1 ? '' : 's'} as ${exportFormat}.`);
   }, [project, exportFormat]);
-
-  // ── Transport, matching the editor's semantics exactly ──────────────────────
-
-  const playOptions = useCallback(
-    () => ({ bpm, metronomeEnabled, rate: playback.playbackRate, tempoMap }),
-    [bpm, metronomeEnabled, playback.playbackRate, tempoMap],
-  );
-
-  function handlePlayToggle() {
-    if (playback.isPlaying && !playback.isPaused) { playback.pause(); return; }
-    if (playback.isPaused) { playback.resume(); return; }
-    playback.play(audibleNotes, playOptions(), playback.currentTimeMs, loopRegion ?? undefined);
-  }
-
-  function handleSeek(ms: number) {
-    playback.seek(ms);
-  }
-
-  function handleSkipBar(direction: 1 | -1) {
-    const barMs = barDurationMs(bpm);
-    playback.seek(Math.max(0, Math.min(totalTimeMs, playback.currentTimeMs + direction * barMs)));
-  }
-
-  function handleCycleRate() {
-    const i = PLAYBACK_RATES.indexOf(playback.playbackRate as (typeof PLAYBACK_RATES)[number]);
-    playback.setPlaybackRate(PLAYBACK_RATES[(i + 1) % PLAYBACK_RATES.length]);
-  }
-
-  function formatElapsed(ms: number): string {
-    const total = Math.max(0, Math.round(ms / 1000));
-    return `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, '0')}`;
-  }
 
   /** Tempo lives on the project's map, so the transport's BPM stepper edits the map's
    *  opening tempo rather than a scalar the Studio doesn't have. */
@@ -441,9 +377,9 @@ export default function StudioScreen() {
               // against the project rather than the tab session's store.
               readNotesAfterWrite={() => (selectedTrack ? trackToTabNotes(selectedTrack) : [])}
               onDelete={handleDelete}
-              isPlaying={playback.isPlaying}
-              currentTimeMs={playback.currentTimeMs}
-              onSeek={handleSeek}
+              isPlaying={transport.isPlaying}
+              currentTimeMs={transport.currentTimeMs}
+              onSeek={transport.onSeek}
               loopRegion={loopRegion}
               onLoopRegionChange={setLoopRegion}
               headerLeft={
@@ -470,23 +406,24 @@ export default function StudioScreen() {
           the controls stop looking vertically centred. */}
       <WebTransportBar
         tabNotesLength={audibleNotes.length}
-        isPlaying={playback.isPlaying}
-        isPaused={playback.isPaused}
-        onPlayToggle={handlePlayToggle}
-        onStop={playback.stop}
-        onSkipBack={() => handleSkipBar(-1)}
-        onSkipForward={() => handleSkipBar(1)}
-        currentTimeMs={playback.currentTimeMs}
-        totalTimeMs={totalTimeMs}
+        isPlaying={transport.isPlaying}
+        isPaused={transport.isPaused}
+        onPlayToggle={transport.onPlayToggle}
+        onStop={transport.onStop}
+        onSkipBack={() => transport.onSkipBar(-1)}
+        onSkipForward={() => transport.onSkipBar(1)}
+        currentTimeMs={transport.currentTimeMs}
+        totalTimeMs={transport.totalTimeMs}
         formatElapsed={formatElapsed}
-        loopEnabled={playback.loopEnabled}
-        onToggleLoop={() => playback.setLoopEnabled(!playback.loopEnabled)}
-        playbackRate={playback.playbackRate}
-        onCycleRate={handleCycleRate}
+        loopEnabled={transport.loopEnabled}
+        onToggleLoop={() => transport.setLoopEnabled(!transport.loopEnabled)}
+        playbackRate={transport.playbackRate}
+        onCycleRate={transport.onCycleRate}
         bpm={bpm}
         setBpm={setProjectBpm}
         metronomeEnabled={metronomeEnabled}
-        onToggleMetronome={() => setMetronomeEnabled((v) => !v)}
+        onToggleMetronome={transport.onToggleMetronome}
+        history={historyState}
         containerStyle={styles.transportBar}
         compact
         theme={theme}

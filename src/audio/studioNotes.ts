@@ -107,7 +107,10 @@ export function layoutBackgroundLanes(
         key:   `${lane.id}:${note.id}`,
         left:  (note.start_time / 1000) * pxPerSecond,
         top:   rowIndex * rowHeight,
-        width: Math.max(3, (note.duration / 1000) * pxPerSecond),
+        // Same 1px-ish floor the foreground blocks use (MIN_NOTE_WIDTH_PX): a background
+        // lane that stopped shrinking while the track on top of it kept going would
+        // misreport the other tracks' rhythm at exactly the zoom you'd use to compare them.
+        width: Math.max(2, (note.duration / 1000) * pxPerSecond),
         color: lane.color,
       });
     }
