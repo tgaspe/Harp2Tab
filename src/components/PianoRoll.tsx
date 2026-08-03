@@ -752,10 +752,7 @@ export function PianoRoll({
     // so this background gesture is what actually receives it. Without this hit-test,
     // that click would stack a brand-new note underneath the one being clicked instead of
     // selecting it.
-    const hit = notes.find((n) => {
-      const b = noteBounds(n);
-      return b !== null && x >= b.left && x <= b.left + b.width && y >= b.top && y <= b.top + b.height;
-    });
+    const hit = noteAt(x, y);
     if (hit) { onSelect(hit.id); return; }
 
     const rowIndex = Math.min(positions.length - 1, Math.max(0, Math.floor(y / rowH)));
@@ -766,6 +763,52 @@ export function PianoRoll({
     const updated = notesAfterWrite();
     const created = updated[updated.length - 1];
     if (created) onSelect(created.id);
+  }
+
+  // Content-space hit test — which note, if any, sits under this point. Shared by the
+  // pencil tool's click-to-create (which has to select an existing note rather than stack
+  // a new one under it), the selection tool's plain click, and right-click-to-delete.
+  function noteAt(x: number, y: number): TabNote | undefined {
+    return notes.find((n) => {
+      const b = noteBounds(n);
+      return b !== null && x >= b.left && x <= b.left + b.width && y >= b.top && y <= b.top + b.height;
+    });
+  }
+
+  /**
+   * Right-click a note to delete it (web).
+   *
+   * Handled on the grid as a whole rather than per note block for two reasons: a
+   * right-click on *empty* grid still has to swallow the browser's own context menu (a
+   * native menu popping up over the editor is the thing that makes right-click feel
+   * unsupported), and the hit test it needs already exists here — a note block has no
+   * access to the notes beside it, and in selection mode the selected ones aren't even
+   * rendered as their own blocks (they're ghosts inside GroupSelectionOverlay, which is
+   * pointerEvents-transparent), so a per-block handler would miss exactly the notes a
+   * user is most likely to aim at.
+   */
+  function handleGridContextMenu(e: {
+    preventDefault: () => void; clientX: number; clientY: number; currentTarget: unknown;
+  }) {
+    // Unconditional, before the hit test: right-clicking empty grid should do nothing at
+    // all, not open the browser menu.
+    e.preventDefault();
+    const node = e.currentTarget as { getBoundingClientRect?: () => DOMRect } | null;
+    const rect = node?.getBoundingClientRect?.();
+    if (!rect) return;
+
+    const hit = noteAt(e.clientX - rect.left, e.clientY - rect.top);
+    if (!hit) return;
+
+    // Right-clicking inside a marquee selection removes the whole selection — matching
+    // what Backspace does there — rather than silently picking one note out of it.
+    if (mouseMode === 'selection' && selectedIds.includes(hit.id)) {
+      selectedIds.forEach((id) => onDelete(id));
+      setSelectedIds([]);
+      return;
+    }
+    onDelete(hit.id);
+    if (mouseMode === 'selection') setSelectedIds((prev) => prev.filter((id) => id !== hit.id));
   }
 
   // Selection tool: commits a completed marquee drag (content-space corners) into a set
@@ -798,10 +841,7 @@ export function PianoRoll({
   // activates for a touch with no movement, the same root cause as the pencil-tool
   // "click creates a note instead of selecting" bug fixed earlier.
   function handleSelectionTapAt(x: number, y: number) {
-    const hit = notes.find((n) => {
-      const b = noteBounds(n);
-      return b !== null && x >= b.left && x <= b.left + b.width && y >= b.top && y <= b.top + b.height;
-    });
+    const hit = noteAt(x, y);
     if (shiftHeldRef.current) {
       if (hit) {
         setSelectedIds((prev) => (prev.includes(hit.id) ? prev.filter((id) => id !== hit.id) : [...prev, hit.id]));
@@ -1044,7 +1084,18 @@ export function PianoRoll({
   useEffect(() => {
     if (Platform.OS !== 'web' || positions.length === 0) return;
 
+    // These are window-level listeners, so they fire while the user is typing in a field
+    // somewhere else on the screen too — which meant a "1" in the recording-title box
+    // silently switched tools and a Backspace deleted a note instead of a character. Same
+    // guard the screen-level undo/redo handlers use.
+    function isTextInput(target: EventTarget | null): boolean {
+      const el = target as HTMLElement | null;
+      return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+    }
+
     function onKeyDown(e: KeyboardEvent) {
+      if (isTextInput(e.target)) return;
+
       // Copy/duplicate/paste — work regardless of tool/selection model (see
       // getSelectionNotes above), same as the tool shortcuts just below.
       if (e.ctrlKey || e.metaKey) {
@@ -1627,6 +1678,7 @@ export function PianoRoll({
                 durationMs={totalMs}
                 pxPerSecond={pxPerSecond}
                 theme={theme}
+                snapSubdivision={snapSubdivision}
                 visibleStartMs={visibleStartMs}
                 visibleEndMs={visibleEndMs}
               />
@@ -1713,7 +1765,10 @@ export function PianoRoll({
             scrollEventThrottle={16}
           >
             <GestureDetector gesture={backgroundGesture}>
-              <View style={[styles.grid, { width: gridWidth, height: gridHeight }]}>
+              <View
+                style={[styles.grid, { width: gridWidth, height: gridHeight }]}
+                {...(Platform.OS === 'web' ? ({ onContextMenu: handleGridContextMenu } as object) : null)}
+              >
                 {visibleRows.map(({ row: p, index }) => {
                   const next = positions[index + 1];
                   const isOctaveBoundary = next ? getOctave(p.note) !== getOctave(next.note) : false;
@@ -1941,9 +1996,9 @@ interface ToolHelpEntry {
 
 const TOOL_HELP: ToolHelpEntry[] = [
   { icon: 'pencil', title: 'Pencil tool [1]',
-    desc: 'Click empty grid to create a note. Click an existing note to select it. Drag a note to move it, drag its left/right edge to resize.' },
+    desc: 'Click empty grid to create a note. Click an existing note to select it. Drag a note to move it, drag its left/right edge to resize. Right-click a note to delete it.' },
   { icon: 'scan-outline', title: 'Selection tool [2]',
-    desc: 'Drag to marquee-select multiple notes. Click a note to select just it. Shift+click toggles one note in/out of the selection; Shift+drag adds a marquee to the existing selection instead of replacing it. Once notes are selected, drag the group to move it together, or its edge handles to stretch it.' },
+    desc: 'Drag to marquee-select multiple notes. Click a note to select just it. Shift+click toggles one note in/out of the selection; Shift+drag adds a marquee to the existing selection instead of replacing it. Once notes are selected, drag the group to move it together, or its edge handles to stretch it. Right-click inside the selection deletes all of it.' },
   { icon: 'magnet-outline', title: 'Snap',
     desc: 'On/off — whether placing, moving, or dragging a note quantizes to the grid at all, or lands wherever you drop it.' },
   { icon: 'grid-outline', title: 'Grid (1/4, 1/8, 1/16)',
@@ -1965,13 +2020,15 @@ const SHORTCUTS: [string, string][] = [
   ['Click (pencil)', 'Create a note, or select one under the cursor'],
   ['Drag note', 'Move it'],
   ['Drag note edge', 'Resize it'],
+  ['Right-click note', 'Delete it (the whole selection, if it is in one)'],
   ['Shift+click / drag', 'Add/toggle notes in the selection'],
   ['← / →', 'Nudge the selected note(s) in time'],
   ['↑ / ↓', 'Shift the selected note(s) a semitone'],
   ['Shift+↑ / Shift+↓', 'Shift the selected note(s) an octave'],
   ['Backspace / Delete', 'Delete the selected note(s)'],
   ['Ctrl/Cmd+C / V / D', 'Copy / paste / duplicate'],
-  ['Ctrl/Cmd+Z / Y', 'Undo / redo'],
+  ['Ctrl/Cmd+Z', 'Undo'],
+  ['Shift+Ctrl/Cmd+Z, or Ctrl/Cmd+Y', 'Redo'],
   ['Drag ruler pin', 'Drop a loop-region marker, then drag another for the other end'],
 ];
 
@@ -2044,8 +2101,26 @@ function HelpModal({ visible, onClose, theme, styles }: {
 
 // ─── Bar ruler ─────────────────────────────────────────────────────────────────
 
-function BarRuler({ map, durationMs, pxPerSecond, theme, visibleStartMs, visibleEndMs }: {
+/**
+ * Ruler tick heights, measured up from the ruler's baseline.
+ *
+ * Three tiers rather than one, matching the three the grid lines below already draw: a
+ * ruler where every mark is the same length reads as a comb and tells you nothing about
+ * where a beat sits inside a bar. Bar ticks are also the only ones that carry a number.
+ */
+const BAR_TICK_H         = 10;
+const BEAT_TICK_H        = 7;
+const SUBDIVISION_TICK_H = 4;
+/** Closest two ruler ticks may sit before the tier is dropped. Lower than the grid's own
+ *  threshold (MIN_GRID_SPACING_PX) because a 4px tick at the ruler's baseline stays
+ *  readable at spacings where a full-height gridline behind the notes would be a wash. */
+const MIN_RULER_TICK_SPACING_PX = 5;
+
+function BarRuler({ map, durationMs, pxPerSecond, theme, snapSubdivision, visibleStartMs, visibleEndMs }: {
   map: TempoMap; durationMs: number; pxPerSecond: number; theme: Theme;
+  /** Same value the grid lines use, so a ruler tick sits above every gridline rather than
+   *  the two disagreeing about where an eighth is. */
+  snapSubdivision: Exclude<SnapDivision, 'off'>;
   visibleStartMs: number; visibleEndMs: number;
 }) {
   // Bars are asked for rather than computed from a bar length, because with a tempo or
@@ -2057,41 +2132,76 @@ function BarRuler({ map, durationMs, pxPerSecond, theme, visibleStartMs, visible
   // labels nobody can see.
   const from = Math.max(0, visibleStartMs);
   const to   = Math.min(durationMs + 8000, visibleEndMs);
-  const bars = useMemo(
-    () => gridLines(map, from, to, 4).filter((l) => l.isBar),
-    [map, from, to],
+  const all = useMemo(
+    () => gridLines(map, from, to, snapSubdivision),
+    [map, from, to, snapSubdivision],
   );
+  const bars = useMemo(() => all.filter((l) => l.isBar), [all]);
+
+  // Same measured-spacing thinning as BeatGridLines — taken off what actually came back
+  // rather than a nominal bar length, so it stays right across a tempo change where the
+  // spacing isn't uniform.
+  const minSpacing = (list: GridLine[]) => list.reduce(
+    (min, line, i) => (i === 0 ? min : Math.min(min, ((line.ms - list[i - 1].ms) / 1000) * pxPerSecond)),
+    Infinity,
+  );
+  const beats = all.filter((l) => l.isBeat);
+  const showSubdivisions = minSpacing(all)   >= MIN_RULER_TICK_SPACING_PX;
+  const showBeats        = minSpacing(beats) >= MIN_RULER_TICK_SPACING_PX;
 
   // Label density is driven by the narrowest bar on screen, so a ritardando that stretches
-  // later bars can't make early ones collide.
-  const minBarPx = bars.reduce((min, line, i) => {
-    if (i === 0) return min;
-    return Math.min(min, ((line.ms - bars[i - 1].ms) / 1000) * pxPerSecond);
-  }, Infinity);
+  // later bars can't make early ones collide. Only the *number* thins out — every bar
+  // still gets its tick, which is what keeps the ruler's rhythm intact when the numbers
+  // start skipping.
+  const minBarPx = minSpacing(bars);
 
-  let tickEvery = 1;
+  let labelEvery = 1;
   for (const n of [1, 2, 4, 8, 16, 32]) {
-    tickEvery = n;
+    labelEvery = n;
     if (n * (Number.isFinite(minBarPx) ? minBarPx : 0) >= 50) break;
   }
 
   return (
     <>
+      {showSubdivisions && all.filter((l) => !l.isBeat).map((line) => (
+        <View
+          key={`sub-${line.ms}`}
+          pointerEvents="none"
+          style={{
+            position: 'absolute', bottom: 0, left: (line.ms / 1000) * pxPerSecond,
+            width: 1, height: SUBDIVISION_TICK_H, backgroundColor: theme.separator,
+          }}
+        />
+      ))}
+      {showBeats && beats.filter((l) => !l.isBar).map((line) => (
+        <View
+          key={`beat-${line.ms}`}
+          pointerEvents="none"
+          style={{
+            position: 'absolute', bottom: 0, left: (line.ms / 1000) * pxPerSecond,
+            width: 1, height: BEAT_TICK_H, backgroundColor: theme.textMuted,
+          }}
+        />
+      ))}
       {bars.map((line) => (
-        // Anchored to the absolute bar number, not the index within the visible slice —
-        // otherwise which bars carry a label changes as you scroll, and the ruler appears
-        // to shuffle itself.
-        ((line.bar ?? 1) - 1) % tickEvery !== 0 ? null : (
-          <View
-            key={line.bar}
-            style={{ position: 'absolute', left: (line.ms / 1000) * pxPerSecond, top: 0, bottom: 0 }}
-          >
-            <Text style={{ fontSize: 12, fontFamily: Poppins.bold, color: theme.textSub, marginBottom: 3 }}>
+        <View
+          key={line.bar}
+          pointerEvents="none"
+          style={{ position: 'absolute', left: (line.ms / 1000) * pxPerSecond, top: 0, bottom: 0 }}
+        >
+          {/* Anchored to the absolute bar number, not the index within the visible slice —
+              otherwise which bars carry a label changes as you scroll, and the ruler
+              appears to shuffle itself. */}
+          {((line.bar ?? 1) - 1) % labelEvery === 0 && (
+            <Text style={{ fontSize: 12, fontFamily: Poppins.bold, color: theme.textSub }}>
               {msToBarInMap(map, line.ms).toFixed(0)}
             </Text>
-            <View style={{ width: 1.5, height: 10, backgroundColor: theme.textSub }} />
-          </View>
-        )
+          )}
+          <View style={{
+            position: 'absolute', bottom: 0, left: 0,
+            width: 1.5, height: BAR_TICK_H, backgroundColor: theme.textSub,
+          }} />
+        </View>
       ))}
     </>
   );
@@ -2783,7 +2893,14 @@ function createStyles(t: Theme) {
     // they'd otherwise blend into a same-colored parent.
     outer: {
       flex:            1,
-      gap:             8,
+      // No gap and no padding: the ruler, the grid and the data panel are one continuous
+      // surface, so every band has to butt directly against its neighbour. The 8px gap +
+      // 10px padding this used to carry put a hairline of panel background between the
+      // ruler and the rows it measures (and around all four edges), which read as a
+      // rendering seam rather than as breathing room. Each band that genuinely needs
+      // inset — the tool row, the data panel's tabs — now carries its own padding, and
+      // the bands are separated by real borders instead of empty space.
+      gap:             0,
       // The grid reads best on the cleanest surface the theme has — plain white in light
       // mode (t.bg), not the grey `surface` it used to sit on, which muddied the row
       // shading and made the whole panel look dim. Dark mode gets the same treatment
@@ -2794,10 +2911,7 @@ function createStyles(t: Theme) {
       borderRadius:    0,
       borderWidth:     1,
       borderColor:     t.border,
-      // Keeps the tool row and grid off the panel's own border. Not the gutter the user
-      // sees between panel and window — that one lives on editMainColumn in edit.tsx and
-      // is zero in piano-roll mode; this is just the panel's internal breathing room.
-      padding:         10,
+      padding:         0,
     },
 
     // Auto-dismissing banner for "N note(s) couldn't move" — bottom-centered, a late
@@ -2830,7 +2944,20 @@ function createStyles(t: Theme) {
     // without this, toolbarRow's un-indexed siblings (rulerClip, the grid) paint over it
     // regardless of any z-index on the popover deep inside, simply by coming later in the
     // tree. This lifts the whole toolbar (and everything nested in it) above them.
-    toolbarRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8, zIndex: 20 },
+    // Carries its own inset now that `outer` has none — the controls are the one band that
+    // would otherwise sit flush against the panel border, and the bottom hairline is what
+    // separates it from the ruler in place of the gap that used to.
+    toolbarRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      gap: 8,
+      paddingHorizontal: 10,
+      paddingVertical: 8,
+      borderBottomWidth: 1,
+      borderBottomColor: t.separator,
+      zIndex: 20,
+    },
     // The title slot lives here, so it's the left cluster that gives up width first when
     // the row runs out of room — the tool cluster on the right is all fixed-size controls
     // that can't shrink without breaking. minWidth: 0 is what actually permits a flex
@@ -3364,7 +3491,9 @@ function createStyles(t: Theme) {
       gap: 6,
       overflow: 'hidden',
     },
-    dataPanelTabs: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 4, height: DATA_PANEL_TABS_HEIGHT - 6 },
+    // 10px matches the tool row's own inset, so the panel's tabs line up with the controls
+    // at the top of the panel rather than sitting closer to the border than they do.
+    dataPanelTabs: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, height: DATA_PANEL_TABS_HEIGHT - 6 },
     dataTab: {
       paddingHorizontal: 8,
       paddingVertical: 3,

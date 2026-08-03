@@ -107,7 +107,7 @@ export default function EditScreen() {
     prevLenRef.current = tabNotes.length;
   }, [tabNotes.length]);
 
-  // Ctrl/Cmd+Z undo, Ctrl/Cmd+Y redo — screen-level (not scoped to the piano-roll editor
+  // Ctrl/Cmd+Z undo, Shift+Ctrl/Cmd+Z or Ctrl/Cmd+Y redo — screen-level (not scoped to the piano-roll editor
   // like its own Delete/arrow-key shortcuts) since undo/redo apply to the list view too.
   // Skips text inputs (e.g. the rename modal) so the browser's native field-undo still
   // works there instead of being hijacked by the tab-level history.
@@ -123,7 +123,8 @@ export default function EditScreen() {
       if (!(e.ctrlKey || e.metaKey) || isTextInput(e.target)) return;
       if (e.key === 'z' || e.key === 'Z') {
         e.preventDefault();
-        undo();
+        // Shift+Cmd+Z is the redo gesture on macOS, where Ctrl+Y isn't one at all.
+        if (e.shiftKey) redo(); else undo();
       } else if (e.key === 'y' || e.key === 'Y') {
         e.preventDefault();
         redo();

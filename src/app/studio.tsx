@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { TrackList } from '@/components/TrackList';
@@ -56,6 +56,10 @@ import type { MidiProject, MidiTrackData, TabNote } from '@/types';
 /** Pitch-row height in the Studio. Roughly two-thirds the editor's, which puts about five
  *  octaves on screen instead of two while still leaving a note block clickable. */
 const STUDIO_ROW_HEIGHT = 18;
+
+/** Bounded for the same reason the tab editor's is (see `useAppStore`): a snapshot is an
+ *  array of note references, so the depth is generous rather than costly. */
+const MAX_HISTORY = 50;
 
 /** Which track to open on. `tracks[0]` is a bad default and was: real files routinely lead
  *  with a conductor or marker track carrying no notes, so the editor opened blank, scrolled
@@ -142,17 +146,89 @@ export default function StudioScreen() {
     });
   }, [project, saveProject]);
 
+  /**
+   * Undo/redo for the Studio.
+   *
+   * The tab editor gets this from `useAppStore`, which owns the document it edits and
+   * snapshots it on every mutation. A project lives in `useMidiProjectsStore`, which is a
+   * *library* — it also holds every other project, and `saveProject` is what MIDI import
+   * itself calls, so history can't live there without Ctrl+Z being able to un-import a
+   * file. So the stack is screen-local (a session-lived editing convenience, exactly like
+   * the piano roll's own clipboard) and holds track arrays, the only thing this screen
+   * edits.
+   *
+   * Only *note* edits are recorded — see `commitNotes`. Mute/solo/program and add/delete
+   * track go through `updateTrack`/`saveProject` untracked, matching what the tab editor's
+   * history does and doesn't cover (musical content, not the state around it).
+   */
+  const [history, setHistory] = useState<MidiTrackData[][]>([]);
+  const [future,  setFuture]  = useState<MidiTrackData[][]>([]);
+
+  const commitNotes = useCallback((trackId: string, notes: MidiTrackData['notes']) => {
+    if (!project) return;
+    setHistory((h) => [...h, project.tracks].slice(-MAX_HISTORY));
+    // A fresh edit invalidates whatever was available to redo.
+    setFuture([]);
+    saveProject({
+      ...project,
+      tracks: project.tracks.map((t) => (t.id === trackId ? { ...t, notes } : t)),
+    });
+  }, [project, saveProject]);
+
+  /** Both directions are the same move in opposite stacks, so they share one body. */
+  const stepHistory = useCallback((direction: 'undo' | 'redo') => {
+    if (!project) return;
+    const [from, setFrom, setTo] = direction === 'undo'
+      ? ([history, setHistory, setFuture] as const)
+      : ([future,  setFuture,  setHistory] as const);
+    const target = from[from.length - 1];
+    if (target === undefined) return;
+    setFrom((s) => s.slice(0, -1));
+    setTo((s) => [...s, project.tracks].slice(-MAX_HISTORY));
+    // A note's id is its index in the track's array (see `studioNotes.ts`), so it doesn't
+    // survive a jump that may have added or removed notes — dropping the selection is
+    // honest, where keeping it would leave it pointing at some unrelated note.
+    setSelectedNoteId(null);
+    saveProject({ ...project, tracks: target });
+  }, [project, history, future, saveProject]);
+
+  // Ctrl/Cmd+Z and Shift+Ctrl/Cmd+Z (or Ctrl/Cmd+Y) — the Studio had no handler at all,
+  // so these fell through to the browser and did nothing. Screen-level and skipping text
+  // inputs, exactly as in the tab editor.
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+
+    function isTextInput(target: EventTarget | null): boolean {
+      const el = target as HTMLElement | null;
+      return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+    }
+
+    function onKeyDown(e: KeyboardEvent) {
+      if (!(e.ctrlKey || e.metaKey) || isTextInput(e.target)) return;
+      if (e.key === 'z' || e.key === 'Z') {
+        e.preventDefault();
+        stepHistory(e.shiftKey ? 'redo' : 'undo');
+      } else if (e.key === 'y' || e.key === 'Y') {
+        e.preventDefault();
+        stepHistory('redo');
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [stepHistory]);
+
   const handleCreate = useCallback((created: Omit<TabNote, 'id'>) => {
     if (!selectedTrack) return;
-    updateTrack(selectedTrack.id, { notes: appendTabNote(selectedTrack, created) });
-  }, [selectedTrack, updateTrack]);
+    commitNotes(selectedTrack.id, appendTabNote(selectedTrack, created));
+  }, [selectedTrack, commitNotes]);
 
   const handleUpdate = useCallback((id: string, changes: Partial<TabNote>) => {
     if (!selectedTrack) return;
     const notes = applyTabNoteChange(selectedTrack, id, changes);
     if (notes === selectedTrack.notes) return;
-    updateTrack(selectedTrack.id, { notes });
-  }, [selectedTrack, updateTrack]);
+    commitNotes(selectedTrack.id, notes);
+  }, [selectedTrack, commitNotes]);
 
   /**
    * Bulk edits — quantize, duplicate, paste, group move, arrow-key nudge.
@@ -169,24 +245,24 @@ export default function StudioScreen() {
       if (notes !== working.notes) working = { ...working, notes };
     }
     if (working.notes !== selectedTrack.notes) {
-      updateTrack(selectedTrack.id, { notes: working.notes });
+      commitNotes(selectedTrack.id, working.notes);
     }
-  }, [selectedTrack, updateTrack]);
+  }, [selectedTrack, commitNotes]);
 
   const handleCreateMany = useCallback((created: Omit<TabNote, 'id'>[]) => {
     if (!selectedTrack) return;
     let notes = selectedTrack.notes;
     for (const note of created) notes = appendTabNote({ ...selectedTrack, notes }, note);
-    updateTrack(selectedTrack.id, { notes });
-  }, [selectedTrack, updateTrack]);
+    commitNotes(selectedTrack.id, notes);
+  }, [selectedTrack, commitNotes]);
 
   const handleDelete = useCallback((id: string) => {
     if (!selectedTrack) return;
     // Deleting shifts every later note's positional id, so the current selection can't
     // survive it — see the identity note in `studioNotes.ts`.
     setSelectedNoteId(null);
-    updateTrack(selectedTrack.id, { notes: removeTabNote(selectedTrack, id) });
-  }, [selectedTrack, updateTrack]);
+    commitNotes(selectedTrack.id, removeTabNote(selectedTrack, id));
+  }, [selectedTrack, commitNotes]);
 
   const handleConvert = useCallback((trackId: string) => {
     if (!project) return;
