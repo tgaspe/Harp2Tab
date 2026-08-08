@@ -35,6 +35,19 @@ interface AppState {
    *  Empty means untitled — save falls back to a timestamp (see saveCurrentSessionToLibrary).
    *  Not undo-tracked: it's metadata, not part of the musical content being edited. */
   recordingTitle:     string;
+  /**
+   * Noise gate, 0–127 on the same scale as `TabNote.breathForce`. Notes quieter than this
+   * are hidden from the editor, playback and export.
+   *
+   * Deliberately **non-destructive**: `tabNotes` always holds every note regardless of this
+   * value, and nothing ever writes a filtered array back. That's what lets the slider work
+   * in both directions — a gate that deleted on the way up could only ever remove more.
+   *
+   * Not undo-tracked, for the same reason `viewMode` isn't: it's reversible by its own
+   * control, and a slider drag would otherwise flood the 50-entry history. Undo still
+   * behaves correctly at any gate position, since history snapshots the full note set.
+   */
+  noiseGate:          number;
   /** Editor's List vs Piano-Roll view — lifted out of edit.tsx's own local state so the
    *  web TopBar (rendered outside the edit screen's tree, in the root layout) can show
    *  and drive the same toggle next to the app title. Not undo-tracked, same reasoning
@@ -44,6 +57,13 @@ interface AppState {
    *  Frame Inspector can explain an empty frame buffer correctly — a MIDI import has no
    *  audio to inspect by nature, not because data was lost. */
   sessionSource:      RecordingSource;
+  /** The Studio project/track this session was converted out of, when it was. Carried off
+   *  the loaded recording (where `convertTrackToRecording` puts it) so the editor can offer
+   *  a way back to the project. Either may dangle — the project can be deleted after the
+   *  tab is made — so a lookup miss means "source gone", not an error. Cleared by both
+   *  fresh-session actions, or a new recording would inherit the previous one's link. */
+  sourceProjectId:    string | null;
+  sourceTrackId:      string | null;
 }
 
 function pushHistory(s: {
@@ -88,6 +108,7 @@ interface AppActions {
   setMetronomeEnabled: (enabled: boolean) => void;
   setRecordingTitle:   (title: string) => void;
   setViewMode:         (mode: 'list' | 'pianoRoll') => void;
+  setNoiseGate:        (value: number) => void;
   loadRecording:  (recording: TabRecording) => void;
   reset:          () => void;
 }
@@ -111,7 +132,10 @@ const initialState: AppState = {
   metronomeEnabled:   false,
   recordingTitle:     '',
   viewMode:           'list',
+  noiseGate:          0,
   sessionSource:      'recording',
+  sourceProjectId:    null,
+  sourceTrackId:      null,
 };
 
 export const useAppStore = create<AppState & AppActions>()(
@@ -135,6 +159,9 @@ export const useAppStore = create<AppState & AppActions>()(
         s.future             = [];
         s.recordingTitle     = '';
         s.sessionSource      = 'recording';
+        s.sourceProjectId    = null;
+        s.sourceTrackId      = null;
+        s.noiseGate          = 0;
       }),
 
     // Sibling of startRecording for the file-upload entry points: same fresh-session
@@ -153,6 +180,9 @@ export const useAppStore = create<AppState & AppActions>()(
         s.future             = [];
         s.recordingTitle     = title ?? '';
         s.sessionSource      = source;
+        s.sourceProjectId    = null;
+        s.sourceTrackId      = null;
+        s.noiseGate          = 0;
       }),
 
     stopRecording: () =>
@@ -272,6 +302,17 @@ export const useAppStore = create<AppState & AppActions>()(
         if (newKey === s.selectedKey) return;
         pushHistory(s);
         for (const note of s.tabNotes) {
+          // An unplayable note (tab: '') has no tab to preserve, so the rule above can't
+          // apply to it — `tabToNote('')` is null and it used to be skipped outright,
+          // leaving it greyed out on a harp that can in fact reach its pitch. Its pitch is
+          // the only thing it has, so that's what carries over: re-fit it against the new
+          // key, and let it rejoin the harmonica if the new key reaches it.
+          if (note.tab === '') {
+            note.tab = noteToTab(note.note, newKey, s.harmonicaType) ?? '';
+            continue;
+          }
+          // A playable note transposes: the tab is what's fixed, and the pitch moves with
+          // the harp. That's why a key change can never make a playable note unplayable.
           const resolved = tabToNote(note.tab, newKey, s.harmonicaType);
           if (resolved) note.note = resolved;
         }
@@ -323,6 +364,11 @@ export const useAppStore = create<AppState & AppActions>()(
     setViewMode: (mode) =>
       set((s) => { s.viewMode = mode; }),
 
+    // No pushHistory: see the field's own note. Clamped rather than trusted, since this is
+    // driven by a drag gesture whose pixel→value maths can overshoot at the track's ends.
+    setNoiseGate: (value) =>
+      set((s) => { s.noiseGate = Math.max(0, Math.min(127, Math.round(value))); }),
+
     // Reopens a saved recording for editing — distinct from startRecording()
     // since it's not a new session (no gate check, no fresh recordingStartTime
     // for elapsed-time purposes), just loading past notes back into the working state.
@@ -342,6 +388,12 @@ export const useAppStore = create<AppState & AppActions>()(
         // Legacy entries predate the field; they can only have come from a live recording,
         // since that was the app's one creation path at the time.
         s.sessionSource       = recording.source ?? 'recording';
+        s.sourceProjectId     = recording.sourceProjectId ?? null;
+        s.sourceTrackId       = recording.sourceTrackId ?? null;
+        // Entries saved before the gate existed simply have it off. Because the gate never
+        // deleted anything, a recording saved *with* one reopens with every note intact and
+        // the slider exactly where it was left.
+        s.noiseGate           = recording.noiseGate ?? 0;
       }),
 
     reset: () =>
@@ -359,7 +411,9 @@ export const selectRecordingId = (s: AppState & AppActions) => s.recordingId;
 export const selectCanUndo    = (s: AppState & AppActions) => s.history.length > 0;
 export const selectCanRedo    = (s: AppState & AppActions) => s.future.length > 0;
 export const selectExportFmt  = (s: AppState & AppActions) => s.exportFormat;
+export const selectSourceProjectId = (s: AppState & AppActions) => s.sourceProjectId;
 export const selectBpm              = (s: AppState & AppActions) => s.bpm;
 export const selectMetronomeEnabled = (s: AppState & AppActions) => s.metronomeEnabled;
 export const selectRecordingTitle   = (s: AppState & AppActions) => s.recordingTitle;
 export const selectViewMode         = (s: AppState & AppActions) => s.viewMode;
+export const selectNoiseGate        = (s: AppState & AppActions) => s.noiseGate;

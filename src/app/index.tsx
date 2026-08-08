@@ -1300,12 +1300,14 @@ function createStyles(t: Theme) {
       width:              300,
       flexShrink:         0,
       gap:                16,
-      backgroundColor:    t.accent,
+      backgroundColor:    t.sidebarBg,
       paddingHorizontal:  20,
       paddingVertical:    28,
       // The literal top-to-bottom division line the color contrast alone wasn't enough of.
+      // Dark mode inverts it: the rail is darker than the page there, so a black hairline
+      // would blend into both sides instead of dividing them.
       borderRightWidth:   1,
-      borderRightColor:   'rgba(0,0,0,0.18)',
+      borderRightColor:   t.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.18)',
     },
     dashboardMainScroll: { flex: 1 },
     dashboardMainScrollContent: {
@@ -1362,7 +1364,8 @@ function createStyles(t: Theme) {
     // Row-level opacity (sidebarRowDisabled) handles the disabled dimming — no separate
     // text-color override needed on top of it.
     sidebarRowText: { flex: 1, fontSize: FONT.sm, fontFamily: Poppins.semiBold, color: '#fff' },
-    sidebarRowTextPrimary: { color: t.accent },
+    // On the solid white pill (sidebarRowPrimary) — needs accentDeep, see editStyles.
+    sidebarRowTextPrimary: { color: t.accentDeep },
 
     // Column-layout stat tile — currently unused (the sidebar uses the "row" layout below)
     // but kept as the StatTile component's other supported form for a future full-width

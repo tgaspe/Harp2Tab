@@ -13,6 +13,7 @@ import {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
+import { NoiseGateControl } from './NoiseGateControl';
 import { useTheme } from '@/hooks/useTheme';
 import { getGridRows, type GridRow } from '@/audio/HarmonicaMapper';
 import { getFrames } from '@/audio/frameBuffer';
@@ -485,6 +486,11 @@ interface PianoRollProps {
   onCreate:       (note: Omit<TabNote, 'id'>) => void;
   onUpdate:       (id: string, changes: NoteUpdate) => void;
   onDelete:       (id: string) => void;
+  /** Delete a whole selection in one write. Optional: the tab editor's store-backed
+   *  `onDelete` reads current state per call and uses stable ids, so looping it is
+   *  correct there. The Studio's isn't — its ids are positional and each call rewrites
+   *  the project from a value captured before the loop began — so it passes this. */
+  onDeleteMany?:  (ids: string[]) => void;
   isPlaying:      boolean;
   currentTimeMs:  number;
   onSeek:         (ms: number) => void;
@@ -496,12 +502,24 @@ interface PianoRollProps {
    *  the chart's title/meta there so the editor's own header is the panel's own header,
    *  rather than a separate band of page chrome floating above the panel. */
   headerLeft?:         React.ReactNode;
+  /** The velocity filter (hides notes below a `breathForce` threshold) — its own tab in
+   *  the data panel, after Pitch Bend. Living on a tab rather than in the tab strip means
+   *  its slider gets the plot's full width instead of a cramped inline sliver. Optional:
+   *  the Studio passes nothing, and the tab editor omits it once no note in the session
+   *  states a dynamic — a slider that provably does nothing at any position is worse than
+   *  none. */
+  velocityFilter?: {
+    value:        number;
+    onChange:     (v: number) => void;
+    audibleCount: number;
+    totalCount:   number;
+  };
 }
 
 export function PianoRoll({
   notes, harmonicaKey, harmonicaType, bpm, tempoMap, rows, rowHeight, noteColor, backgroundLanes,
-  onUpdateMany, onCreateMany, readNotesAfterWrite, selectedId, onSelect, onCreate, onUpdate, onDelete, isPlaying, currentTimeMs, onSeek,
-  loopRegion, onLoopRegionChange, headerLeft,
+  onUpdateMany, onCreateMany, readNotesAfterWrite, selectedId, onSelect, onCreate, onUpdate, onDelete, onDeleteMany, isPlaying, currentTimeMs, onSeek,
+  loopRegion, onLoopRegionChange, headerLeft, velocityFilter,
 }: PianoRollProps) {
   const theme  = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
@@ -528,6 +546,15 @@ export function PianoRoll({
     else useAppStore.getState().addTabNotes(created);
   }, [onCreateMany]);
 
+  // Deleting a whole selection. Falls back to looping the single-note path only when the
+  // parent hasn't supplied a bulk one — see `onDeleteMany` on the props for when looping
+  // is and isn't safe.
+  const deleteMany = useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    if (onDeleteMany) onDeleteMany(ids);
+    else ids.forEach((id) => onDelete(id));
+  }, [onDeleteMany, onDelete]);
+
   const notesAfterWrite = useCallback(
     () => (readNotesAfterWrite ? readNotesAfterWrite() : useAppStore.getState().tabNotes),
     [readNotesAfterWrite],
@@ -550,7 +577,7 @@ export function PianoRoll({
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current); }, []);
-  const [metricTab, setMetricTab] = useState<'breath' | 'duration' | 'confidence' | 'pitchBend'>('breath');
+  const [metricTab, setMetricTab] = useState<'breath' | 'duration' | 'confidence' | 'pitchBend' | 'velocityFilter'>('breath');
   const [scrollX, setScrollX] = useState(0);
   // Vertical offset, tracked only so rows can be culled — nothing else reads it.
   const [scrollY, setScrollY] = useState(0);
@@ -658,14 +685,20 @@ export function PianoRoll({
   );
   const positions = rows ?? derivedRows;
 
-  const dataAxisLabels = useMemo(() => getDataAxisLabels(metricTab, notes), [metricTab, notes]);
+  const dataAxisLabels = useMemo(
+    () => (metricTab === 'velocityFilter' ? { top: '', bottom: '' } : getDataAxisLabels(metricTab, notes)),
+    [metricTab, notes],
+  );
 
   // Breath Force and Pitch Bend are per-frame metrics — they need the raw analysis
   // frames, which a chart that was drawn by hand (or saved before frame retention) simply
-  // doesn't have. Duration/Confidence come off the notes themselves and always do.
-  const metricHasData = metricTab === 'breath' || metricTab === 'pitchBend'
-    ? frames.length > 0
-    : notes.length > 0;
+  // doesn't have. Duration/Confidence come off the notes themselves and always do. The
+  // velocity filter isn't a chart at all — its tab always renders the slider.
+  const metricHasData = metricTab === 'velocityFilter'
+    ? true
+    : metricTab === 'breath' || metricTab === 'pitchBend'
+      ? frames.length > 0
+      : notes.length > 0;
 
   // A chart with no frames at all opens with the panel collapsed rather than reserving
   // ~150px for a permanently empty box. One-shot: once the user has touched the collapse
@@ -850,7 +883,7 @@ export function PianoRoll({
     // Right-clicking inside a marquee selection removes the whole selection — matching
     // what Backspace does there — rather than silently picking one note out of it.
     if (mouseMode === 'selection' && selectedIds.includes(hit.id)) {
-      selectedIds.forEach((id) => onDelete(id));
+      deleteMany(selectedIds);
       setSelectedIds([]);
       return;
     }
@@ -1209,7 +1242,7 @@ export function PianoRoll({
 
         if (e.key === 'Backspace' || e.key === 'Delete') {
           e.preventDefault();
-          ids.forEach((sid) => onDelete(sid));
+          deleteMany(ids);
           setSelectedIds([]);
           return;
         }
@@ -1263,7 +1296,7 @@ export function PianoRoll({
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [positions, onUpdate, onDelete, onSelect]);
+  }, [positions, onUpdate, onDelete, onSelect, deleteMany]);
 
   // Modifier + scroll to zoom, cursor-anchored so the timestamp under the pointer stays
   // fixed on screen as the scale changes (the same technique used by Signal/most DAWs) —
@@ -2059,14 +2092,20 @@ export function PianoRoll({
         </GestureDetector>
       </View>
 
-      {/* Data panel — Breath Force / Duration / Confidence / Pitch Bend, x-synced with the
-          grid above. Collapsible so it doesn't permanently eat vertical space when the
-          user just wants the note grid. */}
+      {/* Data panel — Breath Force / Duration / Confidence / Pitch Bend / Velocity Filter,
+          x-synced with the grid above. Collapsible so it doesn't permanently eat vertical
+          space when the user just wants the note grid. */}
       <Animated.View style={[styles.dataPanel, panelAnimatedStyle]}>
         <View style={styles.dataPanelTabs}>
           {/* Active tab gets a tinted pill, not just accent-colored text — as color-only
-              labels in a bare row these read as breadcrumbs rather than tabs. */}
-          {(['breath', 'duration', 'confidence', 'pitchBend'] as const).map((tab) => (
+              labels in a bare row these read as breadcrumbs rather than tabs. Velocity
+              Filter only appears once the caller supplies one — see the prop's own doc
+              for why: a slider that provably does nothing at any position is worse than
+              none. */}
+          {(velocityFilter
+            ? (['breath', 'duration', 'confidence', 'pitchBend', 'velocityFilter'] as const)
+            : (['breath', 'duration', 'confidence', 'pitchBend'] as const)
+          ).map((tab) => (
             <Pressable
               key={tab}
               onPress={() => setMetricTab(tab)}
@@ -2079,6 +2118,7 @@ export function PianoRoll({
               </Text>
             </Pressable>
           ))}
+
           <Pressable
             onPress={togglePanelCollapsed}
             style={styles.dataPanelCollapseBtn}
@@ -2089,6 +2129,20 @@ export function PianoRoll({
             <Ionicons name={panelCollapsed ? 'chevron-up' : 'chevron-down'} size={14} color={theme.textSub} />
           </Pressable>
         </View>
+        {metricTab === 'velocityFilter' ? (
+          // No plot, so no axis rail either — the slider gets the whole row's width
+          // rather than just what's left after a y-axis column it doesn't need.
+          velocityFilter && (
+            <View style={styles.dataPanelRow}>
+              <NoiseGateControl
+                value={velocityFilter.value}
+                onChange={velocityFilter.onChange}
+                audibleCount={velocityFilter.audibleCount}
+                totalCount={velocityFilter.totalCount}
+              />
+            </View>
+          )
+        ) : (
         <View style={styles.dataPanelRow}>
           <View style={styles.dataAxisRail}>
             {/* Axis numbers describe a scale that isn't there when the metric has no
@@ -2129,6 +2183,7 @@ export function PianoRoll({
             )}
           </View>
         </View>
+        )}
       </Animated.View>
 
       {toastMessage !== null && (
@@ -2143,10 +2198,11 @@ export function PianoRoll({
 }
 
 const METRIC_LABELS = {
-  breath:     'Breath Force',
-  duration:   'Duration',
-  confidence: 'Confidence',
-  pitchBend:  'Pitch Bend',
+  breath:         'Breath Force',
+  duration:       'Duration',
+  confidence:     'Confidence',
+  pitchBend:      'Pitch Bend',
+  velocityFilter: 'Velocity Filter',
 } as const;
 
 // ─── Help modal ────────────────────────────────────────────────────────────────
@@ -2179,7 +2235,7 @@ const TOOL_HELP: ToolHelpEntry[] = [
   { icon: 'chevron-up', title: 'Semitone / Octave shift',
     desc: 'Moves the selected note(s) up/down the chromatic grid — the small chevrons shift a semitone, the circled arrows a full octave. Rows greyed out and labeled with just a pitch name aren’t real positions on the current harmonica; a semitone shift that would land there simply skips that note (a message says how many), while the octave buttons disable themselves instead if any selected note is already at the very edge.' },
   { icon: 'musical-notes-outline', title: 'Key / Type ("12-Chromatic · Key C")',
-    desc: 'Click the badge above the ruler to open a dropdown. Picking a key transposes every note instantly — it can never make a note unplayable, since tab positions don’t depend on key. Switching Diatonic/Chromatic can, since the two don’t share a tab vocabulary; it warns first if it would affect any notes, and applies instantly if it wouldn’t.' },
+    desc: 'Click the badge above the ruler to open a dropdown. Picking a key transposes every note instantly — it can never make a playable note unplayable, since tab positions don’t depend on key, and an already-unplayable note becomes playable if the new key can reach its pitch. Switching Diatonic/Chromatic can go the other way, since the two don’t share a tab vocabulary; it warns first if it would affect any notes, and applies instantly if it wouldn’t.' },
 ];
 
 const SHORTCUTS: [string, string][] = [
@@ -3742,6 +3798,8 @@ function createStyles(t: Theme) {
     // which isn't readable for what is effectively this panel's navigation.
     dataTabText: { fontSize: FONT.xs, fontFamily: Poppins.semiBold, color: t.textSub },
     dataTabTextActive: { color: t.accent, fontFamily: Poppins.bold },
+    // `marginLeft: 'auto'` keeps the chevron pinned to the right edge regardless of how
+    // many metric tabs are rendered, rather than trailing right after the last one.
     dataPanelCollapseBtn: { marginLeft: 'auto', padding: 4, ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null) } as any,
     dataPanelRow: { flexDirection: 'row' },
     dataAxisRail: {

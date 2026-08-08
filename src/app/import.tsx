@@ -14,6 +14,10 @@ import { FONT } from '@/constants/keys';
 import { WEB_CONTENT_WIDTH, webMaxWidth } from '@/constants/layout';
 import { useTheme } from '@/hooks/useTheme';
 import { AudioImportError, type ImportErrorCode } from '@/audio/audioImport';
+import { CandidateKeyBadge, CandidateList, CandidateRow } from '@/components/CandidateRow';
+import { KeyCandidateList, positionLabel, techniqueSuffix } from '@/components/KeyCandidateList';
+import { DEFAULT_ALGORITHM_ID } from '@/audio/algorithms';
+import type { TranscriptionOutput } from '@/audio/algorithms';
 import { pushFrames } from '@/audio/frameBuffer';
 import { clearPendingImport, getPendingImport, setPendingImport } from '@/audio/pendingImport';
 import { pickAudioFile } from '@/audio/pickAudioFile';
@@ -45,7 +49,7 @@ import { useMidiProjectsStore } from '@/store/useMidiProjectsStore';
 import { selectHarmonicaType, selectKey, useAppStore } from '@/store/useAppStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import type { Theme } from '@/theme';
-import type { HarmonicaKey, HarmonicaType, RawFrame, TabNote } from '@/types';
+import type { HarmonicaKey, HarmonicaType, TabNote } from '@/types';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -59,23 +63,21 @@ type TrackSelection = number | 'all';
 
 type Phase =
   | { kind: 'working'; stage: ImportStage; fraction: number }
-  | { kind: 'confirm'; detection: KeyDetectionResult; frames: RawFrame[]; chosenKey: HarmonicaKey }
+  | {
+      kind: 'confirm';
+      detection: KeyDetectionResult;
+      /** Whatever the engine produced — a frame stream or note events. `commit` branches
+       *  on it, since the two become tabs by different routes. */
+      output: TranscriptionOutput;
+      unplayableByKey: Record<HarmonicaKey, number> | null;
+      chosenKey: HarmonicaKey;
+    }
   | { kind: 'midiConfirm'; parsed: MidiImportResult; selection: TrackSelection; chosenKey: HarmonicaKey }
   | { kind: 'error';   code: ImportErrorCode; message: string };
 
 /** How many candidate keys the confirm step offers. The winner plus the two next-best,
  *  which in practice is straight harp plus the cross-harp positions around it. */
 const ALTERNATES_SHOWN = 3;
-
-const POSITION_LABELS: Record<number, string> = {
-  1: '1st position (straight harp)',
-  2: '2nd position (cross harp)',
-  3: '3rd position (slant harp)',
-};
-
-function positionLabel(position: number): string {
-  return POSITION_LABELS[position] ?? `${position}th position`;
-}
 
 function durationLabel(ms: number): string {
   const total   = Math.round(ms / 1000);
@@ -267,22 +269,24 @@ export default function ImportScreen() {
       const result = await runAudioImport({
         picked,
         harmonicaType,
-        onProgress:    (p) => setPhase({ kind: 'working', stage: p.stage, fraction: p.fraction }),
+        algorithm:     DEFAULT_ALGORITHM_ID,
+        onProgress:    (p) => setPhase({ kind: 'working', stage: p.stage as ImportStage, fraction: p.fraction }),
         shouldCancel:  () => cancelledRef.current,
       });
 
       // Chromatic covers every semitone in its range, so key detection has nothing to tell
       // the user — go straight to the editor on the key they already chose.
       if (!result.detection) {
-        commit(result.frames, selectedKey);
+        commit(result.output, selectedKey);
         return;
       }
 
       setPhase({
-        kind:      'confirm',
-        detection: result.detection,
-        frames:    result.frames,
-        chosenKey: result.detection.best.key,
+        kind:            'confirm',
+        detection:       result.detection,
+        output:          result.output,
+        unplayableByKey: result.unplayableByKey,
+        chosenKey:       result.detection.best.key,
       });
     } catch (err) {
       showImportError(err, picked.name, `"${picked.name}" couldn't be transcribed.`);
@@ -304,10 +308,21 @@ export default function ImportScreen() {
     setPhase({ kind: 'error', code, message });
   }
 
-  /** Turns the analyzed frames into notes for the chosen key and hands the session to the
-   *  editor. Cheap enough to re-run for a different key — no audio is touched here. */
-  function commit(frames: RawFrame[], key: HarmonicaKey) {
-    const notes = framesToNotes(frames, key, harmonicaType);
+  /**
+   * Turns the engine's output into tabs for the chosen key and hands the session to the
+   * editor. Cheap enough to re-run for a different key — no audio is touched here.
+   *
+   * The two lanes reach tabs differently: a frame stream still has to be segmented (and
+   * segmentation depends on the key, since the detector runs on tab identity), while note
+   * events are already pitched and only need mapping. Unplayable pitches also differ — the
+   * frame lane never produces a note for one, the note lane keeps it as `tab: ''` for the
+   * user to fix by hand, which is what MIDI import has always done.
+   */
+  function commit(output: TranscriptionOutput, key: HarmonicaKey) {
+    const notes = output.kind === 'frames'
+      ? framesToNotes(output.frames, key, harmonicaType)
+      : notesToTabs(output.notes, key, harmonicaType);
+
     if (notes.length === 0) {
       setPhase({
         kind:    'error',
@@ -319,8 +334,10 @@ export default function ImportScreen() {
 
     const { recordingId } = useAppStore.getState();
     // Frames are retained under the session's own id so Frame Inspector opens on an
-    // imported session exactly like it does on a recorded one.
-    if (recordingId) pushFrames(recordingId, frames);
+    // imported session exactly like it does on a recorded one. The neural engine produces
+    // none, so an import that used it has nothing to inspect — Frame Inspector reports
+    // that from the session's own source rather than showing an empty timeline.
+    if (recordingId && output.kind === 'frames') pushFrames(recordingId, output.frames);
     // The key the notes were actually detected against becomes the session's key —
     // otherwise the editor would relabel every tab against the pre-upload selection.
     selectKey_(key);
@@ -510,67 +527,42 @@ export default function ImportScreen() {
           {showTracks && (
             <>
               <Text style={styles.sectionLabel}>TRACK</Text>
-              <View style={styles.candidateList} accessibilityRole="radiogroup">
+              <CandidateList>
                 {parsed.tracks.map((track) => {
-                  const active  = selection === track.id;
                   // Playing in full means a row can be sounding for minutes; the elapsed
                   // readout is what tells the user it's progressing rather than stuck.
                   const playing = previewTrack === track.id && preview.isPlaying;
                   return (
-                    <Pressable
+                    <CandidateRow
                       key={track.id}
+                      leading={previewButton(track.id, track.notes, track.name)}
+                      title={track.name}
+                      subtitle={
+                        `${track.noteCount} notes · ${pitchRangeLabel(track)} · `
+                        + (playing
+                          ? `${durationLabel(preview.currentTimeMs)} / ${durationLabel(track.durationMs)}`
+                          : durationLabel(track.durationMs))
+                      }
+                      selected={selection === track.id}
                       onPress={() => chooseTrack(track.id)}
-                      style={({ pressed, hovered }: any) => [
-                        styles.candidate,
-                        active && styles.candidateActive,
-                        (pressed || hovered) && !active && styles.candidateHovered,
-                      ]}
-                      accessibilityRole="radio"
-                      accessibilityState={{ checked: active }}
                       accessibilityLabel={`${track.name}, ${track.noteCount} notes, ${pitchRangeLabel(track)}, ${durationLabel(track.durationMs)}`}
-                    >
-                      {previewButton(track.id, track.notes, track.name)}
-                      <View style={styles.candidateInfo}>
-                        <Text style={[styles.candidatePosition, active && styles.candidateTextActive]}>
-                          {track.name}
-                        </Text>
-                        <Text style={styles.candidateStats}>
-                          {track.noteCount} notes · {pitchRangeLabel(track)} ·{' '}
-                          {playing
-                            ? `${durationLabel(preview.currentTimeMs)} / ${durationLabel(track.durationMs)}`
-                            : durationLabel(track.durationMs)}
-                        </Text>
-                      </View>
-                      {active && <Ionicons name="checkmark-circle" size={18} color={theme.accent} />}
-                    </Pressable>
+                    />
                   );
                 })}
 
-                <Pressable
+                <CandidateRow
+                  leading={previewButton('all', mergeTracks(parsed.tracks), 'all tracks merged')}
+                  title="All tracks merged"
+                  subtitle={
+                    previewTrack === 'all' && preview.isPlaying
+                      ? `${durationLabel(preview.currentTimeMs)} / ${durationLabel(parsed.durationMs)}`
+                      : 'Keeps the highest note wherever parts overlap'
+                  }
+                  selected={selection === 'all'}
                   onPress={() => chooseTrack('all')}
-                  style={({ pressed, hovered }: any) => [
-                    styles.candidate,
-                    selection === 'all' && styles.candidateActive,
-                    (pressed || hovered) && selection !== 'all' && styles.candidateHovered,
-                  ]}
-                  accessibilityRole="radio"
-                  accessibilityState={{ checked: selection === 'all' }}
                   accessibilityLabel="All tracks merged — keeps the highest note wherever parts overlap"
-                >
-                  {previewButton('all', mergeTracks(parsed.tracks), 'all tracks merged')}
-                  <View style={styles.candidateInfo}>
-                    <Text style={[styles.candidatePosition, selection === 'all' && styles.candidateTextActive]}>
-                      All tracks merged
-                    </Text>
-                    <Text style={styles.candidateStats}>
-                      {previewTrack === 'all' && preview.isPlaying
-                        ? `${durationLabel(preview.currentTimeMs)} / ${durationLabel(parsed.durationMs)}`
-                        : 'Keeps the highest note wherever parts overlap'}
-                    </Text>
-                  </View>
-                  {selection === 'all' && <Ionicons name="checkmark-circle" size={18} color={theme.accent} />}
-                </Pressable>
-              </View>
+                />
+              </CandidateList>
               <Text style={styles.listHint}>
                 Press ▶ to hear a part in full before choosing it — press again to stop.
               </Text>
@@ -582,39 +574,19 @@ export default function ImportScreen() {
           {showKeys && !nothingToPlay && (
             <>
               <Text style={styles.sectionLabel}>TARGET HARMONICA</Text>
-              <View style={styles.candidateList} accessibilityRole="radiogroup">
-                {candidates.map((candidate) => {
-                  const active     = candidate.key === chosenKey;
+              <KeyCandidateList
+                candidates={candidates}
+                selectedKey={chosenKey}
+                onSelect={(key) => setPhase({ ...phase, chosenKey: key })}
+                describe={(candidate) => {
                   const unreachable = ranking.unplayableByKey[candidate.key] ?? 0;
-                  return (
-                    <Pressable
-                      key={candidate.key}
-                      onPress={() => setPhase({ ...phase, chosenKey: candidate.key })}
-                      style={({ pressed, hovered }: any) => [
-                        styles.candidate,
-                        active && styles.candidateActive,
-                        (pressed || hovered) && !active && styles.candidateHovered,
-                      ]}
-                      accessibilityRole="radio"
-                      accessibilityState={{ checked: active }}
-                      accessibilityLabel={`${candidate.key} harmonica, ${positionLabel(candidate.position)}, ${unreachable} note${unreachable === 1 ? '' : 's'} not reachable`}
-                    >
-                      <Text style={[styles.candidateKey, active && styles.candidateKeyActive]}>{candidate.key}</Text>
-                      <View style={styles.candidateInfo}>
-                        <Text style={[styles.candidatePosition, active && styles.candidateTextActive]}>
-                          {positionLabel(candidate.position)}
-                        </Text>
-                        <Text style={styles.candidateStats}>
-                          {unreachable === 0 ? 'every note reachable' : `${unreachable} not reachable`}
-                          {candidate.bendFraction > 0.05 && ` · ${Math.round(candidate.bendFraction * 100)}% bends`}
-                          {candidate.overblowFraction > 0.02 && ` · ${Math.round(candidate.overblowFraction * 100)}% overblows`}
-                        </Text>
-                      </View>
-                      {active && <Ionicons name="checkmark-circle" size={18} color={theme.accent} />}
-                    </Pressable>
-                  );
-                })}
-              </View>
+                  return {
+                    stats: (unreachable === 0 ? 'every note reachable' : `${unreachable} not reachable`)
+                      + techniqueSuffix(candidate),
+                    accessibilityLabel: `${candidate.key} harmonica, ${positionLabel(candidate.position)}, ${unreachable} note${unreachable === 1 ? '' : 's'} not reachable`,
+                  };
+                }}
+              />
             </>
           )}
 
@@ -723,7 +695,7 @@ export default function ImportScreen() {
   }
 
   if (phase.kind === 'confirm') {
-    const { detection, frames, chosenKey } = phase;
+    const { detection, output, unplayableByKey, chosenKey } = phase;
     const candidates = detection.ranked.slice(0, ALTERNATES_SHOWN);
     // A small gap between the top two keys is the normal case for a plain major melody
     // (the cross-harp key fits nearly as well), so this reads as "worth a look", not as a
@@ -771,42 +743,29 @@ export default function ImportScreen() {
             </View>
           )}
 
-          <View style={styles.candidateList} accessibilityRole="radiogroup">
-            {candidates.map((candidate) => {
-              const active = candidate.key === chosenKey;
-              return (
-                <Pressable
-                  key={candidate.key}
-                  onPress={() => setPhase({ ...phase, chosenKey: candidate.key })}
-                  style={({ pressed, hovered }: any) => [
-                    styles.candidate,
-                    active && styles.candidateActive,
-                    (pressed || hovered) && !active && styles.candidateHovered,
-                  ]}
-                  accessibilityRole="radio"
-                  accessibilityState={{ checked: active }}
-                  accessibilityLabel={`${candidate.key} harmonica, ${positionLabel(candidate.position)}, ${Math.round(candidate.mappedFraction * 100)} percent fit`}
-                >
-                  <Text style={[styles.candidateKey, active && styles.candidateKeyActive]}>{candidate.key}</Text>
-                  <View style={styles.candidateInfo}>
-                    <Text style={[styles.candidatePosition, active && styles.candidateTextActive]}>
-                      {positionLabel(candidate.position)}
-                    </Text>
-                    <Text style={styles.candidateStats}>
-                      {Math.round(candidate.mappedFraction * 100)}% fit
-                      {candidate.bendFraction > 0.05 && ` · ${Math.round(candidate.bendFraction * 100)}% bends`}
-                      {candidate.overblowFraction > 0.02 && ` · ${Math.round(candidate.overblowFraction * 100)}% overblows`}
-                    </Text>
-                  </View>
-                  {active && <Ionicons name="checkmark-circle" size={18} color={theme.accent} />}
-                </Pressable>
-              );
-            })}
-          </View>
+          <KeyCandidateList
+            candidates={candidates}
+            selectedKey={chosenKey}
+            onSelect={(key) => setPhase({ ...phase, chosenKey: key })}
+            describe={(candidate) => {
+              // The note lane knows exactly how many pitches land nowhere, because it keeps
+              // them; the frame lane can only report the share of the take that did map.
+              const unreachable = unplayableByKey?.[candidate.key];
+              const stats = unreachable !== undefined
+                ? (unreachable === 0 ? 'every note reachable' : `${unreachable} not reachable`)
+                : `${Math.round(candidate.mappedFraction * 100)}% fit`;
+              return {
+                stats: stats + techniqueSuffix(candidate),
+                accessibilityLabel: unreachable !== undefined
+                  ? `${candidate.key} harmonica, ${positionLabel(candidate.position)}, ${unreachable} note${unreachable === 1 ? '' : 's'} not reachable`
+                  : `${candidate.key} harmonica, ${positionLabel(candidate.position)}, ${Math.round(candidate.mappedFraction * 100)} percent fit`,
+              };
+            }}
+          />
 
           <View style={styles.actions}>
             <Pressable
-              onPress={() => commit(frames, chosenKey)}
+              onPress={() => commit(output, chosenKey)}
               style={({ pressed, hovered }: any) => [
                 styles.primaryBtn,
                 (pressed || hovered) && styles.primaryBtnPressed,
@@ -906,7 +865,11 @@ export default function ImportScreen() {
             <Text style={styles.stageLabel}>
               {phase.stage === 'decoding'
                 ? 'Reading the audio file…'
-                : `Detecting notes — ${percent}%`}
+                : phase.stage === 'loadingModel'
+                  // Only the neural engine has this stage, and only on its first run per
+                  // session — the model is cached from then on.
+                  ? 'Loading the transcription model…'
+                  : `Detecting notes — ${percent}%`}
             </Text>
           </>
         )}
@@ -1087,49 +1050,6 @@ function createStyles(theme: Theme) {
     },
     previewBtnHovered: {
       backgroundColor: theme.surfaceAlt,
-    },
-    candidateList: {
-      width:     '100%',
-      gap:       8,
-      marginTop: 14,
-    },
-    candidate: {
-      flexDirection:   'row',
-      alignItems:      'center',
-      gap:             12,
-      paddingVertical: 10,
-      paddingHorizontal: 12,
-      borderRadius:    10,
-      borderWidth:     1,
-      borderColor:     theme.border,
-      backgroundColor: theme.surface,
-    },
-    candidateActive: {
-      borderColor:     theme.accent,
-      backgroundColor: theme.accentSoft,
-    },
-    candidateHovered: {
-      backgroundColor: theme.surfaceAlt,
-    },
-    candidateKey: {
-      fontFamily: SpaceGrotesk.bold,
-      fontSize:   FONT.md,
-      color:      theme.textSub,
-      minWidth:   28,
-      textAlign:  'center',
-    },
-    candidateKeyActive: { color: theme.accent },
-    candidateInfo:      { flex: 1, gap: 1 },
-    candidatePosition: {
-      fontFamily: Poppins.semiBold,
-      fontSize:   FONT.sm,
-      color:      theme.textPrimary,
-    },
-    candidateTextActive: { color: theme.textPrimary },
-    candidateStats: {
-      fontFamily: Poppins.regular,
-      fontSize:   FONT.xs,
-      color:      theme.textSub,
     },
     actions: {
       marginTop:  18,

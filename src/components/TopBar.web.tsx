@@ -5,8 +5,10 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '@/hooks/useTheme';
 import { FONT } from '@/constants/keys';
 import { SpaceGrotesk, Poppins } from '@/constants/fonts';
-import { useAppStore, selectViewMode, selectTabNotes } from '@/store/useAppStore';
-import { selectHeaderAction, useHeaderActionStore } from '@/store/useHeaderActionStore';
+import { useAppStore, selectViewMode, selectSourceProjectId } from '@/store/useAppStore';
+import { useAudibleNotes } from '@/hooks/useAudibleNotes';
+import { selectHeaderActions, useHeaderActionStore } from '@/store/useHeaderActionStore';
+import { selectMidiProjects, useMidiProjectsStore } from '@/store/useMidiProjectsStore';
 import type { Theme } from '@/theme';
 
 // Routes that had their own gear->settings shortcut before TopBar existed.
@@ -22,6 +24,9 @@ const HIDDEN_ROUTES = ['/paywall', '/onboarding', '/import'];
 // title here (rather than in edit.tsx's own toolbar) since it needs to stay visible
 // and drivable from this globally-rendered bar.
 const VIEW_TOGGLE_ROUTES = ['/edit'];
+// A tab converted out of a Studio project is otherwise a dead end — conversion pushes
+// straight to the editor, and nothing else points back at the project it came from.
+const STUDIO_CRUMB_ROUTES = ['/edit'];
 
 export function TopBar() {
   const router     = useRouter();
@@ -31,16 +36,27 @@ export function TopBar() {
 
   const viewMode    = useAppStore(selectViewMode);
   const setViewMode = useAppStore((s) => s.setViewMode);
-  const tabNotes    = useAppStore(selectTabNotes);
-  // Whatever the current screen has parked here — the Studio uses it for Export, so it
-  // doesn't need a chrome row of its own.
-  const headerAction = useHeaderActionStore(selectHeaderAction);
+  // Gated, so this count agrees with what the editor and the export are showing.
+  const { notes: tabNotes } = useAudibleNotes();
+  // Whatever the current screen has parked here — the Studio uses it for Save and
+  // Download MIDI, so it doesn't need a chrome row of its own. Scoped by route, so an
+  // action set by a screen that's still mounted underneath can't render here.
+  const headerActions = useHeaderActionStore(selectHeaderActions(pathname));
+
+  // Set when the open tab was converted out of a Studio project. The project may since
+  // have been deleted, so it's resolved rather than trusted — a miss means "source gone".
+  const sourceProjectId = useAppStore(selectSourceProjectId);
+  const midiProjects    = useMidiProjectsStore(selectMidiProjects);
+  const sourceProject   = sourceProjectId
+    ? midiProjects.find((p) => p.id === sourceProjectId) ?? null
+    : null;
 
   if (HIDDEN_ROUTES.includes(pathname)) return null;
 
   const showBack = BACK_ROUTES.includes(pathname);
   const showGear = GEAR_ROUTES.includes(pathname);
   const showViewToggle = VIEW_TOGGLE_ROUTES.includes(pathname) && tabNotes.length > 0;
+  const showBackToStudio = STUDIO_CRUMB_ROUTES.includes(pathname) && sourceProject !== null;
 
   return (
     <View style={styles.bar}>
@@ -74,6 +90,21 @@ export function TopBar() {
           <Text style={styles.logoText}>Harp2Tab</Text>
         </Pressable>
 
+        {showBackToStudio && (
+          <Pressable
+            onPress={() => router.push({ pathname: '/studio', params: { projectId: sourceProject!.id } })}
+            style={({ pressed, hovered }: any) => [
+              styles.crumb,
+              (pressed || hovered) && styles.crumbHovered,
+            ]}
+            accessibilityRole="link"
+            accessibilityLabel={`Back to Studio project ${sourceProject!.title}`}
+          >
+            <Ionicons name="arrow-back" size={13} color={theme.accent} />
+            <Text style={styles.crumbText} numberOfLines={1}>{sourceProject!.title}</Text>
+          </Pressable>
+        )}
+
         {showViewToggle && (
           <View style={styles.viewToggle}>
             <Pressable
@@ -101,29 +132,30 @@ export function TopBar() {
       </View>
 
       <View style={styles.right}>
-        {headerAction && (
+        {headerActions.map((action) => (
           <Pressable
-            onPress={headerAction.onPress}
-            disabled={headerAction.disabled}
+            key={action.key}
+            onPress={action.onPress}
+            disabled={action.disabled}
             style={({ pressed, hovered }: any) => [
               styles.headerAction,
-              headerAction.disabled && styles.headerActionDisabled,
-              (pressed || hovered) && !headerAction.disabled && styles.headerActionHovered,
+              action.disabled && styles.headerActionDisabled,
+              (pressed || hovered) && !action.disabled && styles.headerActionHovered,
             ]}
             accessibilityRole="button"
-            accessibilityLabel={headerAction.label}
-            accessibilityState={{ disabled: !!headerAction.disabled }}
+            accessibilityLabel={action.label}
+            accessibilityState={{ disabled: !!action.disabled }}
           >
             <Ionicons
-              name={headerAction.icon as any}
+              name={action.icon as any}
               size={16}
-              color={headerAction.disabled ? theme.textMuted : theme.accent}
+              color={action.disabled ? theme.textMuted : theme.accent}
             />
-            <Text style={[styles.headerActionText, headerAction.disabled && { color: theme.textMuted }]}>
-              {headerAction.label}
+            <Text style={[styles.headerActionText, action.disabled && { color: theme.textMuted }]}>
+              {action.label}
             </Text>
           </Pressable>
-        )}
+        ))}
 
         {showGear && (
         <Pressable
@@ -152,7 +184,9 @@ function createStyles(t: Theme) {
       height:            64,
       borderBottomWidth: 1,
       borderBottomColor: t.border,
-      backgroundColor:   t.bg,
+      // Same tone as the docked transport bar at the bottom of the editor (webTransportBar,
+      // also t.surface) — the two pieces of chrome bracket the page, so they share a surface.
+      backgroundColor:   t.surface,
       flexDirection:     'row',
       alignItems:        'center',
       justifyContent:    'space-between',
@@ -182,6 +216,22 @@ function createStyles(t: Theme) {
     headerActionHovered:  { backgroundColor: t.surfaceAlt },
     headerActionDisabled: { opacity: 0.5 },
     headerActionText: { fontFamily: Poppins.bold, fontSize: 13, color: t.accent },
+    // Breadcrumb back to the Studio project a tab was converted out of. Quieter than a
+    // headerAction — it's a place you came from, not something to do.
+    crumb: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      gap:               5,
+      maxWidth:          220,
+      paddingVertical:   6,
+      paddingHorizontal: 10,
+      borderRadius:      8,
+      borderWidth:       1,
+      borderColor:       t.border,
+      cursor:            'pointer',
+    } as any,
+    crumbHovered: { backgroundColor: t.surfaceAlt },
+    crumbText: { flexShrink: 1, fontFamily: Poppins.semiBold, fontSize: 12, color: t.accent },
     logoRow: {
       flexDirection:     'row',
       alignItems:        'center',

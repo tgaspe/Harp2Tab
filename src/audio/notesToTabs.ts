@@ -121,6 +121,12 @@ export function notesToTabs(
       // MIDI states the pitch outright; there is nothing to be uncertain about, unlike a
       // frequency recovered from audio.
       confidence: 100,
+      // Carried through rather than dropped: `TabNote.breathForce` is already documented as
+      // the lane MIDI "supplies directly", the Studio draws it, and the neural engine's
+      // per-note amplitude arrives here as velocity too — which is what the editor's noise
+      // gate filters on. Left undefined when the source didn't state one, so a note with no
+      // stated dynamic is played at a default instead of silently becoming silent.
+      breathForce: note.velocity,
     };
   });
 }

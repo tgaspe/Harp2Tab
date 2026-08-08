@@ -15,6 +15,10 @@ interface SliderInputProps {
   step?:        number;
   onChange:     (v: number) => void;
   formatLabel?: (v: number) => string;
+  /** Alignment of the value label under the track. Defaults to 'right', which lines the
+   *  number up with the thumb's resting position in narrow, inline slots. 'center' suits
+   *  a slider given a whole row to itself. */
+  labelAlign?:  'right' | 'center';
 }
 
 function snap(ratio: number, min: number, max: number, step: number): number {
@@ -24,7 +28,7 @@ function snap(ratio: number, min: number, max: number, step: number): number {
   return Math.max(min, Math.min(max, snapped));
 }
 
-export function SliderInput({ value, min, max, step = 1, onChange, formatLabel }: SliderInputProps) {
+export function SliderInput({ value, min, max, step = 1, onChange, formatLabel, labelAlign = 'right' }: SliderInputProps) {
   const theme      = useTheme();
   const trackWidth = useSharedValue(0);
   const startRatio = useSharedValue(0);
@@ -75,10 +79,14 @@ export function SliderInput({ value, min, max, step = 1, onChange, formatLabel }
         <View style={styles.hitArea} onLayout={handleLayout}>
           <View style={[styles.track, { backgroundColor: theme.border }]} />
           <Animated.View style={[styles.fill, { backgroundColor: theme.accent }, fillStyle]} />
-          <Animated.View style={[styles.thumb, thumbShadow, thumbStyle]} />
+          {/* A plain white thumb reads fine on native, where `thumbShadow` gives it an edge,
+              but on web the light theme's panel background is near-white too and the thumb
+              vanished into it entirely. The accent ring is theme-aware and always contrasts,
+              on both platforms and both themes. */}
+          <Animated.View style={[styles.thumb, thumbShadow, { borderColor: theme.accent }, thumbStyle]} />
         </View>
       </GestureDetector>
-      <Text style={[styles.label, { color: theme.textSub }]}>
+      <Text style={[styles.label, { color: theme.textSub, textAlign: labelAlign }]}>
         {formatLabel ? formatLabel(value) : String(value)}
       </Text>
     </View>
@@ -107,7 +115,8 @@ const styles = StyleSheet.create({
     height:       THUMB,
     borderRadius: THUMB / 2,
     backgroundColor: '#FFFFFF',
+    borderWidth:  2,
     elevation:    4,
   },
-  label:     { fontSize: FONT.sm, fontFamily: Poppins.semiBold, textAlign: 'right' },
+  label:     { fontSize: FONT.sm, fontFamily: Poppins.semiBold },
 });

@@ -18,6 +18,7 @@ import { Divider, IconButton } from '@/components/EditControls';
 import { WebTransportBar } from '@/components/TransportBar';
 import { createStyles, type EditStyles } from '@/app/editStyles';
 import { ExportOption } from '@/components/ExportOption';
+import { useAudibleNotes } from '@/hooks/useAudibleNotes';
 import { useTheme } from '@/hooks/useTheme';
 import { useAppStore, selectTabNotes, selectKey, selectHarmonicaType, selectCanUndo, selectCanRedo, selectBpm, selectMetronomeEnabled, selectExportFmt, selectRecordingTitle, selectViewMode } from '@/store/useAppStore';
 import { saveCurrentSessionToLibrary, getDefaultRecordingTitle, startNewRecordingSession } from '@/store/sessionSnapshot';
@@ -44,6 +45,14 @@ export default function EditScreen() {
   const theme        = useTheme();
   const styles       = useMemo(() => createStyles(theme), [theme]);
   const tabNotes       = useAppStore(selectTabNotes);
+  // What the editor shows, plays and exports. `tabNotes` above stays the full set and is
+  // what every *write* goes through — store mutations are all id-based, so editing works
+  // unchanged while notes are hidden.
+  const {
+    notes: audibleNotes, audibleCount, totalCount,
+    gate: noiseGate, supported: noiseGateSupported,
+  } = useAudibleNotes();
+  const setNoiseGate   = useAppStore((s) => s.setNoiseGate);
   const harmonicaKey   = useAppStore(selectKey);
   const harmonicaType  = useAppStore(selectHarmonicaType);
   const reorderNotes = useAppStore((s) => s.reorderNotes);
@@ -70,7 +79,7 @@ export default function EditScreen() {
   // metronome toggle) lives in the hook, shared with the MIDI Studio — see
   // `useRollTransport`. It owns the loop region too, since all three rules need it.
   const transport = useRollTransport({
-    notes: tabNotes, bpm, metronomeEnabled, setMetronomeEnabled,
+    notes: audibleNotes, bpm, metronomeEnabled, setMetronomeEnabled,
   });
   const {
     isPlaying, isPaused, currentTimeMs, totalTimeMs, loopRegion, setLoopRegion,
@@ -96,19 +105,22 @@ export default function EditScreen() {
   const viewMode    = useAppStore(selectViewMode);
   const setViewMode = useAppStore((s) => s.setViewMode);
   const listRef      = useRef<FlatList<TabNote>>(null);
-  const prevLenRef   = useRef(tabNotes.length);
+  const prevLenRef   = useRef(totalCount);
   const savedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => () => {
     if (savedTimeoutRef.current) clearTimeout(savedTimeoutRef.current);
   }, []);
 
+  // Deliberately the *total*, not the visible count: this exists to follow a note being
+  // added. Keying it off the gated count would make every downward drag of the noise-gate
+  // slider look like an insertion and yank the list to the bottom mid-gesture.
   useEffect(() => {
-    if (tabNotes.length > prevLenRef.current) {
+    if (totalCount > prevLenRef.current) {
       requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
     }
-    prevLenRef.current = tabNotes.length;
-  }, [tabNotes.length]);
+    prevLenRef.current = totalCount;
+  }, [totalCount]);
 
   // The tab session's history already lives in `useAppStore` (the list view undoes the
   // same edits the roll does); only the bindings are shared with the Studio.
@@ -119,7 +131,7 @@ export default function EditScreen() {
       // Only audition on the select transition, not on deselect — clicking an
       // already-selected note to deselect it shouldn't replay its tone.
       if (prev !== id) {
-        const note = tabNotes.find((n) => n.id === id);
+        const note = audibleNotes.find((n) => n.id === id);
         if (note) previewNote(note.note);
       }
       return prev === id ? null : id;
@@ -133,7 +145,7 @@ export default function EditScreen() {
   // this only changes at note boundaries, so it doesn't force DraggableFlatList to
   // re-render every row on every animation-frame tick.
   const playingNoteId = isPlaying
-    ? (tabNotes.find((n) => currentTimeMs >= n.start_time && currentTimeMs < n.start_time + n.duration)?.id ?? null)
+    ? (audibleNotes.find((n) => currentTimeMs >= n.start_time && currentTimeMs < n.start_time + n.duration)?.id ?? null)
     : null;
 
   const renderItem = useCallback(
@@ -148,14 +160,16 @@ export default function EditScreen() {
           onSelect={handleSelect}
           onDelete={deleteNote}
           onUpdate={updateNote}
-          draggable
+          // Reordering is switched off while the noise gate hides anything — see the
+          // onDragEnd handler below for why it can't be made to work on a partial list.
+          draggable={noiseGate <= 0}
           drag={drag}
           isActive={isActive}
           isPlayingNow={playingNoteId === item.id}
         />
       </ScaleDecorator>
     ),
-    [deleteNote, updateNote, selectedId, playingNoteId],
+    [deleteNote, updateNote, selectedId, playingNoteId, noiseGate],
   );
 
   function handleAddNote() {
@@ -280,7 +294,10 @@ export default function EditScreen() {
   // tool row). Actions live in the sidebar; the piano roll keeps only its tool row.
   // An empty session still uses the plain centered toolbar+CTA layout below — there's
   // nothing for a sidebar to organize yet.
-  const showSidebar = Platform.OS === 'web' && tabNotes.length > 0;
+  // Keyed off the real total, not the visible one: closing the noise gate all the way must
+  // not tear down the editor shell and strand the user on an empty screen with no slider to
+  // open it back up.
+  const showSidebar = Platform.OS === 'web' && totalCount > 0;
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -290,7 +307,9 @@ export default function EditScreen() {
           <View style={styles.editShellEdgeWrap}>
             <View style={styles.editShell}>
               <EditSidebar
-                tabNotesLength={tabNotes.length}
+                // The real total: Save and New act on the whole session, so they must stay
+                // enabled even when the gate is hiding every note.
+                tabNotesLength={totalCount}
                 justSaved={justSaved}
                 onSave={handleSaveToLibrary}
                 onNew={handleNewRecording}
@@ -311,15 +330,26 @@ export default function EditScreen() {
                 {/* Piano Roll carries the title inside its own tool row (see headerLeft
                     below); List has no equivalent header of its own, so it keeps the
                     standalone one above the list. */}
-                {viewMode === 'list' && <ChartTitle tabNotesLength={tabNotes.length} theme={theme} styles={styles} />}
+                {viewMode === 'list' && <ChartTitle tabNotesLength={audibleCount} theme={theme} styles={styles} />}
+
 
                 {viewMode === 'list' ? (
                   <DraggableFlatList
                     ref={listRef}
-                    data={tabNotes}
+                    data={audibleNotes}
                     keyExtractor={(item) => item.id}
                     renderItem={renderItem}
                     onDragEnd={({ data }) => {
+                      // Refuses to run on a gated list, and `draggable` above already keeps
+                      // it from being reachable — this is the backstop.
+                      //
+                      // `reorderNotes` replaces the entire array, and this handler also
+                      // re-times every note into one contiguous run. Handed a filtered
+                      // `data`, it would delete every hidden note *and* collapse the
+                      // timeline onto the survivors. It can't be fixed by merging the
+                      // hidden notes back in either: contiguous re-timing has no meaning
+                      // when some of the run isn't on screen — there's nowhere to put them.
+                      if (noiseGate > 0) return;
                       let cursor = 0;
                       reorderNotes(data.map(note => {
                         const updated = { ...note, start_time: cursor };
@@ -350,7 +380,7 @@ export default function EditScreen() {
                   />
                 ) : (
                   <PianoRoll
-                    notes={tabNotes}
+                    notes={audibleNotes}
                     harmonicaKey={harmonicaKey}
                     harmonicaType={harmonicaType}
                     bpm={bpm}
@@ -364,7 +394,16 @@ export default function EditScreen() {
                     onSeek={handleSeek}
                     loopRegion={loopRegion}
                     onLoopRegionChange={setLoopRegion}
-                    headerLeft={<PianoRollHeader tabNotesLength={tabNotes.length} theme={theme} styles={styles} />}
+                    headerLeft={<PianoRollHeader tabNotesLength={audibleCount} theme={theme} styles={styles} />}
+                    // Its own tab in the data panel, after Pitch Bend. Omitted when
+                    // nothing in the session states a dynamic — a control that provably
+                    // cannot do anything at any position is worse than none.
+                    velocityFilter={noiseGateSupported ? {
+                      value: noiseGate,
+                      onChange: setNoiseGate,
+                      audibleCount,
+                      totalCount,
+                    } : undefined}
                   />
                 )}
               </View>
@@ -589,7 +628,8 @@ export default function EditScreen() {
 
         {Platform.OS === 'web' ? (
           <WebTransportBar
-            tabNotesLength={tabNotes.length}
+            // Audible: there is nothing to play when the gate has hidden everything.
+            tabNotesLength={audibleCount}
             isPlaying={isPlaying}
             isPaused={isPaused}
             onPlayToggle={handlePlayToggle}

@@ -27,7 +27,7 @@ export function getDefaultRecordingTitle(): string {
  * edits back" semantics and should not.
  */
 export function saveCurrentSessionToLibrary(title?: string, options?: { asNew?: boolean }): void {
-  const { tabNotes, selectedKey, harmonicaType, recordingId, recordingStartTime, bpm, sessionSource } =
+  const { tabNotes, selectedKey, harmonicaType, recordingId, recordingStartTime, bpm, sessionSource, noiseGate } =
     useAppStore.getState();
 
   if (!selectedKey || !recordingId || tabNotes.length === 0) return;
@@ -41,8 +41,13 @@ export function saveCurrentSessionToLibrary(title?: string, options?: { asNew?: 
     title:         title?.trim() || new Date(createdAt).toLocaleString(),
     key:           selectedKey,
     harmonicaType,
+    // Every note, never the gated subset — the gate is stored beside them and re-applied on
+    // load, so hiding a note must not be a way to silently delete it from the library.
     tabNotes,
     createdAt,
+    // Measured across all notes for the same reason: the take is as long as it is,
+    // regardless of how much of it is currently hidden. A gated duration would make the
+    // library's listed length change every time the slider moved.
     duration:      last.start_time + last.duration,
     // Frames were buffered under the session's original recordingId regardless of which
     // id this gets saved under — always read via that, not `id`. Thinned on the way into
@@ -51,6 +56,7 @@ export function saveCurrentSessionToLibrary(title?: string, options?: { asNew?: 
     frames:        decimateFrames(getFrames(recordingId)),
     bpm,
     source:        sessionSource,
+    noiseGate,
   };
 
   useRecordingsStore.getState().saveRecording(recording);

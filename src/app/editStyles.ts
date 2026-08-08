@@ -57,9 +57,10 @@ export function createStyles(t: Theme) {
       width:             280,
       flexGrow:          0,
       flexShrink:        0,
-      backgroundColor:   t.accent,
+      backgroundColor:   t.sidebarBg,
       borderRightWidth:  1,
-      borderRightColor:  'rgba(0,0,0,0.18)',
+      // See Home's fullSidebar — inverted in dark mode for the same reason.
+      borderRightColor:  t.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.18)',
       // The rail slides rather than snapping between its two widths. Web-only; on native
       // this is a static width change, which is fine — there's no sidebar there.
       ...(Platform.OS === 'web'
@@ -246,7 +247,9 @@ export function createStyles(t: Theme) {
     // distinguished by its solid white pill, so the inactive one doesn't need to be dim
     // as well to make the pairing read.
     sidebarTypeText:       { fontSize: FONT.xs, fontFamily: Poppins.semiBold, color: '#fff' },
-    sidebarTypeTextActive: { color: t.accent },
+    // accentDeep, not accent: this label sits on the solid white pill above, where
+    // plain accent is only 2.2:1 and the active segment ends up the *less* legible one.
+    sidebarTypeTextActive: { color: t.accentDeep },
 
     // Sidebar action rows (Save / New Recording / Inspect Frames / Export trigger) —
     // same translucent-pill pattern as Home's sidebarRow, so all four read as one

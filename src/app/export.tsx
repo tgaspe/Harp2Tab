@@ -10,7 +10,8 @@ import { NameRecordingModal } from '@/components/NameRecordingModal';
 import { RatingModal } from '@/components/RatingModal';
 import { ActionSheetModal } from '@/components/ActionSheetModal';
 import { useTheme } from '@/hooks/useTheme';
-import { useAppStore, selectKey, selectTabNotes, selectExportFmt, selectHarmonicaType } from '@/store/useAppStore';
+import { useAppStore, selectKey, selectExportFmt, selectHarmonicaType } from '@/store/useAppStore';
+import { useAudibleNotes } from '@/hooks/useAudibleNotes';
 import { saveCurrentSessionToLibrary, getDefaultRecordingTitle, startNewRecordingSession } from '@/store/sessionSnapshot';
 import { generateForFormat, singlePart } from '@/export/generators';
 import { contentToBlob, triggerWebDownload } from '@/export/webDownload';
@@ -25,7 +26,10 @@ export default function ExportScreen() {
   const theme           = useTheme();
   const styles          = useMemo(() => createStyles(theme), [theme]);
   const selectedKey     = useAppStore(selectKey);
-  const tabNotes        = useAppStore(selectTabNotes);
+  // Gated, not raw: export writes exactly what the editor showed. Anything the noise gate
+  // is hiding is still in the store and still in the library — it just isn't part of this
+  // file, which is what moving the slider is asking for.
+  const { notes: tabNotes } = useAudibleNotes();
   const harmonicaType   = useAppStore(selectHarmonicaType);
   const exportFormat    = useAppStore(selectExportFmt);
   const setExportFormat = useAppStore((s) => s.setExportFormat);

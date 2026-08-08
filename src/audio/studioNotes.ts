@@ -180,3 +180,23 @@ export function removeTabNote(track: MidiTrackData, noteId: string): MidiNote[] 
   if (!parsed || parsed.trackId !== track.id || !track.notes[parsed.index]) return track.notes;
   return track.notes.filter((_, i) => i !== parsed.index);
 }
+
+/**
+ * Remove several notes at once.
+ *
+ * Not expressible as a loop over `removeTabNote`: every removal shifts the indices that
+ * later ids encode, so the second id in the list would already be resolving against an
+ * array it no longer describes. Resolving all the ids against the *original* array first
+ * and filtering once is what makes the set of deleted notes match the set the user
+ * selected. Returns the same array reference when nothing matched.
+ */
+export function removeTabNotes(track: MidiTrackData, noteIds: readonly string[]): MidiNote[] {
+  const doomed = new Set<number>();
+  for (const noteId of noteIds) {
+    const parsed = parseStudioNoteId(noteId);
+    if (!parsed || parsed.trackId !== track.id || !track.notes[parsed.index]) continue;
+    doomed.add(parsed.index);
+  }
+  if (doomed.size === 0) return track.notes;
+  return track.notes.filter((_, i) => !doomed.has(i));
+}

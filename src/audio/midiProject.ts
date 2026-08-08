@@ -123,21 +123,33 @@ export interface StoredProject {
   trackMeta:  StoredTrackMeta[];
 }
 
-export function serializeProject(project: MidiProject): StoredProject {
+/**
+ * The project as a standard MIDI file.
+ *
+ * Shared by persistence (which stores projects as base64 SMF) and the Studio's Download
+ * MIDI — the same bytes either way, which is what makes the downloaded file exactly the
+ * project rather than a second, subtly different rendering of it. Studio-only state
+ * (lane colour, mute, solo) has no SMF representation and rides in `trackMeta` instead;
+ * a downloaded file therefore carries the music, not the mixing desk.
+ */
+export function projectToSmfBytes(project: MidiProject): Uint8Array {
   const smfTracks: SmfTrack[] = project.tracks.map((track) => ({
     name:    track.name,
     program: track.program,
     channel: track.channel,
     notes:   track.notes,
   }));
+  return writeSmf(smfTracks, project.tempos, project.timeSignatures);
+}
 
+export function serializeProject(project: MidiProject): StoredProject {
   return {
     id:         project.id,
     title:      project.title,
     createdAt:  project.createdAt,
     updatedAt:  project.updatedAt,
     durationMs: project.durationMs,
-    smf:        bytesToBase64(writeSmf(smfTracks, project.tempos, project.timeSignatures)),
+    smf:        bytesToBase64(projectToSmfBytes(project)),
     trackMeta:  project.tracks.map((t) => ({
       id: t.id, color: t.color, muted: t.muted, soloed: t.soloed,
     })),

@@ -61,6 +61,14 @@ export interface TabRecording {
   /** Starred in the recordings list — optional, absent/false for every recording saved
    *  before this existed. */
   favorite?: boolean;
+  /** Noise-gate threshold on `TabNote.breathForce`'s 0–127 scale: notes below it are hidden
+   *  from the editor, playback and export. Optional — absent means off, which is what every
+   *  recording saved before this existed should get.
+   *
+   *  Stored *alongside* the full `tabNotes` rather than applied to it. The gate is a lens,
+   *  not an edit, so a recording saved at gate 60 still carries every quiet note and can be
+   *  slid back open later. */
+  noiseGate?: number;
   /** How this tab was created. Optional: absent means a recording saved before the field
    *  existed. Frame Inspector needs it to tell "no frames because this predates frame
    *  retention" from "no frames because a MIDI import never had audio at all". */

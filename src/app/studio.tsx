@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { TrackList } from '@/components/TrackList';
 import { PianoRoll } from '@/components/PianoRoll';
 // The editor's own transport and its style sheet, imported rather than reimplemented.
@@ -12,20 +12,20 @@ import { WebTransportBar } from '@/components/TransportBar';
 import { createStyles as createEditStyles } from '@/app/editStyles';
 import { audibleTracks, instrumentName } from '@/audio/studioTracks';
 import { getChromaticRows } from '@/audio/HarmonicaMapper';
-import { createTrack, tempoMapOf } from '@/audio/midiProject';
+import { createTrack, projectToSmfBytes, tempoMapOf } from '@/audio/midiProject';
 import { mostMelodicTrack } from '@/audio/midiToNotes';
 import {
   appendTabNote,
   applyTabNoteChange,
   removeTabNote,
+  removeTabNotes,
   trackToTabNotes,
 } from '@/audio/studioNotes';
-import { convertAllTracks, convertTrackToRecording } from '@/audio/convertTrack';
-import { generateForFormat } from '@/export/generators';
-import { contentToBlob, triggerWebDownload } from '@/export/webDownload';
+import { convertTrackToRecording } from '@/audio/convertTrack';
+import { triggerWebDownload } from '@/export/webDownload';
 import { useMidiProjectsStore } from '@/store/useMidiProjectsStore';
 import { useRecordingsStore } from '@/store/useRecordingsStore';
-import { selectExportFmt, useAppStore } from '@/store/useAppStore';
+import { useAppStore } from '@/store/useAppStore';
 import { useRollTransport, formatElapsed } from '@/hooks/useRollTransport';
 import { useEditHistory, useUndoRedoShortcuts } from '@/hooks/useEditHistory';
 import { useHeaderActionStore } from '@/store/useHeaderActionStore';
@@ -49,9 +49,14 @@ import type { MidiProject, MidiTrackData, TabNote } from '@/types';
  * and conversion. Nothing else.
  *
  * It deliberately has **no chrome row of its own**. The project title rides in the piano
- * roll's tool row (`headerLeft`, same as the editor puts its chart title there), Export is
- * parked in the global `TopBar` via `useHeaderActionStore`, and getting back to the library
- * is the Harp2Tab logo — which already does exactly that on every other screen.
+ * roll's tool row (`headerLeft`, same as the editor puts its chart title there), Save and
+ * Download MIDI are parked in the global `TopBar` via `useHeaderActionStore`, and getting
+ * back to the library is the Harp2Tab logo — which already does that on every other screen.
+ *
+ * Edits are **not** autosaved. They accumulate in a draft that Save commits (see `mutate`);
+ * this screen is a MIDI editor, and downloading or converting is what it produces, so
+ * "try something and walk away" has to be possible. Download MIDI writes the project
+ * itself — no harmonica has been chosen here, so there is no tab to export.
  */
 
 /** Pitch-row height in the Studio. Roughly two-thirds the editor's, which puts about five
@@ -84,16 +89,40 @@ export default function StudioScreen() {
   const saveProject   = useMidiProjectsStore((s) => s.saveProject);
   const saveRecording = useRecordingsStore((s) => s.saveRecording);
   const loadRecording = useAppStore((s) => s.loadRecording);
-  const exportFormat  = useAppStore(selectExportFmt);
 
-  const project = useMemo(
+  const stored = useMemo(
     () => projects.find((p) => p.id === projectId) ?? projects[0] ?? null,
     [projects, projectId],
   );
 
+  /**
+   * Edits are held here until Save, rather than written straight to the store.
+   *
+   * Keyed on the project's *id*, deliberately: committing a Save gives `stored` a new
+   * identity but the same id, so the effect doesn't fire and immediately overwrite the
+   * draft with what was just written. Opening a different project does change the id, and
+   * that should reset.
+   */
+  const [draft, setDraft] = useState<MidiProject | null>(null);
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => {
+    setDraft(stored);
+    setDirty(false);
+  }, [stored?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const project = draft ?? stored;
+
+  /** Every edit on this screen goes through here — one place that marks work uncommitted. */
+  const mutate = useCallback((next: MidiProject) => {
+    setDraft(next);
+    setDirty(true);
+  }, []);
+
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
   const [selectedNoteId, setSelectedNoteId]   = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  // Toned, because this banner reports both "that didn't work" and "that worked" — a
+  // successful save in the warning palette reads as a failure.
+  const [notice, setNotice] = useState<{ text: string; tone: 'warning' | 'success' } | null>(null);
   const [tracksCollapsed, setTracksCollapsed] = useState(false);
   // Session-local, unlike the tab editor's (which persists per-recording in useAppStore) —
   // a project has no metronome setting of its own to save it into.
@@ -148,11 +177,11 @@ export default function StudioScreen() {
 
   const updateTrack = useCallback((trackId: string, changes: Partial<MidiTrackData>) => {
     if (!project) return;
-    saveProject({
+    mutate({
       ...project,
       tracks: project.tracks.map((t) => (t.id === trackId ? { ...t, ...changes } : t)),
     });
-  }, [project, saveProject]);
+  }, [project, mutate]);
 
   /**
    * Undo/redo for the Studio, over the generic stack in `useEditHistory` — see there for
@@ -160,14 +189,16 @@ export default function StudioScreen() {
    * local. A snapshot is the project's track array, the only thing this screen edits.
    *
    * Only *note* edits are recorded — see `commitNotes`. Mute/solo/program and add/delete
-   * track go through `updateTrack`/`saveProject` untracked, matching what the tab editor's
-   * history does and doesn't cover (musical content, not the state around it).
+   * track go through `updateTrack`/`mutate` untracked, matching what the tab editor's
+   * history does and doesn't cover (musical content, not the state around it). Undo edits
+   * the draft like anything else, so it marks the project unsaved rather than reverting to
+   * what's on disk.
    */
   const readTracks = useCallback(() => project?.tracks ?? null, [project]);
   const writeTracks = useCallback((tracks: MidiTrackData[]) => {
     if (!project) return;
-    saveProject({ ...project, tracks });
-  }, [project, saveProject]);
+    mutate({ ...project, tracks });
+  }, [project, mutate]);
   // A note's id is its index in the track's array (see `studioNotes.ts`), so it doesn't
   // survive a jump that may have added or removed notes — dropping the selection is
   // honest, where keeping it would leave it pointing at some unrelated note.
@@ -180,11 +211,11 @@ export default function StudioScreen() {
   const commitNotes = useCallback((trackId: string, notes: MidiTrackData['notes']) => {
     if (!project) return;
     record();
-    saveProject({
+    mutate({
       ...project,
       tracks: project.tracks.map((t) => (t.id === trackId ? { ...t, notes } : t)),
     });
-  }, [project, saveProject, record]);
+  }, [project, mutate, record]);
 
   const handleCreate = useCallback((created: Omit<TabNote, 'id'>) => {
     if (!selectedTrack) return;
@@ -232,6 +263,29 @@ export default function StudioScreen() {
     commitNotes(selectedTrack.id, removeTabNote(selectedTrack, id));
   }, [selectedTrack, commitNotes]);
 
+  /**
+   * Bulk delete — marquee selection + Backspace, or right-click inside one.
+   *
+   * Same reason `handleUpdateMany` exists, plus a second one specific to deletion: ids are
+   * positional, so each removal invalidates the ids of every note after it. Looping the
+   * single-note path would resolve later ids against an array they no longer describe and
+   * delete the wrong notes — `removeTabNotes` resolves them all up front instead.
+   */
+  const handleDeleteMany = useCallback((ids: string[]) => {
+    if (!selectedTrack) return;
+    const notes = removeTabNotes(selectedTrack, ids);
+    if (notes === selectedTrack.notes) return;
+    setSelectedNoteId(null);
+    commitNotes(selectedTrack.id, notes);
+  }, [selectedTrack, commitNotes]);
+
+  const handleSave = useCallback(() => {
+    if (!project || !dirty) return;
+    saveProject(project);
+    setDirty(false);
+    setNotice({ text: 'Saved to library.', tone: 'success' });
+  }, [project, dirty, saveProject]);
+
   const handleConvert = useCallback((trackId: string) => {
     if (!project) return;
     const track = project.tracks.find((t) => t.id === trackId);
@@ -239,8 +293,17 @@ export default function StudioScreen() {
 
     const result = convertTrackToRecording(project, track);
     if (!result) {
-      setNotice(`"${track.name}" has no notes long enough to play on a harmonica.`);
+      setNotice({ text: `"${track.name}" has no notes long enough to play on a harmonica.`, tone: 'warning' });
       return;
+    }
+
+    // Commit the draft, but only now that we know we're leaving. Conversion stamps
+    // `sourceProjectId` on the new recording, so the project that id points at has to be
+    // the one that was converted — not a draft the user might still discard. A failed
+    // conversion isn't a reason to silently save on their behalf.
+    if (dirty) {
+      saveProject(project);
+      setDirty(false);
     }
 
     saveRecording(result.recording);
@@ -248,30 +311,24 @@ export default function StudioScreen() {
     // then has to go and find would bury the result of the thing they just asked for.
     loadRecording(result.recording);
     router.push('/edit');
-  }, [project, saveRecording, loadRecording]);
+  }, [project, dirty, saveProject, saveRecording, loadRecording]);
 
-  const handleExportAll = useCallback(() => {
+  /**
+   * Download the project as a standard MIDI file.
+   *
+   * The draft, not the stored copy — what's on screen is what downloads, whether or not
+   * it's been saved. Deliberately *not* a tab export: nothing here has been fitted to a
+   * harmonica, and converting on the way out would make the downloaded file a lossy
+   * rendering of the project rather than the project.
+   */
+  const handleDownloadMidi = useCallback(() => {
     if (!project) return;
-    const converted = convertAllTracks(project);
-    if (converted.length === 0) {
-      setNotice('No track in this project has notes a harmonica could play.');
-      return;
-    }
-
-    const { content, encoding, ext, mimeType } = generateForFormat(
-      converted.map((c) => ({
-        name:          c.recording.title,
-        key:           c.key,
-        harmonicaType: c.recording.harmonicaType,
-        notes:         c.recording.tabNotes,
-      })),
-      exportFormat,
-    );
-
     const safeTitle = project.title.replace(/[^\w-]+/g, '_').slice(0, 60) || 'harp2tab_project';
-    triggerWebDownload(contentToBlob(content, encoding, mimeType), `${safeTitle}.${ext}`);
-    setNotice(`Exported ${converted.length} track${converted.length === 1 ? '' : 's'} as ${exportFormat}.`);
-  }, [project, exportFormat]);
+    // `writeSmf` returns a freshly allocated view, so its buffer is exactly these bytes —
+    // the cast is only to satisfy BlobPart's ArrayBuffer/SharedArrayBuffer distinction.
+    const buffer = projectToSmfBytes(project).buffer as ArrayBuffer;
+    triggerWebDownload(new Blob([buffer], { type: 'audio/midi' }), `${safeTitle}.mid`);
+  }, [project]);
 
   /** Tempo lives on the project's map, so the transport's BPM stepper edits the map's
    *  opening tempo rather than a scalar the Studio doesn't have. */
@@ -281,21 +338,43 @@ export default function StudioScreen() {
     const tempos = project.tempos.length > 0
       ? project.tempos.map((t, i) => (i === 0 ? { ...t, bpm: clamped } : t))
       : [{ timeMs: 0, bpm: clamped }];
-    saveProject({ ...project, tempos });
+    mutate({ ...project, tempos });
   }
 
-  const setHeaderAction   = useHeaderActionStore((s) => s.setHeaderAction);
-  const clearHeaderAction = useHeaderActionStore((s) => s.clearHeaderAction);
+  const setHeaderActions   = useHeaderActionStore((s) => s.setHeaderActions);
+  const clearHeaderActions = useHeaderActionStore((s) => s.clearHeaderActions);
+  // useFocusEffect, not useEffect: converting a track pushes /edit, which leaves this
+  // screen mounted, so an unmount-time cleanup never runs and these buttons used to
+  // follow the user into the tab editor. Blur is the event that actually happens.
+  useFocusEffect(
+    useCallback(() => {
+      setHeaderActions('/studio', [
+        {
+          key:      'save',
+          icon:     'save-outline',
+          label:    dirty ? 'Save' : 'Saved',
+          onPress:  handleSave,
+          disabled: !project || !dirty,
+        },
+        {
+          key:      'download-midi',
+          icon:     'download-outline',
+          label:    'Download MIDI',
+          onPress:  handleDownloadMidi,
+          disabled: !project,
+        },
+      ]);
+      return clearHeaderActions;
+    }, [setHeaderActions, clearHeaderActions, handleSave, handleDownloadMidi, dirty, project]),
+  );
+
+  /** Autosave is gone, so a reload with uncommitted edits would lose them silently. */
   useEffect(() => {
-    setHeaderAction({
-      icon:    'share-outline',
-      label:   `Export ${exportFormat}`,
-      onPress: handleExportAll,
-      disabled: !project,
-    });
-    // Cleared on unmount so the button doesn't linger on whatever screen comes next.
-    return clearHeaderAction;
-  }, [setHeaderAction, clearHeaderAction, handleExportAll, exportFormat, project]);
+    if (Platform.OS !== 'web' || !dirty) return;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
 
   if (!project) {
     return (
@@ -314,8 +393,12 @@ export default function StudioScreen() {
   return (
     <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
       {notice && (
-        <Pressable style={styles.notice} onPress={() => setNotice(null)} accessibilityRole="button">
-          <Text style={styles.noticeText}>{notice}</Text>
+        <Pressable
+          style={[styles.notice, notice.tone === 'success' && styles.noticeSuccess]}
+          onPress={() => setNotice(null)}
+          accessibilityRole="button"
+        >
+          <Text style={styles.noticeText}>{notice.text}</Text>
         </Pressable>
       )}
 
@@ -335,12 +418,12 @@ export default function StudioScreen() {
           onSetProgram={(id, program) => updateTrack(id, { program })}
           onAddTrack={() => {
             const track = createTrack(project.tracks.length);
-            saveProject({ ...project, tracks: [...project.tracks, track] });
+            mutate({ ...project, tracks: [...project.tracks, track] });
             setSelectedTrackId(track.id);
           }}
           onDeleteTrack={(id) => {
             if (project.tracks.length <= 1) return;
-            saveProject({ ...project, tracks: project.tracks.filter((t) => t.id !== id) });
+            mutate({ ...project, tracks: project.tracks.filter((t) => t.id !== id) });
             if (selectedTrackId === id) setSelectedTrackId(null);
           }}
           collapsed={tracksCollapsed}
@@ -377,6 +460,7 @@ export default function StudioScreen() {
               // against the project rather than the tab session's store.
               readNotesAfterWrite={() => (selectedTrack ? trackToTabNotes(selectedTrack) : [])}
               onDelete={handleDelete}
+              onDeleteMany={handleDeleteMany}
               isPlaying={transport.isPlaying}
               currentTimeMs={transport.currentTimeMs}
               onSeek={transport.onSeek}
@@ -455,6 +539,7 @@ function createStyles(t: Theme) {
       borderWidth: 1,
       borderColor: t.warning,
     },
+    noticeSuccess: { backgroundColor: t.successSoft, borderColor: t.success },
     noticeText: { fontFamily: SpaceGrotesk.regular, fontSize: 13, color: t.textPrimary },
     body: { flex: 1, flexDirection: 'row', minHeight: 0 },
     rollWrap: { flex: 1, minWidth: 0 },
