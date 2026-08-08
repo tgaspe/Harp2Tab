@@ -132,30 +132,42 @@ export function TopBar() {
       </View>
 
       <View style={styles.right}>
-        {headerActions.map((action) => (
-          <Pressable
-            key={action.key}
-            onPress={action.onPress}
-            disabled={action.disabled}
-            style={({ pressed, hovered }: any) => [
-              styles.headerAction,
-              action.disabled && styles.headerActionDisabled,
-              (pressed || hovered) && !action.disabled && styles.headerActionHovered,
-            ]}
-            accessibilityRole="button"
-            accessibilityLabel={action.label}
-            accessibilityState={{ disabled: !!action.disabled }}
-          >
-            <Ionicons
-              name={action.icon as any}
-              size={16}
-              color={action.disabled ? theme.textMuted : theme.accent}
-            />
-            <Text style={[styles.headerActionText, action.disabled && { color: theme.textMuted }]}>
-              {action.label}
-            </Text>
-          </Pressable>
-        ))}
+        {headerActions.map((action) => {
+          const destructive = action.variant === 'destructive';
+          return (
+            <Pressable
+              key={action.key}
+              onPress={action.onPress}
+              disabled={action.disabled}
+              style={({ pressed, hovered }: any) => [
+                styles.headerAction,
+                destructive && styles.headerActionDestructive,
+                action.disabled && styles.headerActionDisabled,
+                (pressed || hovered) && !action.disabled && (
+                  destructive ? styles.headerActionDestructiveHovered : styles.headerActionHovered
+                ),
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel={action.label}
+              accessibilityState={{ disabled: !!action.disabled }}
+            >
+              <Ionicons
+                name={action.icon as any}
+                size={16}
+                color={action.disabled ? theme.textMuted : destructive ? theme.record : theme.accent}
+              />
+              <Text
+                style={[
+                  styles.headerActionText,
+                  destructive && { color: theme.record },
+                  action.disabled && { color: theme.textMuted },
+                ]}
+              >
+                {action.label}
+              </Text>
+            </Pressable>
+          );
+        })}
 
         {showGear && (
         <Pressable
@@ -216,6 +228,13 @@ function createStyles(t: Theme) {
     headerActionHovered:  { backgroundColor: t.surfaceAlt },
     headerActionDisabled: { opacity: 0.5 },
     headerActionText: { fontFamily: Poppins.bold, fontSize: 13, color: t.accent },
+    // Red, and the same red `ActionSheetModal` uses for its destructive rows — a discard
+    // button and the dialog it opens should read as one gesture, not two unrelated reds.
+    headerActionDestructive: {
+      borderColor:     t.recordDim,
+      backgroundColor: t.recordSoft,
+    },
+    headerActionDestructiveHovered: { backgroundColor: t.recordDim },
     // Breadcrumb back to the Studio project a tab was converted out of. Quieter than a
     // headerAction — it's a place you came from, not something to do.
     crumb: {

@@ -25,6 +25,10 @@ export interface HeaderAction {
   label:   string;
   onPress: () => void;
   disabled?: boolean;
+  /** `'destructive'` tints the pill red, matching the destructive rows in
+   *  `ActionSheetModal`. It changes appearance only — an action that deletes something
+   *  still has to ask for confirmation itself. */
+  variant?: 'default' | 'destructive';
 }
 
 interface HeaderActionState {
@@ -33,13 +37,29 @@ interface HeaderActionState {
   route:   string | null;
   setHeaderActions:   (route: string, actions: HeaderAction[]) => void;
   clearHeaderActions: () => void;
+  /** Clear, but only if `route` still owns the slot — see below. */
+  clearHeaderActionsFor: (route: string) => void;
 }
 
-export const useHeaderActionStore = create<HeaderActionState>()((set) => ({
+export const useHeaderActionStore = create<HeaderActionState>()((set, get) => ({
   actions: [],
   route:   null,
   setHeaderActions:   (route, actions) => set({ route, actions }),
   clearHeaderActions: () => set({ route: null, actions: [] }),
+
+  /**
+   * The safe cleanup for a `useFocusEffect`, and what a screen should use instead of the
+   * unconditional clear.
+   *
+   * Two screens that navigate to each other both register actions, and React Navigation
+   * gives no ordering guarantee between the old screen's blur and the new screen's focus.
+   * An unconditional clear running second wipes the incoming screen's buttons and leaves
+   * the header empty until something re-renders. Checking ownership first makes the order
+   * irrelevant: a screen can only ever clear its own actions.
+   */
+  clearHeaderActionsFor: (route) => {
+    if (get().route === route) set({ route: null, actions: [] });
+  },
 }));
 
 /** Stable reference, so a route with no actions doesn't re-render TopBar every store tick. */

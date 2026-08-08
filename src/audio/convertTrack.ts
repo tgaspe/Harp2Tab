@@ -12,12 +12,14 @@
  * what linking would buy without needing any merge semantics for a hand-edited tab.
  */
 
+import { trackAudibleNotes } from './midiProject';
 import { MIN_NOTE_MS, reduceToMonophonic } from './midiToNotes';
-import { notesToTabs, rankKeysForMidi, shiftMidiNotes } from './notesToTabs';
+import { notesToTabs, rankKeysForMidi, shiftMidiNotes, type MidiKeyRanking } from './notesToTabs';
 import { octaveShiftForMidiRange } from './pitchRange';
 import type {
   HarmonicaKey,
   HarmonicaType,
+  MidiNote,
   MidiProject,
   MidiTrackData,
   TabNote,
@@ -49,6 +51,50 @@ function newId(prefix: string): string {
 }
 
 /**
+ * The reduction every harmonica decision is made against: one voice, fitted to the register.
+ *
+ * Factored out because the key *picker* and the conversion both need it and must agree. If
+ * the picker scored the raw track while conversion scored the fitted one, the list would
+ * recommend a key that a default conversion then wouldn't choose — the two would disagree
+ * about the same track on the same screen.
+ *
+ * Returns null when nothing survives, which is the same "nothing convertible here" condition
+ * `convertTrackToRecording` reports by returning null.
+ */
+function fitTrackNotes(
+  notes: readonly MidiNote[],
+): { notes: MidiNote[]; octaveShiftSemitones: number } | null {
+  // A harmonica plays one note at a time, so chords and overlaps within the track collapse
+  // to the top voice — the same reduction MIDI import applies, reused rather than restated.
+  const monophonic = reduceToMonophonic([...notes]);
+  if (monophonic.length === 0) return null;
+
+  // Per-track, deliberately. A global shift computed across the whole project would be a
+  // compromise between a piccolo and a bass line that suits neither; each track is fitted
+  // to the harp's register on its own.
+  const octaveShiftSemitones = octaveShiftForMidiRange(monophonic.map((n) => n.midi));
+  return { notes: shiftMidiNotes(monophonic, octaveShiftSemitones), octaveShiftSemitones };
+}
+
+/**
+ * Score every harp for a track without converting it — what the picker offers.
+ *
+ * Null for a track with nothing convertible, so the caller can say so instead of opening a
+ * picker over an empty list.
+ */
+export function rankKeysForTrack(
+  track: Pick<MidiTrackData, 'notes' | 'velocityFloor'>,
+  harmonicaType: HarmonicaType,
+): MidiKeyRanking | null {
+  // The filtered set, matching what `convertTrackToRecording` will actually convert — a
+  // ranking scored over notes the conversion then drops would recommend a harp for music
+  // the user isn't taking with them.
+  const fitted = fitTrackNotes(trackAudibleNotes(track));
+  if (!fitted) return null;
+  return rankKeysForMidi(fitted.notes, harmonicaType, fitted.octaveShiftSemitones);
+}
+
+/**
  * Returns null when the track has nothing convertible — no notes, or nothing left after
  * the articulation floor. A caller should say so rather than opening an empty editor.
  */
@@ -59,29 +105,29 @@ export function convertTrackToRecording(
 ): ConversionResult | null {
   const harmonicaType = options.harmonicaType ?? 'diatonic';
 
-  // A harmonica plays one note at a time, so chords and overlaps within the track collapse
-  // to the top voice — the same reduction MIDI import applies, reused rather than restated.
-  const monophonic = reduceToMonophonic(track.notes);
-  if (monophonic.length === 0) return null;
-
-  // Per-track, deliberately. A global shift computed across the whole project would be a
-  // compromise between a piccolo and a bass line that suits neither; each track is fitted
-  // to the harp's register on its own.
-  const octaveShiftSemitones = octaveShiftForMidiRange(monophonic.map((n) => n.midi));
-  const fitted = shiftMidiNotes(monophonic, octaveShiftSemitones);
+  // The track's velocity floor is applied here, at the boundary out of the Studio: a note
+  // hidden in the roll and silent in playback would be a surprise to find in the tab. The
+  // project keeps it either way, so lowering the line and re-converting brings it back.
+  const fit = fitTrackNotes(trackAudibleNotes(track));
+  if (!fit) return null;
+  const { notes: fitted, octaveShiftSemitones } = fit;
 
   const ranking = rankKeysForMidi(fitted, harmonicaType, octaveShiftSemitones);
   const key = options.key ?? ranking.ranked[0].key;
 
-  const tabbed = notesToTabs(fitted, key, harmonicaType);
+  // The track's own provenance, carried down onto every note it produces: a tab converted
+  // out of an imported MIDI file holds a composer's stated velocities, one converted out of
+  // a transcribed audio upload holds an engine's estimate, and the editor's filter has to
+  // be able to tell the user which.
+  const tabbed = notesToTabs(fitted, key, harmonicaType, track.velocitySource ?? 'midiVelocity');
   if (tabbed.length === 0) return null;
 
   const notes: TabNote[] = tabbed.map((note, index) => ({
     ...note,
     id: `note-${index}-${Math.random().toString(36).slice(2, 7)}`,
-    // Velocity survives the conversion as breath force — the Studio's dynamics are exactly
-    // the harmonica's, so dropping them here would discard real musical information.
-    breathForce: fitted[index]?.velocity,
+    // Velocity survives the conversion — the Studio's dynamics are exactly the harmonica's,
+    // so dropping them here would discard real musical information.
+    velocity: fitted[index]?.velocity,
   }));
 
   const duration = notes.reduce((max, n) => Math.max(max, n.start_time + n.duration), 0);

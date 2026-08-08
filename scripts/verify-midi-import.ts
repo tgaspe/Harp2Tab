@@ -147,7 +147,7 @@ function ownExportRoundTrip(): void {
   const parsed = parseMidiFile(bytes, 'export.mid');
 
   const notes  = reduceToMonophonic(parsed.tracks[0].notes);
-  const tabbed = notesToTabs(notes, key, 'diatonic');
+  const tabbed = notesToTabs(notes, key, 'diatonic', 'midiVelocity');
 
   const tabsMatch = tabbed.length === tabs.length && tabbed.every((n, i) => n.tab === tabs[i]);
   // One tick is ~1.04ms at the exporter's 120 BPM / PPQ 480, so a couple of ms of
@@ -373,7 +373,7 @@ function octaveFold(): void {
 
   const shift   = octaveShiftForMidiRange(low.map((n) => n.midi));
   const shifted = shiftMidiNotes(low, shift);
-  const tabbed  = notesToTabs(shifted, 'C', 'diatonic');
+  const tabbed  = notesToTabs(shifted, 'C', 'diatonic', 'midiVelocity');
 
   check(
     'a melody two octaves low is folded back into the harp\'s range',
@@ -396,7 +396,7 @@ function unplayablePolicy(): void {
   // has gaps there, unlike the accidentals covered by bends and overblows lower down.
   const pitches = [84, 85, 86, 91, 92, 93];
   const notes: MidiNote[] = pitches.map((midi, i) => ({ midi, timeMs: i * 400, durationMs: 300 }));
-  const tabbed = notesToTabs(notes, 'C', 'diatonic');
+  const tabbed = notesToTabs(notes, 'C', 'diatonic', 'midiVelocity');
 
   const kept        = tabbed.length === pitches.length;
   const pitchesKept = tabbed.every((n, i) => n.note === midiToNoteName(pitches[i]));

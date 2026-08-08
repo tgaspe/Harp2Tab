@@ -1,6 +1,7 @@
 import { bytesToBase64 } from '@/audio/base64';
 import { noteNameToMidi } from '@/audio/HarmonicaMapper';
 import { writeSmf, type SmfTrack } from '@/audio/smf';
+import { noteVelocity } from '@/audio/velocity';
 import type { ExportFormat, HarmonicaKey, HarmonicaType, TabNote } from '@/types';
 
 /**
@@ -201,7 +202,7 @@ function generateMidi(parts: ExportPart[]): string {
         midi,
         timeMs:     n.start_time,
         durationMs: n.duration,
-        velocity:   n.breathForce,
+        velocity:   noteVelocity(n),
       }];
     }),
   }));

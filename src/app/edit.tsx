@@ -3,7 +3,7 @@ import { Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from 'r
 import { FlatList } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import DraggableFlatList, {
   ScaleDecorator,
   type RenderItemParams,
@@ -23,6 +23,8 @@ import { useTheme } from '@/hooks/useTheme';
 import { useAppStore, selectTabNotes, selectKey, selectHarmonicaType, selectCanUndo, selectCanRedo, selectBpm, selectMetronomeEnabled, selectExportFmt, selectRecordingTitle, selectViewMode } from '@/store/useAppStore';
 import { saveCurrentSessionToLibrary, getDefaultRecordingTitle, startNewRecordingSession } from '@/store/sessionSnapshot';
 import { resolveSessionGate } from '@/store/sessionGate';
+import { useHeaderActionStore } from '@/store/useHeaderActionStore';
+import { useRecordingsStore } from '@/store/useRecordingsStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { AudioImportError } from '@/audio/audioImport';
 import { setPendingImport } from '@/audio/pendingImport';
@@ -50,7 +52,7 @@ export default function EditScreen() {
   // unchanged while notes are hidden.
   const {
     notes: audibleNotes, audibleCount, totalCount,
-    gate: noiseGate, supported: noiseGateSupported,
+    gate: noiseGate, supported: noiseGateSupported, source: velocitySource,
   } = useAudibleNotes();
   const setNoiseGate   = useAppStore((s) => s.setNoiseGate);
   const harmonicaKey   = useAppStore(selectKey);
@@ -75,6 +77,8 @@ export default function EditScreen() {
   // notes; these are for priming the *next* one, so no note remapping applies.
   const setKeyForNewSession  = useAppStore((s) => s.selectKey);
   const setTypeForNewSession = useAppStore((s) => s.setHarmonicaType);
+  const resetSession     = useAppStore((s) => s.reset);
+  const deleteRecording  = useRecordingsStore((s) => s.deleteRecording);
   // Every rule about when playback restarts (seek-while-playing, loop-region start,
   // metronome toggle) lives in the hook, shared with the MIDI Studio — see
   // `useRollTransport`. It owns the loop region too, since all three rules need it.
@@ -95,6 +99,7 @@ export default function EditScreen() {
   // Only for failures that happen before /import exists (an oversized file rejected at
   // pick time) — everything after that is reported on the import screen itself.
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   // Collapses the accent sidebar to an icon rail. Session-local rather than persisted:
   // it's a "give me room right now" gesture (the piano roll wants every pixel of width it
   // can get), not a durable preference about how the app should look.
@@ -288,6 +293,47 @@ export default function EditScreen() {
     setNamingAction(null);
   }
 
+  /**
+   * Throw this tab away and go home.
+   *
+   * Two states behind one button, because to the user they're one thing ("get rid of this").
+   * A tab reached from the library exists as a saved `TabRecording` and has to be deleted
+   * from it; a freshly imported or recorded one exists only in `useAppStore` and just needs
+   * the session cleared. Resolving against the library rather than tracking a flag matches
+   * how `PianoRoll` and Frame Inspector already answer "is this session saved".
+   */
+  const handleDiscard = useCallback(() => {
+    const { recordingId } = useAppStore.getState();
+    if (recordingId && useRecordingsStore.getState().recordings.some((r) => r.id === recordingId)) {
+      deleteRecording(recordingId);
+    }
+    // Unconditional: the session is gone either way, and leaving its notes in the store
+    // would let the next screen reopen a tab the user just discarded.
+    resetSession();
+    router.replace('/');
+  }, [deleteRecording, resetSession, router]);
+
+  const setHeaderActions   = useHeaderActionStore((s) => s.setHeaderActions);
+  const clearHeaderActions = useHeaderActionStore((s) => s.clearHeaderActionsFor);
+  // useFocusEffect for the reason the Studio documents: screens are pushed, not replaced, so
+  // this one stays mounted behind /export and /frame-inspector and an unmount cleanup would
+  // never run. Registering under '/edit' also means the Studio's own actions can't leak here.
+  useFocusEffect(
+    useCallback(() => {
+      setHeaderActions('/edit', [
+        {
+          key:      'discard',
+          icon:     'trash-outline',
+          label:    'Discard',
+          onPress:  () => setConfirmingDiscard(true),
+          disabled: totalCount === 0,
+          variant:  'destructive',
+        },
+      ]);
+      return () => clearHeaderActions('/edit');
+    }, [setHeaderActions, clearHeaderActions, totalCount]),
+  );
+
   // Both web view modes now share the one sidebar shell — previously only List did, and
   // Piano Roll carried a separate full-width toolbar, which is how the screen ended up
   // with three stacked menu bars (global TopBar + this toolbar + the piano roll's own
@@ -301,6 +347,17 @@ export default function EditScreen() {
 
   return (
     <SafeAreaView style={styles.safe}>
+      {/* Phrased as "discard", not "delete", because for an unsaved import there is nothing
+          in the library to delete — but it's equally final either way, so it warns either
+          way. `onPress` does the work: the modal fires `onClose` before it, so discarding
+          there would also fire on Cancel. */}
+      <ActionSheetModal
+        visible={confirmingDiscard}
+        title={`Discard "${recordingTitle || 'this tab'}"? This can't be undone.`}
+        options={[{ label: 'Discard tab', style: 'destructive', onPress: handleDiscard }]}
+        onClose={() => setConfirmingDiscard(false)}
+      />
+
       <View style={[styles.container, styles.containerFullWidth]}>
 
         {showSidebar ? (
@@ -395,14 +452,20 @@ export default function EditScreen() {
                     loopRegion={loopRegion}
                     onLoopRegionChange={setLoopRegion}
                     headerLeft={<PianoRollHeader tabNotesLength={audibleCount} theme={theme} styles={styles} />}
-                    // Its own tab in the data panel, after Pitch Bend. Omitted when
+                    // The draggable line in the data panel's Velocity chart. Omitted when
                     // nothing in the session states a dynamic — a control that provably
                     // cannot do anything at any position is worse than none.
+                    //
+                    // `allNotes` is the ungated set on purpose: `notes` above is already
+                    // filtered, and the chart has to keep drawing what the roll has hidden
+                    // so the line has something to be dragged against.
                     velocityFilter={noiseGateSupported ? {
                       value: noiseGate,
                       onChange: setNoiseGate,
+                      allNotes: tabNotes,
                       audibleCount,
                       totalCount,
+                      source: velocitySource,
                     } : undefined}
                   />
                 )}
@@ -462,6 +525,21 @@ export default function EditScreen() {
                     accessibilityState={{ disabled: tabNotes.length === 0 }}
                   >
                     <Ionicons name="analytics-outline" size={26} color={tabNotes.length === 0 ? theme.textMuted : theme.textSub} />
+                  </Pressable>
+                  {/* Native gets its own button: TopBar renders null here, so the header
+                      action registered above reaches web only. */}
+                  <Pressable
+                    onPress={() => setConfirmingDiscard(true)}
+                    disabled={totalCount === 0}
+                    style={({ pressed }) => [
+                      styles.gearBtn,
+                      pressed && totalCount > 0 && { opacity: 0.6 },
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Discard this tab"
+                    accessibilityState={{ disabled: totalCount === 0 }}
+                  >
+                    <Ionicons name="trash-outline" size={26} color={totalCount === 0 ? theme.textMuted : theme.record} />
                   </Pressable>
                   <Pressable
                     onPress={() => router.push('/settings')}

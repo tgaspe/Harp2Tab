@@ -8,6 +8,24 @@ export type HarmonicaKey =
 
 export type ExportFormat = 'CSV' | 'MIDI' | 'TXT' | 'MusicXML' | 'JSON';
 
+/**
+ * Where a note's `velocity` came from.
+ *
+ * The three producers put genuinely incomparable quantities on the same 0–127 scale, so
+ * anything that shows the number to the user — or lets them filter on it — has to be able
+ * to say which one it is holding. A threshold of 60 hides half a tracked take and almost
+ * nothing from a neural one.
+ */
+export type VelocitySource =
+  /** Stated outright by a MIDI file, or by a Studio project derived from one. */
+  | 'midiVelocity'
+  /** `RawFrame.rms` normalised against the take's own 10th/95th percentiles. Relative to
+   *  the performance, not an absolute loudness — see `src/audio/velocity.ts`. */
+  | 'takeRelativeRms'
+  /** The neural engine's per-note activation. It saturates near the top of its range, so
+   *  it reads as "was this note clearly sounded" more than "how hard was it played". */
+  | 'modelActivation';
+
 export interface TabNote {
   id: string;
   /** Harmonica tab notation, e.g. "-4'" or "3" */
@@ -20,11 +38,17 @@ export interface TabNote {
   start_time: number;
   /** Detection confidence 0–100 (% of frames in the note's run that matched its tab) */
   confidence: number;
-  /** How hard the note is blown or drawn, 0–127 on MIDI's velocity scale. Optional —
-   *  absent on everything saved before the Studio's breath-force lane existed. Recorded
-   *  sessions derive it from `RawFrame.rms` normalised against the mic calibration; MIDI
-   *  supplies it directly. */
-  breathForce?: number;
+  /** How loud the note is, 0–127 on MIDI's velocity scale. Optional — absent means no
+   *  dynamic was stated, which every consumer treats as "unknown" rather than as silence.
+   *
+   *  Read `velocitySource` before comparing two of these: the number is produced three
+   *  incompatible ways, and only within one source is it meaningful to say one note is
+   *  louder than another. */
+  velocity?: number;
+  /** Which of the three producers supplied `velocity`. Optional: absent on everything
+   *  saved before this existed, and on audio uploads migrated from the old `breathForce`
+   *  field, where the engine was never recorded and so is unknowable after the fact. */
+  velocitySource?: VelocitySource;
   /** General MIDI program, as a *playback* hint only — it never affects tabs. Set when the
    *  Studio hands a multi-track project to the scheduler, so a flute and a cello don't
    *  arrive as the same tone; absent for a tab session, which is one harmonica. */
@@ -61,7 +85,7 @@ export interface TabRecording {
   /** Starred in the recordings list — optional, absent/false for every recording saved
    *  before this existed. */
   favorite?: boolean;
-  /** Noise-gate threshold on `TabNote.breathForce`'s 0–127 scale: notes below it are hidden
+  /** Noise-gate threshold on `TabNote.velocity`'s 0–127 scale: notes below it are hidden
    *  from the editor, playback and export. Optional — absent means off, which is what every
    *  recording saved before this existed should get.
    *
@@ -98,7 +122,7 @@ export interface MidiNote {
   timeMs:     number;
   durationMs: number;
   /** 0–127. Optional: absent means unstated, and is played at a default rather than
-   *  silently becoming zero. This is the breath-force lane in the Studio. */
+   *  silently becoming zero. This is the velocity lane in the Studio. */
   velocity?:  number;
 }
 
@@ -114,6 +138,27 @@ export interface MidiTrackData {
   muted:   boolean;
   soloed:  boolean;
   notes:   MidiNote[];
+  /** Where this track's note velocities came from, when it's known.
+   *
+   *  Lives on the track rather than on each note because a project persists as SMF bytes,
+   *  and SMF has nowhere to put a provenance tag — the `trackMeta` JSON sidecar does.
+   *  Conversion stamps it onto every `TabNote` it produces, which is where the filter and
+   *  the velocity lane read it. */
+  velocitySource?: VelocitySource;
+  /**
+   * This track's velocity floor, 0–127 on the same scale as `MidiNote.velocity`. Notes
+   * below it are hidden from the roll, silent in playback, and dropped from what the
+   * Studio exports — but never deleted: the track keeps them, and lowering the floor
+   * brings them straight back.
+   *
+   * Per *track* rather than per project, because the threshold that separates a real
+   * phrase from a ghost note is a property of how that part was played or programmed —
+   * a lightly-sequenced pad and a hard-hit drum lane have nothing useful in common here.
+   *
+   * Optional, and absent means 0/off. Lives in the `trackMeta` sidecar for the same
+   * reason `velocitySource` does: SMF has nowhere to put it.
+   */
+  velocityFloor?: number;
 }
 
 export interface MidiProject {

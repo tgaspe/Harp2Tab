@@ -14,11 +14,14 @@
 
 import { base64ToBytes, bytesToBase64 } from '../src/audio/base64';
 import {
+  audibleProject,
   createProject,
   createTrack,
   deserializeProject,
   projectFromSmfBytes,
+  projectToSmfBytes,
   serializeProject,
+  trackAudibleNotes,
 } from '../src/audio/midiProject';
 import { getChromaticRows } from '../src/audio/HarmonicaMapper';
 import { convertTrackToRecording, reconvertFromSource } from '../src/audio/convertTrack';
@@ -27,9 +30,11 @@ import {
   applyTabNoteChange,
   removeTabNote,
   trackToTabNotes,
+  visibleTrackNotes,
 } from '../src/audio/studioNotes';
 import { audibleTracks } from '../src/audio/studioTracks';
-import { breathScaleFor, withBreathForce } from '../src/audio/breathForce';
+import { velocityScaleFor, withVelocity } from '../src/audio/velocity';
+import { migrateRecordings, RECORDINGS_SCHEMA_VERSION } from '../src/store/recordingsMigration';
 import { voiceForProgram, velocityGain } from '../src/audio/timbre';
 import type { TabNote } from '../src/types';
 import { hasSmfHeader, readSmf, writeSmf } from '../src/audio/smf';
@@ -653,9 +658,9 @@ function conversionProducesATab(): void {
   );
 
   check(
-    'velocity carries through conversion as breath force',
-    result?.recording.tabNotes.every((n) => n.breathForce === 90) ?? false,
-    `first note breathForce ${result?.recording.tabNotes[0]?.breathForce}`,
+    'velocity carries through conversion',
+    result?.recording.tabNotes.every((n) => n.velocity === 90) ?? false,
+    `first note velocity ${result?.recording.tabNotes[0]?.velocity}`,
   );
 
   check(
@@ -776,11 +781,11 @@ function soloMuteResolution(): void {
   );
 }
 
-// ── Breath force + timbre ─────────────────────────────────────────────────────
+// ── Velocity + timbre ─────────────────────────────────────────────────────────
 
-/** Mic RMS is not breath force — it has to be normalised against the take's own range,
- *  or the lane shows how close the microphone was. */
-function breathForceNormalisation(): void {
+/** Mic RMS is not how hard the note was played — it has to be normalised against the
+ *  take's own range, or the lane shows how close the microphone was. */
+function velocityNormalisation(): void {
   // A crescendo: three notes at rising loudness, plus frames between them.
   const frames = [
     ...Array.from({ length: 10 }, (_, i) => ({ frequency: 440, rms: 0.02, t: i * 20 })),
@@ -793,11 +798,11 @@ function breathForceNormalisation(): void {
     { tab: '6', note: 'G5', start_time: 800, duration: 190, confidence: 100 },
   ];
 
-  const annotated = withBreathForce(notes, frames);
-  const forces = annotated.map((n) => n.breathForce ?? -1);
+  const annotated = withVelocity(notes, frames);
+  const forces = annotated.map((n) => n.velocity ?? -1);
 
   check(
-    'breath force rises with a crescendo and spans the take\'s range',
+    'velocity rises with a crescendo and spans the take\'s range',
     forces[0] < forces[1] && forces[1] < forces[2] && forces[0] >= 0 && forces[2] <= 127,
     `${forces.join(' → ')}`,
   );
@@ -805,21 +810,103 @@ function breathForceNormalisation(): void {
   // A recording at one constant level has no dynamics to report. Inventing a full range
   // from its noise floor would be worse than saying nothing.
   const flat = Array.from({ length: 30 }, (_, i) => ({ frequency: 440, rms: 0.1, t: i * 20 }));
-  const flatAnnotated = withBreathForce(notes, flat);
+  const flatAnnotated = withVelocity(notes, flat);
   check(
     'a take with no dynamic variation is left unannotated rather than invented',
-    !breathScaleFor(flat).usable && flatAnnotated.every((n) => n.breathForce === undefined),
-    'no breath force assigned',
+    !velocityScaleFor(flat).usable && flatAnnotated.every((n) => n.velocity === undefined),
+    'no velocity assigned',
   );
 
   // Loudness is relative to the take, so doubling the gain on everything must not change
   // the reported dynamics — that's the whole point of normalising.
   const louder = frames.map((f) => ({ ...f, rms: f.rms * 4 }));
-  const louderForces = withBreathForce(notes, louder).map((n) => n.breathForce ?? -1);
+  const louderForces = withVelocity(notes, louder).map((n) => n.velocity ?? -1);
   check(
-    'recording the same performance louder reports the same breath force',
+    'recording the same performance louder reports the same velocity',
     louderForces.join(',') === forces.join(','),
     `${forces.join(',')} vs ${louderForces.join(',')}`,
+  );
+}
+
+/**
+ * The v0 → v1 rename, driven over a hand-authored payload in the *old* shape.
+ *
+ * The app is live, so the population this runs against is real saved libraries — and every
+ * failure mode here is silent. A note that loses its velocity doesn't throw, it just stops
+ * being filterable, stops playing with dynamics, and exports flat. Hence checking the whole
+ * surface: the value moved, the stale key is gone, the source was inferred from how the tab
+ * was made, and a note that never had a velocity didn't acquire a fabricated one.
+ */
+function recordingsMigrationV0toV1(): void {
+  const legacy = {
+    recordings: [
+      {
+        id: 'rec-1', title: 'Live take', key: 'C', harmonicaType: 'diatonic',
+        createdAt: 1, duration: 500, source: 'recording', noiseGate: 60,
+        tabNotes: [
+          { id: 'n1', tab: '4', note: 'C5', duration: 200, start_time: 0,   confidence: 100, breathForce: 40 },
+          { id: 'n2', tab: '5', note: 'E5', duration: 200, start_time: 250, confidence: 100, breathForce: 110 },
+          { id: 'n3', tab: '6', note: 'G5', duration: 200, start_time: 500, confidence: 100 },
+        ],
+      },
+      {
+        id: 'rec-2', title: 'From MIDI', key: 'G', harmonicaType: 'diatonic',
+        createdAt: 2, duration: 100, source: 'midiUpload',
+        tabNotes: [{ id: 'm1', tab: '4', note: 'G4', duration: 100, start_time: 0, confidence: 100, breathForce: 90 }],
+      },
+      {
+        id: 'rec-3', title: 'Audio upload', key: 'A', harmonicaType: 'diatonic',
+        createdAt: 3, duration: 100, source: 'audioUpload',
+        tabNotes: [{ id: 'a1', tab: '4', note: 'A4', duration: 100, start_time: 0, confidence: 100, breathForce: 77 }],
+      },
+    ],
+  };
+
+  const migrated = migrateRecordings(legacy, 0);
+  const [live, midi, audio] = migrated.recordings;
+  const liveNotes = live.tabNotes;
+
+  check(
+    'migration moves breathForce onto velocity',
+    liveNotes[0].velocity === 40 && liveNotes[1].velocity === 110,
+    `${liveNotes.map((n) => n.velocity).join(', ')}`,
+  );
+
+  check(
+    'migration drops the stale breathForce key rather than leaving it as dead weight',
+    liveNotes.every((n) => !('breathForce' in n)),
+    'no breathForce keys remain',
+  );
+
+  check(
+    'migration infers the velocity source from how the tab was made',
+    liveNotes[0].velocitySource === 'takeRelativeRms'
+      && midi.tabNotes[0].velocitySource === 'midiVelocity'
+      // Genuinely unknowable: 'audioUpload' spans both engines and neither was recorded.
+      && audio.tabNotes[0].velocitySource === undefined,
+    `${liveNotes[0].velocitySource} / ${midi.tabNotes[0].velocitySource} / ${audio.tabNotes[0].velocitySource}`,
+  );
+
+  check(
+    'a note that never stated a dynamic is not given a fabricated one',
+    liveNotes[2].velocity === undefined && liveNotes[2].velocitySource === undefined,
+    'left unannotated',
+  );
+
+  check(
+    'migration preserves everything else on the recording',
+    live.noiseGate === 60 && live.title === 'Live take' && migrated.recordings.length === 3,
+    `gate ${live.noiseGate}, ${migrated.recordings.length} recordings`,
+  );
+
+  // Re-running must be a no-op. zustand calls `migrate` only when the stored version is
+  // behind, but a payload that has already been through it must survive the trip regardless
+  // — otherwise a version bump for some later change would strip the tags added here.
+  const again = migrateRecordings(migrated, RECORDINGS_SCHEMA_VERSION);
+  check(
+    'migrating an already-migrated payload changes nothing',
+    JSON.stringify(again) === JSON.stringify(migrated),
+    'idempotent',
   );
 }
 
@@ -892,6 +979,126 @@ function gridLinesAreWindowed(): void {
   );
 }
 
+/**
+ * The per-track velocity floor.
+ *
+ * The property worth pinning down is the asymmetry: the floor filters everything that
+ * *leaves* the Studio (the roll, playback, the downloaded file, a conversion) and nothing
+ * that gets *stored*. Get that backwards and the filter silently deletes notes on save,
+ * which is the one failure mode this feature could have that the user cannot undo.
+ */
+function velocityFloorCases(): void {
+  const project = createProject({
+    title: 'Floor test',
+    tracks: [
+      createTrack(0, {
+        name: 'Loud', velocityFloor: 50,
+        notes: [
+          { midi: 60, timeMs: 0,    durationMs: 400, velocity: 100 },
+          { midi: 62, timeMs: 500,  durationMs: 400, velocity: 20 },  // below the floor
+          { midi: 64, timeMs: 1000, durationMs: 400, velocity: 50 },  // exactly on it
+        ],
+      }),
+      createTrack(1, {
+        name: 'Untouched',
+        notes: [{ midi: 48, timeMs: 0, durationMs: 400, velocity: 10 }],
+      }),
+    ],
+  });
+
+  const track = project.tracks[0];
+
+  check(
+    'a track floor hides notes under it and keeps the one sitting exactly on it',
+    trackAudibleNotes(track).map((n) => n.midi).join(',') === '60,64',
+    `kept ${trackAudibleNotes(track).map((n) => n.midi).join(',')} of 60,62,64`,
+  );
+
+  check(
+    'a note that states no velocity is never filtered out',
+    trackAudibleNotes({ velocityFloor: 127, notes: [{ midi: 60, timeMs: 0, durationMs: 100 }] }).length === 1,
+    'unstated velocity survives a floor of 127',
+  );
+
+  check(
+    'a floor of zero returns the same array rather than a copy',
+    trackAudibleNotes(project.tracks[1]) === project.tracks[1].notes,
+    'identity preserved, so the common case allocates nothing',
+  );
+
+  check(
+    'each track is cut by its own floor, not by the loudest one in the project',
+    audibleProject(project).tracks[1].notes.length === 1,
+    'the unfiltered track keeps its velocity-10 note',
+  );
+
+  // The load-bearing one: saving must not apply the floor.
+  const restored = deserializeProject(serializeProject(project));
+  check(
+    'saving keeps every note, including the ones the floor hides',
+    restored.tracks[0].notes.length === 3,
+    `${restored.tracks[0].notes.length} notes stored, ${trackAudibleNotes(track).length} shown`,
+  );
+
+  check(
+    'the floor itself survives a save/load round trip',
+    restored.tracks[0].velocityFloor === 50 && restored.tracks[1].velocityFloor === undefined,
+    `floors ${restored.tracks[0].velocityFloor}, ${restored.tracks[1].velocityFloor}`,
+  );
+
+  check(
+    'a project saved before floors existed opens with the filter off',
+    (() => {
+      const stored = serializeProject(project);
+      // Simulate the older sidecar shape, which had no `velocityFloor` key at all.
+      stored.trackMeta = stored.trackMeta.map(({ velocityFloor, ...rest }) => rest);
+      return deserializeProject(stored).tracks.every((t) => (t.velocityFloor ?? 0) === 0);
+    })(),
+    'missing floors read as 0',
+  );
+
+  // Export paths. Both drop what the line hides, so the file matches what was on screen.
+  const exported = projectFromSmfBytes(projectToSmfBytes(audibleProject(project)), 'x');
+  check(
+    'downloaded MIDI carries what the roll shows, not what the floor hides',
+    exported.tracks[0].notes.length === 2,
+    `${exported.tracks[0].notes.length} notes exported of 3 stored`,
+  );
+
+  // The roll's view of a filtered track. The ids are the thing to watch: they encode a
+  // note's index in the *unfiltered* array, so a surviving note must keep the id it would
+  // have had with the filter off — otherwise an edit made while the line is up rewrites
+  // whichever note happens to sit at that index now.
+  const visible = visibleTrackNotes(track);
+  const unfiltered = trackToTabNotes(track);
+  check(
+    'a filtered note keeps the id it has with the filter off',
+    visible.length === 2
+      && visible[0].id === unfiltered[0].id
+      && visible[1].id === unfiltered[2].id,
+    `${visible.map((n) => n.id.split('#')[1]).join(',')} — indices survive the gap at 1`,
+  );
+
+  check(
+    'adapting the same track twice returns the identical array',
+    trackToTabNotes(track) === unfiltered && visibleTrackNotes(track) === visible,
+    'cached on track identity, so an unrelated edit does not re-adapt every lane',
+  );
+
+  check(
+    'a rebuilt track is re-adapted rather than served stale',
+    trackToTabNotes({ ...track, notes: track.notes.slice(0, 1) }).length === 1,
+    'a new track object misses the cache, as immutability intends',
+  );
+
+  const converted = convertTrackToRecording(project, track, { key: 'C', harmonicaType: 'diatonic' });
+  check(
+    'converting a track to a tab applies its floor too',
+    converted !== null && converted.recording.tabNotes.length === 2,
+    `${converted?.recording.tabNotes.length ?? 0} tab notes from 3 stored`,
+  );
+}
+
 function main(): void {
   constantTempoMatchesScalar();
   tempoChangeKeepsBarsAligned();
@@ -912,7 +1119,8 @@ function main(): void {
   perTrackOctaveFit();
   reconvertFromSourceCase();
   soloMuteResolution();
-  breathForceNormalisation();
+  velocityNormalisation();
+  recordingsMigrationV0toV1();
   timbreFamilies();
   gridLinesAreWindowed();
 
@@ -921,6 +1129,7 @@ function main(): void {
   studioKeepsEveryTrack();
   trackIdsAreStable();
   noAccidentalPercussionChannel();
+  velocityFloorCases();
 
   for (const result of results) {
     console.log(`${result.passed ? 'PASS' : 'FAIL'}  ${result.name} — ${result.detail}`);

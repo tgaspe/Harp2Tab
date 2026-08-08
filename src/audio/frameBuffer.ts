@@ -5,6 +5,11 @@
  * needs the same buffer without going through that hook at all), so any pipeline can just
  * call pushFrame(recordingId, frame) regardless of where its frames come from.
  *
+ * The key is an opaque string, not specifically a recording id, which is what lets the audio
+ * import park frames under a *project* id while a transcription sits in the Studio. That
+ * session has no recording id yet — conversion mints one — so conversion re-keys the frames
+ * onto the tab it produces by copying them to `TabRecording.frames`.
+ *
  * This is only the fast-path cache for the session currently being recorded/edited —
  * bounded so it doesn't grow unbounded across a long app session. The durable copy lives
  * on `TabRecording.frames` (persisted via useRecordingsStore) once a session is saved;

@@ -36,7 +36,7 @@ interface AppState {
    *  Not undo-tracked: it's metadata, not part of the musical content being edited. */
   recordingTitle:     string;
   /**
-   * Noise gate, 0–127 on the same scale as `TabNote.breathForce`. Notes quieter than this
+   * Noise gate, 0–127 on the same scale as `TabNote.velocity`. Notes quieter than this
    * are hidden from the editor, playback and export.
    *
    * Deliberately **non-destructive**: `tabNotes` always holds every note regardless of this

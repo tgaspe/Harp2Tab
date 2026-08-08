@@ -3,10 +3,13 @@
  *
  * Audio and MIDI share it deliberately: the two differ only in how a file becomes timed
  * pitches (decode + pitch detection vs. a parse), and are identical either side of that —
- * same session gate, same filename-as-title, same "confirm the harp before you commit"
- * step, same route into Edit. What differs is what the confirm step asks. Audio *detects*
- * a key and offers alternates; MIDI asks which track to transcribe and which harp to
- * transcribe it onto, since a MIDI file is an arrangement and neither answer is in it.
+ * same session gate, same filename-as-title, same progress reporting, same error handling.
+ *
+ * What differs now is whether there's anything left to ask. Audio has nothing: it hands the
+ * transcription to the Studio, where the user reviews the notes and picks a harp at the
+ * moment of conversion. MIDI still asks which track to transcribe, because a MIDI file is an
+ * arrangement and that answer isn't in it — and from there offers both the Studio and a
+ * direct route to tabs.
  */
 
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
@@ -23,8 +26,7 @@ import { clearPendingImport, getPendingImport, setPendingImport } from '@/audio/
 import { pickAudioFile } from '@/audio/pickAudioFile';
 import { pickMidiFile } from '@/audio/pickMidiFile';
 import { framesToNotes } from '@/audio/framesToNotes';
-import { midiToNoteName } from '@/audio/HarmonicaMapper';
-import type { KeyDetectionResult } from '@/audio/keyDetection';
+import { midiToNoteName, noteNameToMidi } from '@/audio/HarmonicaMapper';
 import { usePlayback } from '@/hooks/usePlayback';
 import {
   MIN_NOTE_MS,
@@ -44,7 +46,7 @@ import {
 import { octaveShiftForMidiRange } from '@/audio/pitchRange';
 import { runAudioImport, type ImportStage } from '@/audio/runAudioImport';
 import { runMidiImport, type MidiImportResult } from '@/audio/runMidiImport';
-import { projectFromSmfBytes } from '@/audio/midiProject';
+import { projectFromMidiNotes, projectFromSmfBytes } from '@/audio/midiProject';
 import { useMidiProjectsStore } from '@/store/useMidiProjectsStore';
 import { selectHarmonicaType, selectKey, useAppStore } from '@/store/useAppStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
@@ -61,17 +63,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
  *  doesn't encode. */
 type TrackSelection = number | 'all';
 
+/**
+ * Audio has no confirm phase: it transcribes and goes straight to the Studio, because the
+ * only question it used to ask here — which harp — is now asked at conversion, where it
+ * decides something. MIDI still confirms, since which track to transcribe is a question the
+ * file genuinely doesn't answer.
+ */
 type Phase =
   | { kind: 'working'; stage: ImportStage; fraction: number }
-  | {
-      kind: 'confirm';
-      detection: KeyDetectionResult;
-      /** Whatever the engine produced — a frame stream or note events. `commit` branches
-       *  on it, since the two become tabs by different routes. */
-      output: TranscriptionOutput;
-      unplayableByKey: Record<HarmonicaKey, number> | null;
-      chosenKey: HarmonicaKey;
-    }
   | { kind: 'midiConfirm'; parsed: MidiImportResult; selection: TrackSelection; chosenKey: HarmonicaKey }
   | { kind: 'error';   code: ImportErrorCode; message: string };
 
@@ -263,7 +262,11 @@ export default function ImportScreen() {
 
     // The filename makes a far better default library title than the timestamp fallback.
     const title = picked.name.replace(/\.[^.]+$/, '');
-    startImportedSession(title, 'audioUpload');
+    // Deliberately *not* `startImportedSession` here, unlike the MIDI path. That clears
+    // `tabNotes`/`history`, which was harmless while an audio import went on to replace them
+    // — but this one lands in the Studio and never touches the tab session, so starting one
+    // would destroy whatever the user had open in the editor and put nothing in its place.
+    // Conversion calls `loadRecording`, which establishes the session properly.
 
     try {
       const result = await runAudioImport({
@@ -274,20 +277,10 @@ export default function ImportScreen() {
         shouldCancel:  () => cancelledRef.current,
       });
 
-      // Chromatic covers every semitone in its range, so key detection has nothing to tell
-      // the user — go straight to the editor on the key they already chose.
-      if (!result.detection) {
-        commit(result.output, selectedKey);
-        return;
-      }
-
-      setPhase({
-        kind:            'confirm',
-        detection:       result.detection,
-        output:          result.output,
-        unplayableByKey: result.unplayableByKey,
-        chosenKey:       result.detection.best.key,
-      });
+      // Straight into the Studio. There is no key step here any more: the key is chosen at
+      // conversion, where it actually decides something, so confirming one before the user
+      // has seen a single note would be asking about a decision that hasn't arrived yet.
+      openStudioFromAudio(result.output, result.detection?.best.key ?? selectedKey, title);
     } catch (err) {
       showImportError(err, picked.name, `"${picked.name}" couldn't be transcribed.`);
     }
@@ -309,46 +302,61 @@ export default function ImportScreen() {
   }
 
   /**
-   * Turns the engine's output into tabs for the chosen key and hands the session to the
-   * editor. Cheap enough to re-run for a different key — no audio is touched here.
+   * Hand a finished transcription to the Studio.
    *
-   * The two lanes reach tabs differently: a frame stream still has to be segmented (and
-   * segmentation depends on the key, since the detector runs on tab identity), while note
-   * events are already pitched and only need mapping. Unplayable pitches also differ — the
-   * frame lane never produces a note for one, the note lane keeps it as `tab: ''` for the
-   * user to fix by hand, which is what MIDI import has always done.
+   * Audio lands in the Studio rather than the tab editor because a transcription is a draft,
+   * not a finished tab: the user should be able to see and fix what the engine heard before
+   * it is fitted onto a harmonica. This is `openInStudio`'s counterpart for audio, and like
+   * it consumes no free-tier session — nothing has been converted yet, and the gate applies
+   * at conversion, where a tab is actually produced.
+   *
+   * `segmentationKey` matters only to the frame lane. NoteDetector segments on *tab
+   * identity*, so frames cannot become notes without some key; the auto-detected one is used
+   * as a provisional choice and the real decision still happens at conversion. Re-keying
+   * there re-maps pitches but does not re-segment, which is a real if minor cost, and it is
+   * paid on native only — the neural engine is web-only and its lane is already pitched.
    */
-  function commit(output: TranscriptionOutput, key: HarmonicaKey) {
-    const notes = output.kind === 'frames'
-      ? framesToNotes(output.frames, key, harmonicaType)
-      : notesToTabs(output.notes, key, harmonicaType);
+  function openStudioFromAudio(
+    output: TranscriptionOutput,
+    segmentationKey: HarmonicaKey,
+    title: string,
+  ) {
+    const notes: MidiNote[] = output.kind === 'notes'
+      ? output.notes
+      : framesToNotes(output.frames, segmentationKey, harmonicaType).flatMap((n) => {
+          const midi = noteNameToMidi(n.note);
+          // A pitch that doesn't parse is dropped rather than written as middle C, the same
+          // rule MIDI export applies — silently altering the music is the worse failure.
+          return midi === null ? [] : [{
+            midi,
+            timeMs:     n.start_time,
+            durationMs: n.duration,
+            velocity:   n.velocity,
+          }];
+        });
 
     if (notes.length === 0) {
       setPhase({
         kind:    'error',
         code:    'noAudio',
-        message: `No notes in this recording fit a ${key} ${harmonicaType === 'chromatic' ? 'chromatic' : 'diatonic'} harmonica. Try a different key.`,
+        message: `No notes were found in "${title}". Try a recording with a clearer melody line.`,
       });
       return;
     }
 
-    const { recordingId } = useAppStore.getState();
-    // Frames are retained under the session's own id so Frame Inspector opens on an
-    // imported session exactly like it does on a recorded one. The neural engine produces
-    // none, so an import that used it has nothing to inspect — Frame Inspector reports
-    // that from the session's own source rather than showing an empty timeline.
-    if (recordingId && output.kind === 'frames') pushFrames(recordingId, output.frames);
-    // The key the notes were actually detected against becomes the session's key —
-    // otherwise the editor would relabel every tab against the pre-upload selection.
-    selectKey_(key);
-    addTabNotes(notes);
+    const project = projectFromMidiNotes(notes, title || 'Untitled project', {
+      velocitySource: output.kind === 'frames' ? 'takeRelativeRms' : 'modelActivation',
+    });
 
-    // The free-tier session is consumed here, on success — not when the file was picked.
-    // A cancelled pick or a file that fails to decode must not cost a user a recording.
-    incrementRecordingCount();
+    // Parked under the *project* id, because this session has no recording id yet —
+    // conversion mints one and copies these onto the tab it produces. The neural engine
+    // produces no frames at all, so a web import has nothing to inspect and Frame Inspector
+    // says so from the session's source rather than drawing an empty timeline.
+    if (output.kind === 'frames') pushFrames(project.id, output.frames);
 
+    saveProject(project);
     clearPendingImport();
-    router.replace('/edit');
+    router.replace({ pathname: '/studio', params: { projectId: project.id } });
   }
 
   /** MIDI's sibling of `commit`. No frames are retained — a MIDI import has no audio to
@@ -379,7 +387,7 @@ export default function ImportScreen() {
 
   function commitMidi(notes: MidiNote[], key: HarmonicaKey, bpm: number | null) {
     preview.stop();
-    const tabbed = notesToTabs(notes, key, harmonicaType);
+    const tabbed = notesToTabs(notes, key, harmonicaType, 'midiVelocity');
     if (tabbed.length === 0) {
       setPhase({
         kind:    'error',
@@ -690,106 +698,6 @@ export default function ImportScreen() {
             </Pressable>
           </View>
         </ScrollView>
-      </SafeAreaView>
-    );
-  }
-
-  if (phase.kind === 'confirm') {
-    const { detection, output, unplayableByKey, chosenKey } = phase;
-    const candidates = detection.ranked.slice(0, ALTERNATES_SHOWN);
-    // A small gap between the top two keys is the normal case for a plain major melody
-    // (the cross-harp key fits nearly as well), so this reads as "worth a look", not as a
-    // failure — hence a hint to check the alternates rather than a warning.
-    const closeCall = detection.margin < 0.06;
-    // Nothing landed on a hole for *any* key — usually audio that isn't a solo melodic
-    // line at all. Said here rather than after the user commits, where `commit` would
-    // otherwise be the first thing to mention it.
-    const nothingMapped = detection.ranked.every((c) => c.mappedFraction === 0);
-
-    return (
-      <SafeAreaView style={styles.safe}>
-        <View style={styles.container}>
-          <View style={styles.iconCircle}>
-            <Ionicons name="key-outline" size={30} color={theme.accent} />
-          </View>
-
-          <Text style={styles.title}>Detected {detection.best.key} harmonica</Text>
-          <Text style={styles.message}>
-            {Math.round(detection.best.mappedFraction * 100)}% of what you played fits a {detection.best.key} harp
-            {detection.best.bendFraction > 0.05
-              ? `, with ${Math.round(detection.best.bendFraction * 100)}% needing bends`
-              : ' without bending'}.
-            {closeCall ? ' Other keys fit almost as well — check the alternatives below.' : ''}
-          </Text>
-
-          {detection.octaveShiftSemitones !== 0 && (
-            <View style={styles.noticeRow}>
-              <Ionicons name="swap-vertical-outline" size={14} color={theme.warning} />
-              <Text style={styles.noticeText}>
-                Transposed {detection.octaveShiftSemitones > 0 ? 'up' : 'down'}{' '}
-                {Math.abs(detection.octaveShiftSemitones) / 12} octave
-                {Math.abs(detection.octaveShiftSemitones) === 12 ? '' : 's'} to fit the harmonica&apos;s range.
-              </Text>
-            </View>
-          )}
-
-          {nothingMapped && (
-            <View style={styles.alertRow} accessibilityRole="alert">
-              <Ionicons name="alert-circle" size={14} color={theme.warning} />
-              <Text style={styles.noticeText}>
-                None of the detected pitches fit any harmonica key. This usually means the
-                recording isn&apos;t a single melodic line — try a solo take, or a different file.
-              </Text>
-            </View>
-          )}
-
-          <KeyCandidateList
-            candidates={candidates}
-            selectedKey={chosenKey}
-            onSelect={(key) => setPhase({ ...phase, chosenKey: key })}
-            describe={(candidate) => {
-              // The note lane knows exactly how many pitches land nowhere, because it keeps
-              // them; the frame lane can only report the share of the take that did map.
-              const unreachable = unplayableByKey?.[candidate.key];
-              const stats = unreachable !== undefined
-                ? (unreachable === 0 ? 'every note reachable' : `${unreachable} not reachable`)
-                : `${Math.round(candidate.mappedFraction * 100)}% fit`;
-              return {
-                stats: stats + techniqueSuffix(candidate),
-                accessibilityLabel: unreachable !== undefined
-                  ? `${candidate.key} harmonica, ${positionLabel(candidate.position)}, ${unreachable} note${unreachable === 1 ? '' : 's'} not reachable`
-                  : `${candidate.key} harmonica, ${positionLabel(candidate.position)}, ${Math.round(candidate.mappedFraction * 100)} percent fit`,
-              };
-            }}
-          />
-
-          <View style={styles.actions}>
-            <Pressable
-              onPress={() => commit(output, chosenKey)}
-              style={({ pressed, hovered }: any) => [
-                styles.primaryBtn,
-                (pressed || hovered) && styles.primaryBtnPressed,
-              ]}
-              accessibilityRole="button"
-              accessibilityLabel={`Continue with ${chosenKey} harmonica`}
-            >
-              <Text style={styles.primaryBtnText}>Continue with {chosenKey}</Text>
-              <Ionicons name="arrow-forward" size={16} color="#fff" />
-            </Pressable>
-
-            <Pressable
-              onPress={handleCancel}
-              style={({ pressed, hovered }: any) => [
-                styles.secondaryBtn,
-                (pressed || hovered) && styles.secondaryBtnPressed,
-              ]}
-              accessibilityRole="button"
-              accessibilityLabel="Discard this import"
-            >
-              <Text style={styles.secondaryBtnText}>Discard</Text>
-            </Pressable>
-          </View>
-        </View>
       </SafeAreaView>
     );
   }

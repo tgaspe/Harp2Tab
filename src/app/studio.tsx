@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { ActionSheetModal } from '@/components/ActionSheetModal';
 import { TrackList } from '@/components/TrackList';
 import { PianoRoll } from '@/components/PianoRoll';
 // The editor's own transport and its style sheet, imported rather than reimplemented.
@@ -12,7 +13,7 @@ import { WebTransportBar } from '@/components/TransportBar';
 import { createStyles as createEditStyles } from '@/app/editStyles';
 import { audibleTracks, instrumentName } from '@/audio/studioTracks';
 import { getChromaticRows } from '@/audio/HarmonicaMapper';
-import { createTrack, projectToSmfBytes, tempoMapOf } from '@/audio/midiProject';
+import { audibleProject, createTrack, projectToSmfBytes, tempoMapOf } from '@/audio/midiProject';
 import { mostMelodicTrack } from '@/audio/midiToNotes';
 import {
   appendTabNote,
@@ -20,19 +21,26 @@ import {
   removeTabNote,
   removeTabNotes,
   trackToTabNotes,
+  visibleTrackNotes,
 } from '@/audio/studioNotes';
-import { convertTrackToRecording } from '@/audio/convertTrack';
+import { convertTrackToRecording, rankKeysForTrack } from '@/audio/convertTrack';
+import { decimateFrames, getFrames } from '@/audio/frameBuffer';
+import type { MidiKeyRanking } from '@/audio/notesToTabs';
+import { ConvertTrackModal } from '@/components/ConvertTrackModal';
+import { RatingModal } from '@/components/RatingModal';
+import { resolveSessionGate } from '@/store/sessionGate';
+import { useSettingsStore } from '@/store/useSettingsStore';
 import { triggerWebDownload } from '@/export/webDownload';
 import { useMidiProjectsStore } from '@/store/useMidiProjectsStore';
 import { useRecordingsStore } from '@/store/useRecordingsStore';
-import { useAppStore } from '@/store/useAppStore';
+import { selectHarmonicaType, useAppStore } from '@/store/useAppStore';
 import { useRollTransport, formatElapsed } from '@/hooks/useRollTransport';
 import { useEditHistory, useUndoRedoShortcuts } from '@/hooks/useEditHistory';
 import { useHeaderActionStore } from '@/store/useHeaderActionStore';
 import { useTheme } from '@/hooks/useTheme';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import type { Theme } from '@/theme';
-import type { MidiProject, MidiTrackData, TabNote } from '@/types';
+import type { HarmonicaKey, HarmonicaType, MidiProject, MidiTrackData, TabNote } from '@/types';
 
 /**
  * The MIDI Studio — the stage *before* the tab editor.
@@ -44,7 +52,7 @@ import type { MidiProject, MidiTrackData, TabNote } from '@/types';
  * key/actions sidebar. That's deliberate and was learned the hard way: the first version
  * treated the Studio as a new screen that merely embedded `PianoRoll`, so it inherited none
  * of the editor's chrome and re-solved problems already solved next door — including a
- * second control-lane strip stacked under the roll's own Breath Force / Duration /
+ * second control-lane strip stacked under the roll's own Velocity / Duration /
  * Confidence / Pitch Bend panel. The roll already has that panel; the Studio adds tracks
  * and conversion. Nothing else.
  *
@@ -87,8 +95,14 @@ export default function StudioScreen() {
   const { projectId } = useLocalSearchParams<{ projectId?: string }>();
   const projects      = useMidiProjectsStore((s) => s.projects);
   const saveProject   = useMidiProjectsStore((s) => s.saveProject);
+  const deleteProject = useMidiProjectsStore((s) => s.deleteProject);
   const saveRecording = useRecordingsStore((s) => s.saveRecording);
   const loadRecording = useAppStore((s) => s.loadRecording);
+  // The Studio has no harp of its own — a project is unconstrained music. This is only the
+  // picker's starting point: whatever the user last chose on Home is the likeliest answer,
+  // and the picker is where it actually gets decided.
+  const harmonicaType = useAppStore(selectHarmonicaType);
+  const incrementRecordingCount = useSettingsStore((s) => s.incrementRecordingCount);
 
   const stored = useMemo(
     () => projects.find((p) => p.id === projectId) ?? projects[0] ?? null,
@@ -124,6 +138,16 @@ export default function StudioScreen() {
   // successful save in the warning palette reads as a failure.
   const [notice, setNotice] = useState<{ text: string; tone: 'warning' | 'success' } | null>(null);
   const [tracksCollapsed, setTracksCollapsed] = useState(false);
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const [showRatingModal, setShowRatingModal] = useState(false);
+  /** The open harp picker, or null. Holds the ranking so the list doesn't re-score on every
+   *  render, and the in-progress choice, which isn't committed to anything until Convert. */
+  const [converting, setConverting] = useState<{
+    trackId:       string;
+    ranking:       MidiKeyRanking;
+    chosenKey:     HarmonicaKey;
+    harmonicaType: HarmonicaType;
+  } | null>(null);
   // Session-local, unlike the tab editor's (which persists per-recording in useAppStore) —
   // a project has no metronome setting of its own to save it into.
   const [metronomeEnabled, setMetronomeEnabled] = useState(false);
@@ -139,24 +163,57 @@ export default function StudioScreen() {
   const tempoMap = useMemo(() => (project ? tempoMapOf(project) : undefined), [project]);
   const bpm = Math.round(project?.tempos[0]?.bpm ?? 120);
 
+  /**
+   * The selected track's notes, filtered by nothing — what the Velocity chart draws, and
+   * the set the filter line is dragged against.
+   *
+   * Adapted *before* filtering, deliberately: a note's id is its index in the track's array
+   * (see `studioNotes.ts`), so ids have to be minted against the full array or every edit
+   * made while the filter is up would land on the wrong note.
+   */
   const editableNotes: TabNote[] = useMemo(
     () => (selectedTrack ? trackToTabNotes(selectedTrack) : []),
     [selectedTrack],
   );
 
+  /** The track's velocity floor — 0 when it has none, which is the off position. */
+  const velocityFloor = selectedTrack?.velocityFloor ?? 0;
+
+  /** What the roll actually draws and lets you edit. */
+  const visibleNotes = useMemo(
+    () => (selectedTrack ? visibleTrackNotes(selectedTrack) : []),
+    [selectedTrack],
+  );
+
+  /**
+   * Whether the filter can do anything on this track.
+   *
+   * A track whose notes state no velocity at all — hand-drawn in the Studio, or imported
+   * from a file that left the byte off — gets no line, for the same reason the tab editor
+   * omits it: a control that provably does nothing at any position is worse than none.
+   */
+  const velocityFilterSupported = useMemo(
+    () => editableNotes.some((n) => n.velocity !== undefined),
+    [editableNotes],
+  );
+
   // Every audible track except the one being edited, so mute/solo governs what's drawn as
   // well as what sounds — a silenced track showing through would misrepresent playback.
+  // Each lane is cut by *its own* floor, not the selected track's: the threshold is a
+  // property of how that part was played, and a lane drawing notes that don't sound would
+  // put the roll and the playback out of step.
   const backgroundLanes = useMemo(() => {
     if (!project || !selectedTrack) return [];
     return audibleTracks(tracks)
       .filter((t) => t.id !== selectedTrack.id)
-      .map((t) => ({ id: t.id, color: t.color, notes: trackToTabNotes(t) }));
+      .map((t) => ({ id: t.id, color: t.color, notes: visibleTrackNotes(t) }));
   }, [project, tracks, selectedTrack]);
 
-  /** Everything audible, merged and time-ordered — `usePlayback` schedules one flat list. */
+  /** Everything audible, merged and time-ordered — `usePlayback` schedules one flat list.
+   *  Filtered per track, so a note under a track's line is silent as well as hidden. */
   const audibleNotes = useMemo(
     () => audibleTracks(tracks)
-      .flatMap((t) => trackToTabNotes(t))
+      .flatMap((t) => visibleTrackNotes(t))
       .sort((a, b) => a.start_time - b.start_time),
     [tracks],
   );
@@ -286,13 +343,79 @@ export default function StudioScreen() {
     setNotice({ text: 'Saved to library.', tone: 'success' });
   }, [project, dirty, saveProject]);
 
+  /**
+   * Delete the whole project and go home.
+   *
+   * Deliberately the project, not the unsaved edits: undo already covers "take that back",
+   * and the gap this fills is the imported file that turned out to be wrong, which the user
+   * could previously only get rid of by navigating back to Home and finding its card. The
+   * confirm is non-negotiable — `deleteProject` is persisted immediately and there is no
+   * trash to recover from.
+   */
+  const handleDiscard = useCallback(() => {
+    if (!project) return;
+    deleteProject(project.id);
+    // replace, not push: the project this screen is looking at no longer exists, so leaving
+    // it on the back stack would return the user to a "No project open" husk.
+    router.replace('/');
+  }, [project, deleteProject]);
+
+  /**
+   * Open the harp picker for a track.
+   *
+   * The gate is checked *here*, before the picker, rather than after the user has chosen a
+   * key — being told the free tier is exhausted is a reasonable thing to hear, but hearing
+   * it only after making a choice that then gets thrown away is not.
+   */
   const handleConvert = useCallback((trackId: string) => {
     if (!project) return;
     const track = project.tracks.find((t) => t.id === trackId);
     if (!track) return;
 
-    const result = convertTrackToRecording(project, track);
+    const { isPurchased, totalRecordingsUsed, ratingStatus } = useSettingsStore.getState();
+    const gate = resolveSessionGate({ isPurchased, totalRecordingsUsed, ratingStatus });
+    if (gate === 'showRating')  { setShowRatingModal(true); return; }
+    if (gate === 'showPaywall') { router.push('/paywall'); return; }
+
+    const ranking = rankKeysForTrack(track, harmonicaType);
+    if (!ranking) {
+      setNotice({ text: `"${track.name}" has no notes long enough to play on a harmonica.`, tone: 'warning' });
+      return;
+    }
+
+    setConverting({ trackId, ranking, chosenKey: ranking.ranked[0].key, harmonicaType });
+  }, [project, harmonicaType]);
+
+  /** Re-score when the harp type changes — a chromatic harp reaches pitches a diatonic one
+   *  can't, so the ranking under the type toggle is a different ranking. */
+  const handleConvertTypeChange = useCallback((type: HarmonicaType) => {
+    setConverting((current) => {
+      if (!current || !project) return current;
+      const track = project.tracks.find((t) => t.id === current.trackId);
+      const ranking = track ? rankKeysForTrack(track, type) : null;
+      if (!ranking) return { ...current, harmonicaType: type };
+      // Keep the user's key if it's still on offer; otherwise fall back to the new best.
+      const stillRanked = ranking.ranked.some((c) => c.key === current.chosenKey);
+      return {
+        ...current,
+        harmonicaType: type,
+        ranking,
+        chosenKey: stillRanked ? current.chosenKey : ranking.ranked[0].key,
+      };
+    });
+  }, [project]);
+
+  const confirmConvert = useCallback(() => {
+    if (!project || !converting) return;
+    const track = project.tracks.find((t) => t.id === converting.trackId);
+    if (!track) return;
+
+    const result = convertTrackToRecording(project, track, {
+      key:           converting.chosenKey,
+      harmonicaType: converting.harmonicaType,
+    });
     if (!result) {
+      setConverting(null);
       setNotice({ text: `"${track.name}" has no notes long enough to play on a harmonica.`, tone: 'warning' });
       return;
     }
@@ -306,12 +429,28 @@ export default function StudioScreen() {
       setDirty(false);
     }
 
-    saveRecording(result.recording);
+    // Frames follow the music across the Studio hop. An audio import parks them under the
+    // project id (it has no recording id yet — this call is what mints one), so this is the
+    // only point at which they can be attached to the tab they belong to. Decimated for the
+    // same reason a recorded session is: the persisted copy has a size ceiling.
+    const frames = getFrames(project.id);
+    const recording = frames.length > 0
+      ? { ...result.recording, frames: decimateFrames(frames) }
+      : result.recording;
+
+    // The free-tier session is consumed here, at the one point in the app where a project
+    // actually becomes a tab. Both Studio entry points (MIDI "Open in Studio" and an audio
+    // upload) reach the editor only through here, so this is what makes the gate the Home
+    // screen advertises real for them.
+    incrementRecordingCount();
+
+    saveRecording(recording);
     // Straight into the tab editor with it — conversion producing a library entry the user
     // then has to go and find would bury the result of the thing they just asked for.
-    loadRecording(result.recording);
+    loadRecording(recording);
+    setConverting(null);
     router.push('/edit');
-  }, [project, dirty, saveProject, saveRecording, loadRecording]);
+  }, [project, converting, dirty, saveProject, saveRecording, loadRecording, incrementRecordingCount]);
 
   /**
    * Download the project as a standard MIDI file.
@@ -320,13 +459,18 @@ export default function StudioScreen() {
    * it's been saved. Deliberately *not* a tab export: nothing here has been fitted to a
    * harmonica, and converting on the way out would make the downloaded file a lossy
    * rendering of the project rather than the project.
+   *
+   * "What's on screen" includes the velocity floors, hence `audibleProject` — a note the
+   * user has filtered out of the roll and out of playback shouldn't turn up in the file they
+   * just downloaded. This is a view for export only; `saveProject` writes the unfiltered
+   * project, so nothing is lost by filtering here.
    */
   const handleDownloadMidi = useCallback(() => {
     if (!project) return;
     const safeTitle = project.title.replace(/[^\w-]+/g, '_').slice(0, 60) || 'harp2tab_project';
     // `writeSmf` returns a freshly allocated view, so its buffer is exactly these bytes —
     // the cast is only to satisfy BlobPart's ArrayBuffer/SharedArrayBuffer distinction.
-    const buffer = projectToSmfBytes(project).buffer as ArrayBuffer;
+    const buffer = projectToSmfBytes(audibleProject(project)).buffer as ArrayBuffer;
     triggerWebDownload(new Blob([buffer], { type: 'audio/midi' }), `${safeTitle}.mid`);
   }, [project]);
 
@@ -342,7 +486,7 @@ export default function StudioScreen() {
   }
 
   const setHeaderActions   = useHeaderActionStore((s) => s.setHeaderActions);
-  const clearHeaderActions = useHeaderActionStore((s) => s.clearHeaderActions);
+  const clearHeaderActions = useHeaderActionStore((s) => s.clearHeaderActionsFor);
   // useFocusEffect, not useEffect: converting a track pushes /edit, which leaves this
   // screen mounted, so an unmount-time cleanup never runs and these buttons used to
   // follow the user into the tab editor. Blur is the event that actually happens.
@@ -363,8 +507,18 @@ export default function StudioScreen() {
           onPress:  handleDownloadMidi,
           disabled: !project,
         },
+        {
+          key:      'discard',
+          icon:     'trash-outline',
+          label:    'Discard',
+          // Opens the confirm; the deletion itself is behind it. The pill is red, but red
+          // alone isn't consent for something this irreversible.
+          onPress:  () => setConfirmingDiscard(true),
+          disabled: !project,
+          variant:  'destructive',
+        },
       ]);
-      return clearHeaderActions;
+      return () => clearHeaderActions('/studio');
     }, [setHeaderActions, clearHeaderActions, handleSave, handleDownloadMidi, dirty, project]),
   );
 
@@ -392,6 +546,36 @@ export default function StudioScreen() {
 
   return (
     <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
+      {/* Same two-line phrasing the library's delete uses, so the same action reads the same
+          way wherever it's reached from. `onPress` does the work, never `onClose` — the
+          modal fires `onClose` first, so deleting there would run on Cancel too. */}
+      <ActionSheetModal
+        visible={confirmingDiscard}
+        title={`Discard "${project.title}"? This can't be undone.`}
+        options={[{ label: 'Discard project', style: 'destructive', onPress: handleDiscard }]}
+        onClose={() => setConfirmingDiscard(false)}
+      />
+
+      {converting && (
+        <ConvertTrackModal
+          visible
+          trackName={tracks.find((t) => t.id === converting.trackId)?.name ?? 'this track'}
+          ranking={converting.ranking}
+          chosenKey={converting.chosenKey}
+          harmonicaType={converting.harmonicaType}
+          onSelectKey={(key) => setConverting((c) => (c ? { ...c, chosenKey: key } : c))}
+          onSelectType={handleConvertTypeChange}
+          onConfirm={confirmConvert}
+          onClose={() => setConverting(null)}
+        />
+      )}
+
+      <RatingModal
+        visible={showRatingModal}
+        onClose={() => setShowRatingModal(false)}
+        onUpgrade={() => router.push('/paywall')}
+      />
+
       {notice && (
         <Pressable
           style={[styles.notice, notice.tone === 'success' && styles.noticeSuccess]}
@@ -434,7 +618,7 @@ export default function StudioScreen() {
         <View style={styles.rollWrap}>
           {selectedTrack ? (
             <PianoRoll
-              notes={editableNotes}
+              notes={visibleNotes}
               // No harmonica at this stage — `rows` supplies the pitch axis instead, and
               // these two only exist because the tab editor derives its rows from them.
               harmonicaKey="C"
@@ -466,6 +650,19 @@ export default function StudioScreen() {
               onSeek={transport.onSeek}
               loopRegion={loopRegion}
               onLoopRegionChange={setLoopRegion}
+              // The draggable line in the data panel's Velocity chart. Per track, saved with
+              // it, so switching tracks moves the line to that track's own threshold.
+              // Untracked by undo, matching mute/solo/program — history covers musical
+              // content, not the state around it.
+              velocityFilter={velocityFilterSupported ? {
+                value:    velocityFloor,
+                onChange: (v) => updateTrack(selectedTrack.id, { velocityFloor: v }),
+                // Unfiltered, so the chart keeps drawing (in grey) what the roll has hidden.
+                allNotes:     editableNotes,
+                audibleCount: visibleNotes.length,
+                totalCount:   editableNotes.length,
+                source:       selectedTrack.velocitySource,
+              } : undefined}
               headerLeft={
                 <View style={styles.rollHeader}>
                   <Text style={styles.rollTitle} numberOfLines={1}>{project.title}</Text>

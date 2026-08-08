@@ -14,6 +14,7 @@
  */
 
 import { midiToNoteName, noteNameToMidi } from './HarmonicaMapper';
+import { passesVelocityFloor } from './velocity';
 import type { MidiNote, MidiTrackData, TabNote } from '@/types';
 
 /** Separator chosen so it can't occur in a generated track id (`track-<ts>-<rand>`). */
@@ -40,17 +41,56 @@ export function parseStudioNoteId(id: string): { trackId: string; index: number 
  * the pitch is stated outright, there is nothing to be uncertain about.
  */
 export function trackToTabNotes(track: MidiTrackData): TabNote[] {
-  return track.notes.map((note, index) => ({
+  const cached = tabNoteCache.get(track);
+  if (cached) return cached;
+
+  const adapted = track.notes.map((note, index) => ({
     id:          studioNoteId(track.id, index),
     tab:         '',
     note:        midiToNoteName(note.midi),
     duration:    Math.max(1, Math.round(note.durationMs)),
     start_time:  Math.max(0, Math.round(note.timeMs)),
     confidence:  100,
-    breathForce: note.velocity,
+    velocity:       note.velocity,
+    velocitySource: note.velocity === undefined ? undefined : track.velocitySource,
     // Carried so playback can voice the track; the piano roll ignores it entirely.
     program:     track.program,
   }));
+  tabNoteCache.set(track, adapted);
+  return adapted;
+}
+
+/**
+ * Adaptation and filtering are both cached on the track's *identity*, which is sound because
+ * a track is never mutated in place — every edit in the Studio rebuilds the object it
+ * touches, so a new object is exactly the signal that the result is stale.
+ *
+ * Not a micro-optimisation. Any edit gives the project a new identity, so an uncached
+ * version re-adapts every note in every track on every change — including a velocity-floor
+ * drag, which fires continuously while the pointer moves. On an eight-track file that is
+ * thousands of notes per frame to redraw lanes that did not change.
+ */
+const tabNoteCache = new WeakMap<MidiTrackData, TabNote[]>();
+const visibleCache = new WeakMap<MidiTrackData, TabNote[]>();
+
+/**
+ * A track's notes as its velocity floor leaves them — what the roll draws, what plays.
+ *
+ * The floor is applied *after* adaptation, never before: a note's id is its index in the
+ * track's array, so filtering first would renumber every surviving note and send edits made
+ * while the filter is up to the wrong ones.
+ */
+export function visibleTrackNotes(track: MidiTrackData): TabNote[] {
+  const cached = visibleCache.get(track);
+  if (cached) return cached;
+
+  const all   = trackToTabNotes(track);
+  const floor = track.velocityFloor ?? 0;
+  const visible = floor <= 0
+    ? all
+    : all.filter((n) => passesVelocityFloor(n.velocity, floor));
+  visibleCache.set(track, visible);
+  return visible;
 }
 
 export interface BackgroundLane {
@@ -163,7 +203,7 @@ export function appendTabNote(track: MidiTrackData, created: Omit<TabNote, 'id'>
       midi,
       timeMs:     Math.max(0, created.start_time),
       durationMs: Math.max(1, created.duration),
-      velocity:   created.breathForce,
+      velocity:   created.velocity,
     },
   ];
 }

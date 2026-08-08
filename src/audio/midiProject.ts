@@ -15,7 +15,8 @@
 import { base64ToBytes, bytesToBase64 } from './base64';
 import { readSmf, writeSmf, type SmfTrack } from './smf';
 import { compileTempoMap, type TempoEvent, type TimeSignatureEvent } from './tempo';
-import type { MidiNote, MidiProject, MidiTrackData } from '@/types';
+import { passesVelocityFloor } from './velocity';
+import type { MidiNote, MidiProject, MidiTrackData, VelocitySource } from '@/types';
 
 /** Lane colours, assigned round-robin so a freshly imported arrangement is legible at
  *  arrange-view scale without anyone picking colours by hand. */
@@ -57,6 +58,40 @@ export function createTrack(index: number, init: Partial<MidiTrackData> = {}): M
     muted:   init.muted   ?? false,
     soloed:  init.soloed  ?? false,
     notes:   init.notes   ?? [],
+    velocitySource: init.velocitySource,
+    velocityFloor:  init.velocityFloor,
+  };
+}
+
+/**
+ * A track's notes as its velocity floor leaves them.
+ *
+ * The one place the floor is applied to *music*, so the roll, playback, MIDI export and
+ * conversion can't disagree about which notes are in. Returns the same array reference when
+ * the floor is off — the overwhelmingly common case, where filtering would copy every
+ * track's notes on every render for identical contents.
+ *
+ * Note what this is deliberately *not* used by: `serializeProject`. Saving must keep every
+ * note, or the filter stops being a lens and becomes a delete with extra steps.
+ */
+export function trackAudibleNotes(track: Pick<MidiTrackData, 'notes' | 'velocityFloor'>): MidiNote[] {
+  const floor = track.velocityFloor ?? 0;
+  if (floor <= 0) return track.notes;
+  return track.notes.filter((n) => passesVelocityFloor(n.velocity, floor));
+}
+
+/**
+ * The project as its per-track floors leave it — what leaves the Studio, never what's
+ * stored. Both export paths (Download MIDI, convert to tab) go through this so a note the
+ * user has filtered out doesn't reappear in the file they just downloaded.
+ */
+export function audibleProject(project: MidiProject): MidiProject {
+  return {
+    ...project,
+    tracks: project.tracks.map((t) => {
+      const notes = trackAudibleNotes(t);
+      return notes === t.notes ? t : { ...t, notes };
+    }),
   };
 }
 
@@ -104,12 +139,55 @@ export function projectFromSmfBytes(bytes: Uint8Array, title: string): MidiProje
   });
 }
 
+/**
+ * Build a single-track project from transcribed notes — the audio-import path.
+ *
+ * Audio arrives as one voice's worth of detected notes with no tracks, no tempo map and no
+ * instrument, so this is `projectFromSmfBytes`'s counterpart for a source that carries none
+ * of that structure. It stays a thin composition of `createProject`/`createTrack` rather
+ * than assembling a project literal, so a field added to either keeps arriving here.
+ *
+ * `velocitySource` is required, not optional: a transcription's velocities always came from
+ * a specific engine, and a track that reaches conversion without one would have its notes
+ * mislabelled as stated MIDI velocities.
+ */
+export function projectFromMidiNotes(
+  notes: MidiNote[],
+  title: string,
+  options: { bpm?: number; velocitySource: VelocitySource; trackName?: string },
+): MidiProject {
+  const track = createTrack(0, {
+    // Named for the source rather than "Track 1": this is the only track, and the Studio's
+    // track list is where the user first sees what was imported.
+    name:  options.trackName ?? title,
+    notes: notes.map((n) => ({ ...n })),
+    velocitySource: options.velocitySource,
+  });
+
+  return createProject({
+    title,
+    tracks: [track],
+    // Audio has no tempo map — a transcription is a stream of timestamps, not bars. The
+    // default 120 is a display grid for the piano roll, not a claim about the performance,
+    // and every note's position is absolute ms either way, so it cannot mistime anything.
+    tempos: options.bpm ? [{ timeMs: 0, bpm: Math.round(options.bpm) }] : undefined,
+  });
+}
+
 /** Per-track state SMF has nowhere to put. Positional — SMF preserves track order. */
 export interface StoredTrackMeta {
   id:     string;
   color:  string;
   muted:  boolean;
   soloed: boolean;
+  /** SMF stores a velocity byte but nothing about where it came from, and a transcribed
+   *  project's velocities are an engine's estimate rather than a composer's intent.
+   *  Optional: absent on every project saved before this existed, and on ordinary MIDI
+   *  imports, where `convertTrackToRecording` correctly assumes stated MIDI velocity. */
+  velocitySource?: VelocitySource;
+  /** The track's velocity-floor line, so where the user left it survives a reload. Absent
+   *  on every project saved before this existed, which reads as 0 — filter off. */
+  velocityFloor?: number;
 }
 
 export interface StoredProject {
@@ -149,9 +227,13 @@ export function serializeProject(project: MidiProject): StoredProject {
     createdAt:  project.createdAt,
     updatedAt:  project.updatedAt,
     durationMs: project.durationMs,
+    // The project itself, floors ignored — a filtered-out note is hidden, not gone, so it
+    // has to survive the save that the filter's own persistence rides along in.
     smf:        bytesToBase64(projectToSmfBytes(project)),
     trackMeta:  project.tracks.map((t) => ({
       id: t.id, color: t.color, muted: t.muted, soloed: t.soloed,
+      velocitySource: t.velocitySource,
+      velocityFloor:  t.velocityFloor,
     })),
   };
 }
@@ -171,6 +253,8 @@ export function deserializeProject(stored: StoredProject): MidiProject {
       color:   meta?.color,
       muted:   meta?.muted,
       soloed:  meta?.soloed,
+      velocitySource: meta?.velocitySource,
+      velocityFloor:  meta?.velocityFloor,
       notes:   track.notes.map((n) => ({ ...n })),
     });
   });

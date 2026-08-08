@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { migrateRecordings, RECORDINGS_SCHEMA_VERSION } from './recordingsMigration';
 import { recordingsStorage } from './storage';
 import type { TabRecording } from '@/types';
 
@@ -38,6 +39,8 @@ export const useRecordingsStore = create<RecordingsState>()(
     {
       name:    'harp2tab-recordings',
       storage: recordingsStorage,
+      version: RECORDINGS_SCHEMA_VERSION,
+      migrate: migrateRecordings,
     },
   ),
 );

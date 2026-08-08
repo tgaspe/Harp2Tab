@@ -9,7 +9,7 @@
  */
 
 import { HARMONICA_KEYS } from '@/constants/keys';
-import type { HarmonicaKey, HarmonicaType, TabNote } from '@/types';
+import type { HarmonicaKey, HarmonicaType, TabNote, VelocitySource } from '@/types';
 import { midiToNoteName, noteToTab } from './HarmonicaMapper';
 import type { MidiNote } from './midiToNotes';
 
@@ -110,6 +110,13 @@ export function notesToTabs(
   notes: readonly MidiNote[],
   key: HarmonicaKey,
   harmonicaType: HarmonicaType,
+  /**
+   * Where `MidiNote.velocity` came from. Required as a parameter rather than hardcoded
+   * because this function is the junction of two unrelated pipelines: MIDI import arrives
+   * here carrying a composer's stated velocity, and the neural engine arrives here carrying
+   * a model activation. They are not the same measurement and must not claim to be.
+   */
+  velocitySource: VelocitySource,
 ): Omit<TabNote, 'id'>[] {
   return notes.map((note) => {
     const name = midiToNoteName(note.midi);
@@ -121,12 +128,12 @@ export function notesToTabs(
       // MIDI states the pitch outright; there is nothing to be uncertain about, unlike a
       // frequency recovered from audio.
       confidence: 100,
-      // Carried through rather than dropped: `TabNote.breathForce` is already documented as
-      // the lane MIDI "supplies directly", the Studio draws it, and the neural engine's
-      // per-note amplitude arrives here as velocity too — which is what the editor's noise
-      // gate filters on. Left undefined when the source didn't state one, so a note with no
-      // stated dynamic is played at a default instead of silently becoming silent.
-      breathForce: note.velocity,
+      // Carried through rather than dropped: the Studio draws this lane and the editor's
+      // filter reads it. Left undefined when the source didn't state one, so a note with no
+      // stated dynamic is played at a default instead of silently becoming silent — and the
+      // source tag is left off with it, since there is no value to attribute.
+      velocity:       note.velocity,
+      velocitySource: note.velocity === undefined ? undefined : velocitySource,
     };
   });
 }
@@ -154,7 +161,9 @@ export function rankKeysForMidi(
   const totalMs = notes.reduce((sum, n) => sum + n.durationMs, 0);
 
   const scored = HARMONICA_KEYS.map((key) => {
-    const tabbed = notesToTabs(notes, key, harmonicaType);
+    // Scoring reads only `tab`, so the source tag is immaterial here — these tab notes are
+    // thrown away once the key is scored and never reach a store or a screen.
+    const tabbed = notesToTabs(notes, key, harmonicaType, 'midiVelocity');
     return { key, ...scoreTabbedNotes(tabbed, totalMs), unplayable: tabbed.filter((n) => !n.tab).length };
   });
   scored.sort((a, b) => b.score - a.score);

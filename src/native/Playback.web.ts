@@ -1,6 +1,7 @@
 import { noteNameToFrequency } from '@/audio/synthesizeWav';
 import { constantTempoMap, gridLines, type PlaybackOptions } from '@/audio/tempo';
 import { velocityGain, voiceForProgram } from '@/audio/timbre';
+import { noteVelocity } from '@/audio/velocity';
 import type { TabNote } from '@/types';
 
 // Web gets real-time OscillatorNode scheduling — no pre-render/file-write round-trip
@@ -74,9 +75,9 @@ export async function playNotes(notes: TabNote[], options?: PlaybackOptions, sta
     const fadeSec   = Math.min(0.01, durSec / 4);
 
     const voice = voiceForProgram(n.program);
-    // Breath force is the note's dynamics — a tab session leaves it unset and every note
-    // plays at full level, exactly as before.
-    const peak  = AMPLITUDE * voice.gain * velocityGain(n.breathForce);
+    // Velocity is the note's dynamics — a tab session leaves it unset and every note plays
+    // at full level, exactly as before.
+    const peak  = AMPLITUDE * voice.gain * velocityGain(noteVelocity(n));
 
     const osc  = ctx.createOscillator();
     const gain = ctx.createGain();

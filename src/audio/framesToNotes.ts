@@ -10,7 +10,7 @@
  */
 
 import { createNoteDetector, type NoteDetectorConfig } from './NoteDetector';
-import { withBreathForce } from './breathForce';
+import { withVelocity } from './velocity';
 import type { HarmonicaKey, HarmonicaType, RawFrame, TabNote } from '@/types';
 
 export function framesToNotes(
@@ -28,7 +28,7 @@ export function framesToNotes(
   for (const frame of frames) detector.process(frame, frame.t, 0);
   detector.flush(0);
 
-  // Annotated after segmentation rather than during it: breath force is measured against
-  // the *take's* dynamic range, which isn't known until every frame has been seen.
-  return withBreathForce(notes, frames);
+  // Annotated after segmentation rather than during it: velocity is measured against the
+  // *take's* dynamic range, which isn't known until every frame has been seen.
+  return withVelocity(notes, frames);
 }
