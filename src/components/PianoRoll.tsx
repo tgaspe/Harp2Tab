@@ -14,9 +14,10 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/hooks/useTheme';
-import { getGridRows, type GridRow } from '@/audio/HarmonicaMapper';
+import { getGridRows, noteNameToMidi, type GridRow } from '@/audio/HarmonicaMapper';
 import { getFrames } from '@/audio/frameBuffer';
 import { layoutBackgroundLanes } from '@/audio/studioNotes';
+import { passesDurationFloor } from '@/audio/duration';
 import { noteVelocity, passesVelocityFloor } from '@/audio/velocity';
 import { selectRecordingId, useAppStore } from '@/store/useAppStore';
 import { selectRecordings, useRecordingsStore } from '@/store/useRecordingsStore';
@@ -101,11 +102,16 @@ const DATA_PANEL_COLLAPSED_HEIGHT = DATA_PANEL_TABS_HEIGHT;
 const DATA_PANEL_EXPANDED_HEIGHT  = DATA_BAR_HEIGHT + DATA_PANEL_TABS_HEIGHT + 6;
 // Grab band around the velocity floor's 2px line. Sized to the ~24px touch-target floor
 // rather than to the ink, which is the whole reason a hairline is draggable at all.
-const VELOCITY_FLOOR_HIT_HEIGHT = 24;
+const FLOOR_LINE_HIT_HEIGHT = 24;
 // The knob at the line's left end. The band above is what actually catches the drag, but a
 // full-width invisible target gives the eye nothing to aim at — a hairline reads as
 // decoration, and the user has to discover by experiment that it can be moved at all.
-const VELOCITY_FLOOR_KNOB = 14;
+const FLOOR_LINE_KNOB = 14;
+// Duration's drag/arrow granularity, in ms. The velocity line steps by 1 because its whole
+// scale is 127 units tall; duration's is however long the longest note is — often thousands
+// of ms — where a 1 ms step is far finer than a pointer can resolve and would leave the
+// readout flickering through values nobody chose.
+const DURATION_FLOOR_STEP_MS = 10;
 // Emit a live drag-tooltip label every Nth onUpdate call rather than every one — bounds
 // the JS-thread state-update rate without needing a wall-clock read inside a worklet.
 const DRAG_LABEL_THROTTLE = 4;
@@ -113,8 +119,12 @@ const DRAG_LABEL_THROTTLE = 4;
 // Grid resolution (quarter/eighth/sixteenth notes) — always a concrete value, no 'off'
 // here (see the snapEnabled/snapSubdivision comment above the state declaration for why
 // this is separate from whether snapping is actually turned on).
-const SUBDIVISION_CYCLE: Exclude<SnapDivision, 'off'>[] = [4, 8, 16];
-const SUBDIVISION_LABELS: Record<Exclude<SnapDivision, 'off'>, string> = { 4: '1/4', 8: '1/8', 16: '1/16' };
+// Ordered by how fine the grid is, so the cycle button walks steadily from coarse to fine:
+// the triplet's 12 divisions per bar sit between straight eighths (8) and sixteenths (16).
+const SUBDIVISION_CYCLE: Exclude<SnapDivision, 'off'>[] = [4, 8, 12, 16];
+const SUBDIVISION_LABELS: Record<Exclude<SnapDivision, 'off'>, string> = {
+  4: '1/4', 8: '1/8', 12: '1/8T', 16: '1/16',
+};
 
 // Playing technique, parsed from the tab string's grammar: sign ("-" = draw, none = blow)
 // + hole number + optional modifier ("'" x1-3 = bend depth, "o" = overblow). An empty
@@ -122,11 +132,14 @@ const SUBDIVISION_LABELS: Record<Exclude<SnapDivision, 'off'>, string> = { 4: '1
 // real position on the current instrument") is its own category, not a fallback into
 // 'blow' — it used to silently fall through to 'blow' before unplayable rows existed,
 // which was wrong the moment a note could actually land on one.
-type NoteTechnique = 'blow' | 'draw' | 'bend1' | 'bend2' | 'bend3' | 'overblow' | 'unplayable';
+type NoteTechnique = 'blow' | 'draw' | 'bend1' | 'bend2' | 'bend3' | 'overblow' | 'overdraw' | 'unplayable';
 
 function classifyTechnique(tab: string): NoteTechnique {
   if (tab === '') return 'unplayable';
-  if (tab.endsWith('o')) return 'overblow';
+  // Overblow and overdraw are the same idea mirrored across the two reed groups, but they
+  // are not the same action — one is blown and one is drawn — so the leading sign splits
+  // them here exactly as it splits plain blow from plain draw below.
+  if (tab.endsWith('o')) return tab.startsWith('-') ? 'overdraw' : 'overblow';
   const bendDepth = (tab.match(/'/g) ?? []).length;
   if (bendDepth === 1) return 'bend1';
   if (bendDepth === 2) return 'bend2';
@@ -145,19 +158,30 @@ function classifyTechnique(tab: string): NoteTechnique {
 //
 // CVD-validated as a categorical set: adjacent-pair separation ΔE 30.3 protan / 19.2
 // tritan, normal-vision floor 34.0 — comfortably clear of the thresholds.
+//
+// Overdraw's green was picked the same way: CIEDE2000 against every other entry under
+// Viénot-Brettel-Mollon protan/deutan/tritan simulation. Green is the only free hue region
+// left — blue, orange, purple and yellow are all taken — and emerald-400 measured the
+// widest worst-case separation of the greens, teals, pinks and reds tried: ΔE 29.7 normal
+// / 17.0 protan / 17.9 deutan / 24.7 tritan, its nearest neighbour throughout being
+// overblow. It wasn't a close call between equals — green-500 collapses to 8.7 deutan
+// against draw, teal-400 to 5.9 against unplayable.
 const TECHNIQUE_COLOR: Record<NoteTechnique, string> = {
   blow:       '#3B82F6', // blue-500
   draw:       '#F97316', // orange-500
   bend1:      '#C084FC', // purple-400  ─┐ one hue family, deepening with bend depth
   bend2:      '#A855F7', // purple-500   │
   bend3:      '#8B5CF6', // violet-500  ─┘
-  overblow:   '#FACC15', // yellow-400 — the rarest technique, the brightest pop
+  overblow:   '#FACC15', // yellow-400  ─┐ the rarest techniques, the brightest pops
+  overdraw:   '#34D399', // emerald-400 ─┘ (see above — deliberately NOT one hue family,
+                         //                 since these two are opposite breath directions)
   unplayable: '#A1A1AA', // zinc-400 — neutral, deliberately outside the hue set above
 };
 
 const TECHNIQUE_LABEL: Record<NoteTechnique, string> = {
-  blow: 'Blow', draw: 'Draw', bend1: 'Bend ×1', bend2: 'Bend ×2', bend3: 'Bend ×3', overblow: 'Overblow',
-  unplayable: 'Not on this harmonica',
+  blow: 'Blow', draw: 'Draw', bend1: 'Bend ×1', bend2: 'Bend ×2', bend3: 'Bend ×3',
+  overblow: 'Overblow', overdraw: 'Overdraw',
+  unplayable: 'Out of this harmonica’s range',
 };
 
 function techniqueColor(tab: string): string {
@@ -292,11 +316,15 @@ type DataMetric = 'velocity' | 'duration' | 'confidence' | 'pitchBend';
 // actually drawn against, so a bar's height means something without cross-referencing code.
 function getDataAxisLabels(
   metric: DataMetric,
-  notes: TabNote[],
+  /** The Duration chart's ceiling, measured over the unfiltered notes by the caller — the
+   *  same number the bars and the duration line are scaled against, so the rail can't
+   *  describe a scale the chart isn't drawn to. Ignored by every other metric, whose axes
+   *  are fixed. */
+  durationMax: number,
 ): { top: string; mid?: string; bottom: string } {
   switch (metric) {
     case 'duration':
-      return { top: formatDurationLabel(maxOf(notes.map((n) => n.duration), 1)), bottom: '0' };
+      return { top: formatDurationLabel(durationMax), bottom: '0' };
     case 'confidence':
       return { top: '100%', bottom: '0%' };
     case 'velocity':
@@ -326,7 +354,9 @@ function describePosition(tab: string): string {
   const { sign, number, modifier } = parseTab(tab);
   const breath = sign === '-' ? 'Draw' : 'Blow';
   const bends = (modifier.match(/'/g) ?? []).length;
-  const extra = modifier.endsWith('o') ? ', overblow' : bends > 0 ? `, bend ×${bends}` : '';
+  const extra = modifier.endsWith('o')
+    ? (sign === '-' ? ', overdraw' : ', overblow')
+    : bends > 0 ? `, bend ×${bends}` : '';
   return `${breath} hole ${number}${extra}`;
 }
 
@@ -446,7 +476,7 @@ function LabelRailCell({ row, top, height, swatchColor, isOctaveBoundary, styles
         <View pointerEvents="none" style={styles.labelTooltip}>
           <Text style={styles.labelTooltipText}>{describePosition(row.tab)}</Text>
           <Text style={styles.labelTooltipHint}>
-            {row.playable ? row.note : `${row.note} · still plays back, just has no hole here`}
+            {row.playable ? row.note : `${row.note} · still plays back, but no harp position reaches it`}
           </Text>
         </View>
       )}
@@ -525,30 +555,51 @@ interface PianoRollProps {
    * Optional: omitted once no note in the set states a dynamic — a control that provably
    * cannot do anything at any position is worse than none.
    */
-  velocityFilter?: {
-    value:        number;
-    onChange:     (v: number) => void;
-    /**
-     * The **unfiltered** notes — everything, including what the line currently hides.
-     *
-     * Separate from `notes` (which is already filtered) because the two views have to
-     * disagree: the roll hides what's below the line, while the plot has to keep drawing it
-     * in grey. A plot that dropped those bars as the line passed them would erase the very
-     * evidence you drag the line against, and "how much am I cutting" would be invisible at
-     * exactly the moment it matters.
-     */
-    allNotes:     TabNote[];
-    audibleCount: number;
-    totalCount:   number;
+  velocityFilter?: RollFilter & {
     /** Named in the plot corner, since the same threshold bites differently per source. */
-    source?:      VelocitySource | 'mixed';
+    source?: VelocitySource | 'mixed';
   };
+  /**
+   * The duration filter — the same control in the **Duration plot**, thresholding length
+   * instead of loudness. Hides notes *shorter* than the line.
+   *
+   * Worth having as a second filter rather than folding into the first: the notes it exists
+   * to catch are the pitch tracker's and the neural engine's spurious short blips, and those
+   * aren't quiet. A ghost note at the attack of a loud phrase is loud, so no velocity
+   * threshold reaches it — length is the only axis that separates it from real music.
+   *
+   * Unlike `velocityFilter` there is no "unsupported" case to omit it for: every note has a
+   * duration, so the control always has something to act on.
+   */
+  durationFilter?: RollFilter;
+}
+
+/** What a threshold line needs from its host. Shared, because the two filters differ in
+ *  what they measure and in nothing else about how they're driven. */
+export interface RollFilter {
+  /** In the metric's own units — 0–127 for velocity, milliseconds for duration. 0 is off. */
+  value:        number;
+  onChange:     (v: number) => void;
+  /**
+   * The **unfiltered** notes — everything, including what the lines currently hide.
+   *
+   * Separate from `notes` (which is already filtered) because the two views have to
+   * disagree: the roll hides what's below the line, while the plot has to keep drawing it
+   * in grey. A plot that dropped those bars as the line passed them would erase the very
+   * evidence you drag the line against, and "how much am I cutting" would be invisible at
+   * exactly the moment it matters. For duration it does a second job — it fixes the chart's
+   * y-axis ceiling, which a filtered array would let the line rescale from under itself.
+   */
+  allNotes:     TabNote[];
+  /** After **every** filter, not just this one — what's actually on the roll. */
+  audibleCount: number;
+  totalCount:   number;
 }
 
 export function PianoRoll({
   notes, harmonicaKey, harmonicaType, bpm, tempoMap, rows, rowHeight, noteColor, backgroundLanes,
   onUpdateMany, onCreateMany, readNotesAfterWrite, selectedId, onSelect, onCreate, onUpdate, onDelete, onDeleteMany, isPlaying, currentTimeMs, onSeek,
-  loopRegion, onLoopRegionChange, headerLeft, velocityFilter,
+  loopRegion, onLoopRegionChange, headerLeft, velocityFilter, durationFilter,
 }: PianoRollProps) {
   const theme  = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
@@ -708,9 +759,34 @@ export function PianoRoll({
   // so no key to derive rows from. Everything below indexes rows positionally and reads
   // `note`/`midi`/`playable`, none of which are harmonica-specific — which is why one
   // component can serve both stages.
+  //
+  // The pitch extremes are handed to getGridRows so the ladder always covers the music,
+  // even where the music sits outside the harp. Translating to a lower harp is the case
+  // that needs it: without it, every note above the new harp's ceiling loses its row and
+  // drops out of the grid entirely while staying in the store. Reduced to two numbers
+  // rather than passed as a list so that dragging a note — which churns `notes` identity
+  // constantly — only rebuilds rows when the piece's actual range changes.
+  const [notesLowMidi, notesHighMidi] = useMemo(() => {
+    let low = Infinity;
+    let high = -Infinity;
+    for (const n of notes) {
+      const midi = noteNameToMidi(n.note);
+      if (midi === null) continue;
+      if (midi < low)  low  = midi;
+      if (midi > high) high = midi;
+    }
+    return low <= high ? [low, high] : [null, null];
+  }, [notes]);
+
   const derivedRows = useMemo(
-    () => (harmonicaKey ? getGridRows(harmonicaKey, harmonicaType) : []),
-    [harmonicaKey, harmonicaType],
+    () => (harmonicaKey
+      ? getGridRows(
+          harmonicaKey,
+          harmonicaType,
+          notesLowMidi === null ? [] : [notesLowMidi, notesHighMidi!],
+        )
+      : []),
+    [harmonicaKey, harmonicaType, notesLowMidi, notesHighMidi],
   );
   const positions = rows ?? derivedRows;
 
@@ -723,10 +799,35 @@ export function PianoRoll({
    * duration that isn't true.
    */
   const velocityChartNotes = velocityFilter?.allNotes ?? notes;
+  const durationChartNotes = durationFilter?.allNotes ?? notes;
+
+  /** Whichever line the visible chart carries, if it carries one. */
+  const activeFilter = metricTab === 'velocity' ? velocityFilter
+    : metricTab === 'duration' ? durationFilter
+    : undefined;
+
+  /** What the visible chart draws — unfiltered for the two metrics that own a line. */
+  const chartNotes = metricTab === 'velocity' ? velocityChartNotes
+    : metricTab === 'duration' ? durationChartNotes
+    : notes;
+
+  /**
+   * The Duration chart's y-axis ceiling.
+   *
+   * Over the *unfiltered* notes, always. Measured over the filtered set instead, this would
+   * be a feedback loop: raising the line drops the longest note, which lowers the ceiling,
+   * which rescales every bar and slides the line out from under the pointer mid-drag. It's
+   * the one thing the duration filter has to get right that the velocity filter — whose axis
+   * is a fixed 0–127 — never had to think about.
+   */
+  const durationMax = useMemo(
+    () => maxOf(durationChartNotes.map((n) => n.duration), 1),
+    [durationChartNotes],
+  );
 
   const dataAxisLabels = useMemo(
-    () => getDataAxisLabels(metricTab, metricTab === 'velocity' ? velocityChartNotes : notes),
-    [metricTab, notes, velocityChartNotes],
+    () => getDataAxisLabels(metricTab, durationMax),
+    [metricTab, durationMax],
   );
 
   // Pitch Bend is the only per-frame metric left — it needs the raw analysis frames, which
@@ -735,14 +836,11 @@ export function PianoRoll({
   // to be drawn from frame RMS, which meant it was permanently empty for the neural engine
   // and for MIDI, neither of which produces frames at all.
   //
-  // Velocity is measured against the *unfiltered* set: a line dragged above the loudest note
-  // would otherwise empty the chart and replace it with the "nothing to analyze" card —
-  // taking the line, and the only means of getting back, off screen with it.
-  const metricHasData = metricTab === 'pitchBend'
-    ? frames.length > 0
-    : metricTab === 'velocity'
-      ? velocityChartNotes.length > 0
-      : notes.length > 0;
+  // The two charts that carry a line are measured against the *unfiltered* set: a line
+  // dragged above the loudest (or longest) note would otherwise empty the chart and replace
+  // it with the "nothing to analyze" card — taking the line, and the only means of getting
+  // back, off screen with it.
+  const metricHasData = metricTab === 'pitchBend' ? frames.length > 0 : chartNotes.length > 0;
 
   // A panel whose opening tab would be empty starts collapsed, rather than reserving ~150px
   // for an empty box. Keyed on the *default* tab's data (Velocity, which is per-note) rather
@@ -2172,12 +2270,11 @@ export function PianoRoll({
               Shrinkable and clipped to one line, so a narrow viewport eats the hint rather than
               pushing the collapse chevron off the edge. Not shown while collapsed: there's no
               line on screen to drag. */}
-          {metricTab === 'velocity' && velocityFilter && velocityFilter.value === 0
-            && metricHasData && !panelCollapsed && (
-            <View style={styles.velocityFloorHint} pointerEvents="none">
+          {activeFilter && activeFilter.value === 0 && metricHasData && !panelCollapsed && (
+            <View style={styles.floorLineHint} pointerEvents="none">
               <Ionicons name="swap-vertical" size={10} color={theme.textMuted} />
-              <Text style={styles.velocityFloorHintText} numberOfLines={1}>
-                Drag the line at the bottom up to hide quiet notes
+              <Text style={styles.floorLineHintText} numberOfLines={1}>
+                {FLOOR_HINTS[metricTab as 'velocity' | 'duration']}
               </Text>
             </View>
           )}
@@ -2187,19 +2284,22 @@ export function PianoRoll({
               it at every low threshold — exactly where a user who overshot needs it. Only
               shown once the filter is doing something: a permanent Reset next to an idle
               control is one more thing to read past for a state that's already the default. */}
-          {metricTab === 'velocity' && velocityFilter && velocityFilter.value > 0 && (
+          {activeFilter && activeFilter.value > 0 && (
             <Pressable
-              onPress={() => velocityFilter.onChange(0)}
+              onPress={() => activeFilter.onChange(0)}
               hitSlop={8}
               style={({ pressed, hovered }: any) => [
-                styles.velocityFloorReset,
-                (pressed || hovered) && styles.velocityFloorResetHovered,
+                styles.floorLineReset,
+                (pressed || hovered) && styles.floorLineResetHovered,
               ]}
               accessibilityRole="button"
-              accessibilityLabel={`Reset velocity filter, showing all ${velocityFilter.totalCount} notes again`}
+              // Names its own metric: with two lines live, an unqualified "Reset filter" in a
+              // strip that looks the same on both tabs gives no way to tell which one it
+              // clears — and the wrong guess silently undoes the other's work.
+              accessibilityLabel={`Reset ${METRIC_LABELS[metricTab].toLowerCase()} filter, showing all ${activeFilter.totalCount} notes again`}
             >
               <Ionicons name="close" size={10} color={theme.textSub} />
-              <Text style={styles.velocityFloorResetText}>Reset filter</Text>
+              <Text style={styles.floorLineResetText}>Reset filter</Text>
             </Pressable>
           )}
 
@@ -2234,8 +2334,12 @@ export function PianoRoll({
                 <DataPanelGridLines height={DATA_BAR_HEIGHT} theme={theme} />
                 <DataPanelBars
                   metric={metricTab}
-                  notes={metricTab === 'velocity' ? velocityChartNotes : notes}
-                  velocityFloor={metricTab === 'velocity' ? velocityFilter?.value ?? 0 : 0}
+                  notes={chartNotes}
+                  // Both floors on every chart, so the greyed set matches the roll — see the
+                  // prop's own note.
+                  velocityFloor={velocityFilter?.value ?? 0}
+                  durationFloorMs={durationFilter?.value ?? 0}
+                  durationMax={durationMax}
                   frames={frames}
                   positions={positions}
                   pxPerSecond={pxPerSecond}
@@ -2258,12 +2362,35 @@ export function PianoRoll({
                 Riding the scroll would slide the line and its readout off the side of a
                 chart whose bars it is supposed to be measuring. */}
             {metricTab === 'velocity' && metricHasData && velocityFilter && (
-              <VelocityFloorLine
+              <FloorLine
                 value={velocityFilter.value}
                 onChange={velocityFilter.onChange}
+                max={127}
+                step={1}
+                coarseStep={10}
+                format={(v) => String(v)}
+                label="Velocity filter"
+                caption={velocityFilter.source && VELOCITY_SOURCE_LABELS[velocityFilter.source]}
                 audibleCount={velocityFilter.audibleCount}
                 totalCount={velocityFilter.totalCount}
-                source={velocityFilter.source}
+                styles={styles}
+              />
+            )}
+
+            {/* The same control, scaled to the data rather than to a fixed 0–127. `durationMax`
+                is the unfiltered ceiling the bars are drawn against — the two have to be the
+                same number or the line would sit somewhere other than where it cuts. */}
+            {metricTab === 'duration' && metricHasData && durationFilter && (
+              <FloorLine
+                value={durationFilter.value}
+                onChange={durationFilter.onChange}
+                max={durationMax}
+                step={DURATION_FLOOR_STEP_MS}
+                coarseStep={DURATION_FLOOR_STEP_MS * 10}
+                format={formatDurationLabel}
+                label="Duration filter"
+                audibleCount={durationFilter.audibleCount}
+                totalCount={durationFilter.totalCount}
                 styles={styles}
               />
             )}
@@ -2281,6 +2408,13 @@ export function PianoRoll({
     </View>
   );
 }
+
+/** Per-metric wording for the tab-strip hint. Only the two metrics that carry a line have
+ *  one; the strip's condition keys off the filter's presence, so the others never index in. */
+const FLOOR_HINTS: Record<'velocity' | 'duration', string> = {
+  velocity: 'Drag the line at the bottom up to hide quiet notes',
+  duration: 'Drag the line at the bottom up to hide short notes',
+};
 
 const METRIC_LABELS: Record<DataMetric, string> = {
   velocity:   'Velocity',
@@ -2318,8 +2452,8 @@ const TOOL_HELP: ToolHelpEntry[] = [
     desc: 'The blue tab left of the ruler. Drag it out onto the timeline and release to drop a marker, then drag it again for the second one — the span between them (regardless of which you placed first) becomes the loop region, played back on repeat. Once placed, drag either edge of the blue band to adjust it, or its × to clear it. Esc cancels a pin mid-drag.' },
   { icon: 'chevron-up', title: 'Semitone / Octave shift',
     desc: 'Moves the selected note(s) up/down the chromatic grid — the small chevrons shift a semitone, the circled arrows a full octave. Rows greyed out and labeled with just a pitch name aren’t real positions on the current harmonica; a semitone shift that would land there simply skips that note (a message says how many), while the octave buttons disable themselves instead if any selected note is already at the very edge.' },
-  { icon: 'musical-notes-outline', title: 'Key / Type ("12-Chromatic · Key C")',
-    desc: 'Click the badge above the ruler to open a dropdown. Picking a key transposes every note instantly — it can never make a playable note unplayable, since tab positions don’t depend on key, and an already-unplayable note becomes playable if the new key can reach its pitch. Switching Diatonic/Chromatic can go the other way, since the two don’t share a tab vocabulary; it warns first if it would affect any notes, and applies instantly if it wouldn’t.' },
+  { icon: 'musical-notes-outline', title: 'Key & Type (sidebar)',
+    desc: 'Transpose vs Translate decides what a key change keeps. Transpose keeps the tabs and moves the music: the same holes on a new harp, so it can never make a note unplayable. Translate keeps the music and rewrites the tabs: the same pitches played on a different harp — the one to use when you own a C harp and the song wants a G. Translate can strand notes that sit outside the new harp’s range, so it warns first with a count. Switching Diatonic/Chromatic always keeps the pitches too, and warns the same way.' },
 ];
 
 const SHORTCUTS: [string, string][] = [
@@ -2626,7 +2760,7 @@ function DataPanelGridLines({ height, theme }: { height: number; theme: Theme })
   );
 }
 
-// ─── Velocity floor line ───────────────────────────────────────────────────────
+// ─── Floor line ────────────────────────────────────────────────────────────────
 
 /** Plain-language names for where the velocities came from. The internal ids
  *  ("takeRelativeRms") describe the implementation; these describe what's on screen. */
@@ -2638,28 +2772,55 @@ const VELOCITY_SOURCE_LABELS: Record<VelocitySource | 'mixed', string> = {
 };
 
 /**
- * The velocity filter, drawn as a threshold line across the Velocity chart.
+ * A filter, drawn as a threshold line across the chart of the quantity it thresholds.
  *
- * Dragging it is the whole control: the bars are already a picture of the quantity being
+ * One component, two instances: the Velocity chart's line and the Duration chart's. Dragging
+ * is the whole control in both cases — the bars are already a picture of the quantity being
  * thresholded, so the line is placed by eye against the data rather than dialled in as a
  * number and verified elsewhere. Bars that fall under it go grey (see `DataPanelBars`), and
  * the notes they stand for leave the roll above.
  *
+ * The two differ in exactly one structural way, and it's the reason `max` is a prop rather
+ * than a constant. Velocity's axis is fixed 0–127, so a value maps to a height on its own.
+ * Duration's axis is the data — its top is the longest note — so the same ms value sits at
+ * different heights in different sessions, and the caller has to say which scale is in force.
+ * That `max` **must** be measured over the unfiltered set: taken from the filtered notes, a
+ * line dragged upward would drop the longest note, shrink the axis, rescale every bar and
+ * move the line out from under the pointer mid-drag.
+ *
  * The readout rides the line rather than sitting in a corner because it answers the question
  * you have while dragging — "how much am I cutting" — at the place you're looking. The count
  * is phrased as what remains *shown*, never as notes removed: nothing here deletes, and the
- * saved project keeps every note whatever the line does.
+ * saved project keeps every note whatever the line does. With two filters live it reports
+ * what survives *both*, so it can never claim more is visible than actually is — the cost
+ * being that dragging one line moves the other's count.
  *
- * Arrow keys move it too. This is the only control for the filter now, so leaving it
+ * Arrow keys move it too. This is the only control for either filter, so leaving it
  * drag-only would put it out of reach of anyone not using a pointer — the reason it also
  * carries `accessibilityRole="adjustable"` and reports its value.
  */
-function VelocityFloorLine({ value, onChange, audibleCount, totalCount, source, styles }: {
+function FloorLine({
+  value, onChange, max, step, coarseStep, format, label, caption,
+  audibleCount, totalCount, styles,
+}: {
   value:        number;
   onChange:     (v: number) => void;
+  /** Top of the axis this line travels, in the value's own units. */
+  max:          number;
+  /** Drag/arrow-key granularity. Velocity moves in whole units; duration in 10 ms, since a
+   *  1 ms step over the chart's height is finer than the pointer can resolve or the eye can
+   *  see, and would make the readout flicker through values nobody asked for. */
+  step:         number;
+  /** Shift-arrow granularity. */
+  coarseStep:   number;
+  format:       (v: number) => string;
+  /** For screen readers, e.g. "Velocity filter". */
+  label:        string;
+  /** Parked in the chart's top-left corner. Velocity names where its numbers came from,
+   *  since the same threshold bites differently per source; duration has no equivalent. */
+  caption?:     string;
   audibleCount: number;
   totalCount:   number;
-  source?:      VelocitySource | 'mixed';
   styles:       ReturnType<typeof createStyles>;
 }) {
   const active = value > 0;
@@ -2675,14 +2836,15 @@ function VelocityFloorLine({ value, onChange, audibleCount, totalCount, source, 
   const beginDrag = useCallback(() => { dragStartValue.current = value; }, [value]);
 
   const applyDrag = useCallback((translationY: number) => {
-    // Down the screen is quieter, hence the negated dy: the axis runs 127 at the top to 0 at
+    // Down the screen is less, hence the negated dy: the axis runs `max` at the top to 0 at
     // the bottom, matching the bars it cuts across.
-    const next = Math.round(dragStartValue.current - (translationY / DATA_BAR_HEIGHT) * 127);
-    const clamped = Math.max(0, Math.min(127, next));
-    // Guarded, because a pointer move that doesn't cross a whole velocity step shouldn't
-    // write the store — this fires on every frame of the drag.
+    const raw = dragStartValue.current - (translationY / DATA_BAR_HEIGHT) * max;
+    const next = Math.round(raw / step) * step;
+    const clamped = Math.max(0, Math.min(max, next));
+    // Guarded, because a pointer move that doesn't cross a whole step shouldn't write the
+    // store — this fires on every frame of the drag.
     if (clamped !== value) onChange(clamped);
-  }, [onChange, value]);
+  }, [onChange, value, max, step]);
 
   const gesture = useMemo(
     () => Gesture.Pan()
@@ -2692,39 +2854,45 @@ function VelocityFloorLine({ value, onChange, audibleCount, totalCount, source, 
   );
 
   const nudge = useCallback((delta: number) => {
-    onChange(Math.max(0, Math.min(127, value + delta)));
-  }, [onChange, value]);
+    onChange(Math.max(0, Math.min(max, value + delta)));
+  }, [onChange, value, max]);
 
   // `bottom` rather than `top`, so the line is positioned against the same edge the bars
   // grow from — at value 0 it rests exactly on the chart's floor, which is what "off" looks
   // like without needing to be said.
-  const lineBottom = (value / 127) * DATA_BAR_HEIGHT;
+  //
+  // Clamped at the top as well as scaled, because `max` can *fall* underneath a stored value:
+  // the duration axis is the longest note, and shortening or deleting that note leaves a
+  // floor above the new ceiling. Pinning the line to the top edge (rather than letting it
+  // fly off) shows the true state — everything greyed — and leaves it somewhere it can be
+  // grabbed and dragged back down.
+  const lineBottom = Math.min(DATA_BAR_HEIGHT, (value / Math.max(1, max)) * DATA_BAR_HEIGHT);
 
   // The grab band is clamped to stay wholly inside the chart, while the line's ink keeps its
   // true position *within* the band. Centring the band on the line instead would put half of
   // it outside the clip at the two values that matter most — 0, where the filter is turned
   // off and back on, and 127 — and the chart's `overflow: hidden` would silently eat that
   // half, halving the target exactly where a user reaches for it.
-  const bandBottom = Math.max(0, Math.min(DATA_BAR_HEIGHT - VELOCITY_FLOOR_HIT_HEIGHT,
-    lineBottom - VELOCITY_FLOOR_HIT_HEIGHT / 2));
+  const bandBottom = Math.max(0, Math.min(DATA_BAR_HEIGHT - FLOOR_LINE_HIT_HEIGHT,
+    lineBottom - FLOOR_LINE_HIT_HEIGHT / 2));
   const inkBottom  = lineBottom - bandBottom;
 
   // The knob is clamped the same way, for the same reason — a handle that is half missing at
   // the ends of its own travel is worse than no handle. At 0 and 127 that leaves it resting
   // against the line rather than centred on it, which still reads as attached (they touch)
   // and keeps the whole target on screen where it can be grabbed.
-  const knobBottom = Math.max(0, Math.min(DATA_BAR_HEIGHT - VELOCITY_FLOOR_KNOB,
-    lineBottom - VELOCITY_FLOOR_KNOB / 2)) - bandBottom;
+  const knobBottom = Math.max(0, Math.min(DATA_BAR_HEIGHT - FLOOR_LINE_KNOB,
+    lineBottom - FLOOR_LINE_KNOB / 2)) - bandBottom;
 
   return (
     <>
-      {/* Named rather than assumed: the same threshold hides half a tracked take and almost
-          nothing from a MIDI file, so without this the line reads as inconsistent between
-          projects. Parked at the chart's top edge, clear of the bars and of the line's own
-          travel at every value below 127. */}
-      {source !== undefined && (
-        <Text pointerEvents="none" style={styles.velocityFloorSource} numberOfLines={1}>
-          {VELOCITY_SOURCE_LABELS[source]}
+      {/* Named rather than assumed: the same velocity threshold hides half a tracked take and
+          almost nothing from a MIDI file, so without this the line reads as inconsistent
+          between projects. Parked at the chart's top edge, clear of the bars and of the
+          line's own travel at every value below the axis maximum. */}
+      {caption !== undefined && (
+        <Text pointerEvents="none" style={styles.floorLineCaption} numberOfLines={1}>
+          {caption}
         </Text>
       )}
 
@@ -2732,10 +2900,13 @@ function VelocityFloorLine({ value, onChange, audibleCount, totalCount, source, 
         <View
           // A generous hit area around a hairline: the line is 2px of ink, which is far too
           // small to grab reliably, so the touch target is the surrounding band.
-          style={[styles.velocityFloorHit, { bottom: bandBottom }]}
+          style={[styles.floorLineHit, { bottom: bandBottom }]}
           accessibilityRole="adjustable"
-          accessibilityLabel="Velocity filter"
-          accessibilityValue={{ min: 0, max: 127, now: value }}
+          accessibilityLabel={label}
+          accessibilityValue={{ min: 0, max, now: value, text: format(value) }}
+          // "shown", not "hidden by this line": with two filters live the count is what
+          // survives both, so attributing it to this one line would be a lie whenever the
+          // other is also up.
           accessibilityHint={`${audibleCount} of ${totalCount} notes shown. Arrow keys adjust; notes below the line are hidden.`}
           accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
           onAccessibilityAction={(e) => {
@@ -2747,15 +2918,15 @@ function VelocityFloorLine({ value, onChange, audibleCount, totalCount, source, 
             onKeyDown: (e: any) => {
               // Shift for a coarse pass, plain for fine — the same two-speed convention the
               // roll's own arrow-key note nudge uses.
-              const step = e.shiftKey ? 10 : 1;
-              if (e.key === 'ArrowUp')   { e.preventDefault(); nudge(step); }
-              if (e.key === 'ArrowDown') { e.preventDefault(); nudge(-step); }
+              const delta = e.shiftKey ? coarseStep : step;
+              if (e.key === 'ArrowUp')   { e.preventDefault(); nudge(delta); }
+              if (e.key === 'ArrowDown') { e.preventDefault(); nudge(-delta); }
               if (e.key === 'Home')      { e.preventDefault(); onChange(0); }
             },
           } : null)}
         >
           {/* The ink, placed at the threshold's true height within the band. */}
-          <View style={[styles.velocityFloorLine, active && styles.velocityFloorLineActive, { bottom: inkBottom }]} />
+          <View style={[styles.floorLineInk, active && styles.floorLineInkActive, { bottom: inkBottom }]} />
 
           {/* The knob. Inside the chart's clip, which is a flex sibling of the y-axis rail
               rather than an overlay on it — so it cannot reach the 127/0 labels no matter
@@ -2763,8 +2934,8 @@ function VelocityFloorLine({ value, onChange, audibleCount, totalCount, source, 
               collide and each end of the line carries one thing. */}
           <View
             style={[
-              styles.velocityFloorKnob,
-              active && styles.velocityFloorKnobActive,
+              styles.floorLineKnob,
+              active && styles.floorLineKnobActive,
               { bottom: knobBottom },
             ]}
           />
@@ -2776,19 +2947,19 @@ function VelocityFloorLine({ value, onChange, audibleCount, totalCount, source, 
               below once the line is high enough that it would otherwise leave the chart. */}
           <View
             style={[
-              styles.velocityFloorReadout,
-              active && styles.velocityFloorReadoutActive,
-              inkBottom > VELOCITY_FLOOR_HIT_HEIGHT - 10
-                ? { top: VELOCITY_FLOOR_HIT_HEIGHT - inkBottom + 3 }
+              styles.floorLineReadout,
+              active && styles.floorLineReadoutActive,
+              inkBottom > FLOOR_LINE_HIT_HEIGHT - 10
+                ? { top: FLOOR_LINE_HIT_HEIGHT - inkBottom + 3 }
                 : { bottom: inkBottom + 3 },
             ]}
           >
-            <Text style={[styles.velocityFloorValue, active && styles.velocityFloorValueActive]} numberOfLines={1}>
-              {active ? value : 'Off'}
+            <Text style={[styles.floorLineValue, active && styles.floorLineValueActive]} numberOfLines={1}>
+              {active ? format(value) : 'Off'}
             </Text>
             {/* Visible at every position, 0 included — reading "165 / 165" is what says the
-                filter is idle rather than broken. */}
-            <Text style={styles.velocityFloorCount} numberOfLines={1}>
+                filters are idle rather than broken. */}
+            <Text style={styles.floorLineCount} numberOfLines={1}>
               {audibleCount} / {totalCount}
             </Text>
           </View>
@@ -2801,12 +2972,30 @@ function VelocityFloorLine({ value, onChange, audibleCount, totalCount, source, 
 
 // ─── Data panel bars ───────────────────────────────────────────────────────────
 
-function DataPanelBars({ metric, notes, velocityFloor, frames, positions, pxPerSecond, theme }: {
+function DataPanelBars({
+  metric, notes, velocityFloor, durationFloorMs, durationMax, frames, positions, pxPerSecond, theme,
+}: {
   metric: DataMetric;
   notes: TabNote[];
-  /** The Velocity chart's threshold line, so bars under it can be drawn as filtered-out.
-   *  0 for every other metric — they have no line and nothing to grey. */
+  /**
+   * Both threshold lines, on every chart — not just the one this chart carries.
+   *
+   * A bar is greyed when the note fails *either* filter, so the two charts agree with each
+   * other and with the roll about what's hidden. Greying only against a chart's own line
+   * would leave the Duration chart drawing a note at full strength that the velocity line
+   * had already taken off the roll — the chart would be the only thing on screen claiming
+   * that note is in.
+   */
   velocityFloor: number;
+  durationFloorMs: number;
+  /**
+   * Top of the Duration chart's y axis, measured by the caller over the *unfiltered* notes.
+   *
+   * Passed in rather than derived from `notes` here because the line's position has to agree
+   * with the bars' scale exactly, and because deriving it from a filtered array makes the
+   * axis rescale as the line moves. See `FloorLine`'s note on `max`.
+   */
+  durationMax: number;
   frames: ReturnType<typeof getFrames>;
   positions: GridRow[];
   pxPerSecond: number;
@@ -2822,7 +3011,7 @@ function DataPanelBars({ metric, notes, velocityFloor, frames, positions, pxPerS
   // heights are exactly what the filter thresholds against.
   if (metric === 'duration' || metric === 'confidence' || metric === 'velocity') {
     const maxVal = metric === 'duration'
-      ? maxOf(notes.map((n) => n.duration), 1)
+      ? durationMax
       : metric === 'confidence' ? 100 : 127;
     return (
       <>
@@ -2836,11 +3025,15 @@ function DataPanelBars({ metric, notes, velocityFloor, frames, positions, pxPerS
           const left = (n.start_time / 1000) * pxPerSecond;
           const width = Math.max(2, (n.duration / 1000) * pxPerSecond - 2);
           const height = Math.max(2, (value / maxVal) * DATA_BAR_HEIGHT);
-          // Below the line: drawn, but drained of colour and pushed back, so the shape of
-          // what's being cut stays readable while no longer competing with what's kept.
-          // These are exactly the notes the roll above has hidden — this chart is the only
-          // place they're still visible, which is what makes the line safe to drag hard.
-          const filtered = !passesVelocityFloor(value, velocityFloor);
+          // Below a line: drawn, but drained of colour and pushed back, so the shape of what's
+          // being cut stays readable while no longer competing with what's kept. These are
+          // exactly the notes the roll above has hidden — this chart is the only place
+          // they're still visible, which is what makes the lines safe to drag hard.
+          //
+          // Checked against the note's own velocity, not `value`: on the Duration chart
+          // `value` is a length, and the gate has nothing to say about it.
+          const filtered = !passesVelocityFloor(noteVelocity(n), velocityFloor)
+            || !passesDurationFloor(n.duration, durationFloorMs);
           return (
             <View
               key={n.id}
@@ -4085,15 +4278,15 @@ function createStyles(t: Theme) {
     // The draggable band. Transparent and full-width: the ink is the child line, while this
     // is only the target, and it spans the chart so the line can be grabbed anywhere along
     // it rather than only at a handle the user has to go and find.
-    velocityFloorHit: {
+    floorLineHit: {
       position: 'absolute',
       left: 0,
       right: 0,
-      height: VELOCITY_FLOOR_HIT_HEIGHT,
+      height: FLOOR_LINE_HIT_HEIGHT,
       ...(Platform.OS === 'web' ? { cursor: 'ns-resize', outlineStyle: 'none' } : null),
     } as any,
     // Dashed would read as a boundary that isn't quite real; solid states that it is one.
-    velocityFloorLine: {
+    floorLineInk: {
       position: 'absolute',
       left: 0,
       right: 0,
@@ -4101,22 +4294,22 @@ function createStyles(t: Theme) {
       borderRadius: 1,
       backgroundColor: t.textMuted,
     },
-    velocityFloorLineActive: { backgroundColor: t.accent },
+    floorLineInkActive: { backgroundColor: t.accent },
     // Ringed in the panel's own background rather than left as a bare dot: the knob sits over
     // the bars, and without a ring a grey knob on a grey bar has no edge at all.
-    velocityFloorKnob: {
+    floorLineKnob: {
       position: 'absolute',
       left: 3,
-      width:  VELOCITY_FLOOR_KNOB,
-      height: VELOCITY_FLOOR_KNOB,
-      borderRadius: VELOCITY_FLOOR_KNOB / 2,
+      width:  FLOOR_LINE_KNOB,
+      height: FLOOR_LINE_KNOB,
+      borderRadius: FLOOR_LINE_KNOB / 2,
       backgroundColor: t.textMuted,
       borderWidth: 2,
       borderColor: t.bg,
       ...(Platform.OS === 'web' ? { cursor: 'ns-resize' } : null),
     } as any,
-    velocityFloorKnobActive: { backgroundColor: t.accent },
-    velocityFloorReadout: {
+    floorLineKnobActive: { backgroundColor: t.accent },
+    floorLineReadout: {
       position: 'absolute',
       right: 6,
       flexDirection: 'row',
@@ -4129,21 +4322,21 @@ function createStyles(t: Theme) {
       borderWidth: 1,
       borderColor: t.border,
     },
-    velocityFloorReadoutActive: { borderColor: t.accentDim },
-    velocityFloorValue: {
+    floorLineReadoutActive: { borderColor: t.accentDim },
+    floorLineValue: {
       fontFamily: SpaceGrotesk.bold,
       fontSize: 10,
       color: t.textSub,
     },
-    velocityFloorValueActive: { color: t.accent },
-    velocityFloorCount: {
+    floorLineValueActive: { color: t.accent },
+    floorLineCount: {
       fontFamily: SpaceGrotesk.regular,
       fontSize: 10,
       color: t.textMuted,
     },
     // Top-left of the chart, the one corner the line can never reach (it stops at 127, where
     // the readout is right-aligned) and where no bar is ever tall enough to collide.
-    velocityFloorSource: {
+    floorLineCaption: {
       position: 'absolute',
       top: 2,
       left: 6,
@@ -4155,14 +4348,14 @@ function createStyles(t: Theme) {
     // Deliberately unlike the Reset chip it shares a slot with: no border, no background, no
     // pointer cursor. Same position, but it has to read as a caption rather than as a button
     // the user is being asked to press.
-    velocityFloorHint: {
+    floorLineHint: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 3,
       flexShrink: 1,
       marginLeft: 2,
     },
-    velocityFloorHintText: {
+    floorLineHintText: {
       fontFamily: Poppins.regular,
       fontSize: 9,
       color: t.textMuted,
@@ -4170,7 +4363,7 @@ function createStyles(t: Theme) {
     },
     // In the tab strip, immediately after the metric tabs — laid out in flow, so it doesn't
     // disturb the chevron's `marginLeft: 'auto'` pin at the right edge.
-    velocityFloorReset: {
+    floorLineReset: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 3,
@@ -4182,8 +4375,8 @@ function createStyles(t: Theme) {
       borderColor: t.border,
       ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
     } as any,
-    velocityFloorResetHovered: { borderColor: t.accentDim },
-    velocityFloorResetText: {
+    floorLineResetHovered: { borderColor: t.accentDim },
+    floorLineResetText: {
       fontFamily: Poppins.medium,
       fontSize: 9,
       color: t.textSub,

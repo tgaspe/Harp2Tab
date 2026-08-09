@@ -15,6 +15,7 @@
 import { base64ToBytes, bytesToBase64 } from './base64';
 import { readSmf, writeSmf, type SmfTrack } from './smf';
 import { compileTempoMap, type TempoEvent, type TimeSignatureEvent } from './tempo';
+import { passesDurationFloor } from './duration';
 import { passesVelocityFloor } from './velocity';
 import type { MidiNote, MidiProject, MidiTrackData, VelocitySource } from '@/types';
 
@@ -60,24 +61,29 @@ export function createTrack(index: number, init: Partial<MidiTrackData> = {}): M
     notes:   init.notes   ?? [],
     velocitySource: init.velocitySource,
     velocityFloor:  init.velocityFloor,
+    durationFloorMs: init.durationFloorMs,
   };
 }
 
 /**
- * A track's notes as its velocity floor leaves them.
+ * A track's notes as its two floors leave them.
  *
- * The one place the floor is applied to *music*, so the roll, playback, MIDI export and
+ * The one place the floors are applied to *music*, so the roll, playback, MIDI export and
  * conversion can't disagree about which notes are in. Returns the same array reference when
- * the floor is off — the overwhelmingly common case, where filtering would copy every
- * track's notes on every render for identical contents.
+ * both are off — the overwhelmingly common case, where filtering would copy every track's
+ * notes on every render for identical contents.
  *
  * Note what this is deliberately *not* used by: `serializeProject`. Saving must keep every
- * note, or the filter stops being a lens and becomes a delete with extra steps.
+ * note, or the filters stop being a lens and become a delete with extra steps.
  */
-export function trackAudibleNotes(track: Pick<MidiTrackData, 'notes' | 'velocityFloor'>): MidiNote[] {
-  const floor = track.velocityFloor ?? 0;
-  if (floor <= 0) return track.notes;
-  return track.notes.filter((n) => passesVelocityFloor(n.velocity, floor));
+export function trackAudibleNotes(
+  track: Pick<MidiTrackData, 'notes' | 'velocityFloor' | 'durationFloorMs'>,
+): MidiNote[] {
+  const floor         = track.velocityFloor ?? 0;
+  const durationFloor = track.durationFloorMs ?? 0;
+  if (floor <= 0 && durationFloor <= 0) return track.notes;
+  return track.notes.filter((n) =>
+    passesVelocityFloor(n.velocity, floor) && passesDurationFloor(n.durationMs, durationFloor));
 }
 
 /**
@@ -167,9 +173,12 @@ export function projectFromMidiNotes(
   return createProject({
     title,
     tracks: [track],
-    // Audio has no tempo map — a transcription is a stream of timestamps, not bars. The
-    // default 120 is a display grid for the piano roll, not a claim about the performance,
-    // and every note's position is absolute ms either way, so it cannot mistime anything.
+    // Audio has no tempo map — a transcription is a stream of timestamps, not bars — so the
+    // caller reads one off the onsets and passes it here. Absent when detection wasn't
+    // confident enough to name one, and then `createProject`'s 120 stands as a display grid
+    // rather than a claim about the performance. Either way every note's position is
+    // absolute ms, so this cannot mistime anything: it decides where the bar lines fall, not
+    // where the notes do.
     tempos: options.bpm ? [{ timeMs: 0, bpm: Math.round(options.bpm) }] : undefined,
   });
 }
@@ -188,6 +197,9 @@ export interface StoredTrackMeta {
   /** The track's velocity-floor line, so where the user left it survives a reload. Absent
    *  on every project saved before this existed, which reads as 0 — filter off. */
   velocityFloor?: number;
+  /** The track's duration-floor line in ms, so where the user left it survives a reload.
+   *  Absent on every project saved before this existed, which reads as 0 — filter off. */
+  durationFloorMs?: number;
 }
 
 export interface StoredProject {
@@ -234,6 +246,7 @@ export function serializeProject(project: MidiProject): StoredProject {
       id: t.id, color: t.color, muted: t.muted, soloed: t.soloed,
       velocitySource: t.velocitySource,
       velocityFloor:  t.velocityFloor,
+      durationFloorMs: t.durationFloorMs,
     })),
   };
 }
@@ -255,6 +268,7 @@ export function deserializeProject(stored: StoredProject): MidiProject {
       soloed:  meta?.soloed,
       velocitySource: meta?.velocitySource,
       velocityFloor:  meta?.velocityFloor,
+      durationFloorMs: meta?.durationFloorMs,
       notes:   track.notes.map((n) => ({ ...n })),
     });
   });

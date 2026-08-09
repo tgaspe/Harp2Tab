@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { noteToTab, tabToNote } from '@/audio/HarmonicaMapper';
+import { detectTempo } from '@/audio/detectTempo';
 import { DEFAULT_BPM } from '@/audio/tempo';
 import type { HarmonicaKey, HarmonicaType, RecordingSource, TabNote, TabRecording, ExportFormat } from '@/types';
 
@@ -48,6 +49,20 @@ interface AppState {
    * behaves correctly at any gate position, since history snapshots the full note set.
    */
   noiseGate:          number;
+  /**
+   * The duration floor in milliseconds — notes shorter than this are hidden from the
+   * editor, playback and export.
+   *
+   * The gate's sibling, and non-destructive on identical terms: `tabNotes` always holds
+   * every note, nothing writes a filtered array back, and so this is reversible in both
+   * directions. Not undo-tracked, for the reason spelled out on `noiseGate`.
+   *
+   * The two compose by AND — a note has to clear both to be shown. Kept as two independent
+   * values rather than one combined predicate because they answer different questions
+   * ("too quiet to matter" vs "too short to be real") and a user reaching for one has no
+   * reason to disturb the other.
+   */
+  durationFloorMs:    number;
   /** Editor's List vs Piano-Roll view — lifted out of edit.tsx's own local state so the
    *  web TopBar (rendered outside the edit screen's tree, in the root layout) can show
    *  and drive the same toggle next to the app title. Not undo-tracked, same reasoning
@@ -89,6 +104,7 @@ interface AppActions {
   setHarmonicaType: (type: HarmonicaType) => void;
   selectKey:        (key: HarmonicaKey) => void;
   transposeToKey:      (key: HarmonicaKey) => void;
+  translateToKey:      (key: HarmonicaKey) => void;
   changeHarmonicaType: (type: HarmonicaType) => void;
   startRecording: () => void;
   startImportedSession: (title: string | undefined, source: RecordingSource) => void;
@@ -109,6 +125,8 @@ interface AppActions {
   setRecordingTitle:   (title: string) => void;
   setViewMode:         (mode: 'list' | 'pianoRoll') => void;
   setNoiseGate:        (value: number) => void;
+  setDurationFloorMs:  (value: number) => void;
+  applyDetectedTempo:  (bpm: number, offsetMs: number) => void;
   loadRecording:  (recording: TabRecording) => void;
   reset:          () => void;
 }
@@ -133,10 +151,36 @@ const initialState: AppState = {
   recordingTitle:     '',
   viewMode:           'list',
   noiseGate:          0,
+  durationFloorMs:    0,
   sessionSource:      'recording',
   sourceProjectId:    null,
   sourceTrackId:      null,
 };
+
+/**
+ * Shared by the manual Detect button and the automatic pass at the end of a take.
+ *
+ * History is pushed even on the automatic path: an estimate applied without being asked is
+ * exactly the case where the user most needs a way back, and undo is a way back they already
+ * know about.
+ */
+function applyTempoEstimate(
+  s: Pick<AppState, 'bpm' | 'tabNotes' | 'selectedKey' | 'harmonicaType' | 'history' | 'future'>,
+  bpm: number,
+  offsetMs: number,
+) {
+  const clamped = Math.max(20, Math.min(400, Math.round(bpm)));
+  if (clamped === s.bpm && offsetMs === 0) return;
+  pushHistory(s);
+  s.bpm = clamped;
+  // `detectTempo` guarantees this can't drive anything below 0; the clamp is a backstop for
+  // callers that computed an offset some other way.
+  if (offsetMs !== 0) {
+    for (const note of s.tabNotes) {
+      note.start_time = Math.max(0, Math.round(note.start_time - offsetMs));
+    }
+  }
+}
 
 export const useAppStore = create<AppState & AppActions>()(
   immer((set) => ({
@@ -162,6 +206,7 @@ export const useAppStore = create<AppState & AppActions>()(
         s.sourceProjectId    = null;
         s.sourceTrackId      = null;
         s.noiseGate          = 0;
+        s.durationFloorMs    = 0;
       }),
 
     // Sibling of startRecording for the file-upload entry points: same fresh-session
@@ -183,10 +228,21 @@ export const useAppStore = create<AppState & AppActions>()(
         s.sourceProjectId    = null;
         s.sourceTrackId      = null;
         s.noiseGate          = 0;
+        s.durationFloorMs    = 0;
       }),
 
     stopRecording: () =>
-      set((s) => { s.isRecording = false; s.isPaused = false; }),
+      set((s) => {
+        s.isRecording = false;
+        s.isPaused = false;
+        // The take is complete, so this is the first moment its tempo can be read — and the
+        // only moment where doing so unasked is clearly right, since `bpm` is still the
+        // default nobody chose. Applied at any confidence for the same reason the import path
+        // does: the fallback is a constant picked before the user played a note. `pushHistory`
+        // inside makes the whole thing one undo away for anyone who disagrees.
+        const estimate = detectTempo(s.tabNotes);
+        if (estimate) applyTempoEstimate(s, estimate.bpm, estimate.offsetMs);
+      }),
 
     pauseRecording: () =>
       set((s) => { s.isPaused = true; }),
@@ -319,6 +375,33 @@ export const useAppStore = create<AppState & AppActions>()(
         s.selectedKey = newKey;
       }),
 
+    /**
+     * The other half of a key change: keep the music, rewrite the tabs.
+     *
+     * `transposeToKey` above fixes `tab` and lets the pitch move — the same holes on a
+     * different harp, which is what physically happens when a player picks up another key.
+     * This fixes `note` and lets the tab move: the same music, re-fingered for a harp the
+     * player actually owns. Someone with only a C harp who wants a song written for a G
+     * comes here.
+     *
+     * That makes it structurally identical to `changeHarmonicaType` below rather than to
+     * its own namesake — pitch is the invariant, tab is derived, and a pitch the target
+     * harp can't reach keeps its pitch with `tab: ''` rather than being dropped or snapped
+     * to a neighbour. Since both instruments now cover their full span (see getGridRows),
+     * that only happens at the range edges: harps of different keys sit at different
+     * heights, so a G harp bottoms out ~5 semitones below a C. The caller warns with a
+     * count first, exactly as it does for a type change.
+     */
+    translateToKey: (newKey) =>
+      set((s) => {
+        if (newKey === s.selectedKey) return;
+        pushHistory(s);
+        for (const note of s.tabNotes) {
+          note.tab = noteToTab(note.note, newKey, s.harmonicaType) ?? '';
+        }
+        s.selectedKey = newKey;
+      }),
+
     // Unlike transposeToKey, diatonic and chromatic don't share a tab vocabulary, so
     // this re-matches each note's *pitch* against the new type's layout instead of
     // preserving `tab` directly. A note with no match in the new type keeps its pitch
@@ -355,6 +438,21 @@ export const useAppStore = create<AppState & AppActions>()(
         s.bpm = clamped;
       }),
 
+    /**
+     * Move the *grid* onto the music, rather than the music onto the grid.
+     *
+     * The opposite of `setBpm` above in the one way that matters. `setBpm` re-times every
+     * note by the tempo ratio, because a user pressing +5 BPM means "play this tab faster" —
+     * the notes keep their bar positions and the milliseconds stretch. Detection means the
+     * reverse: the performance's timing is the measured truth and the ruler over it was
+     * wrong, so re-timing here would destroy the very evidence the tempo was read from.
+     *
+     * The offset shift is not re-timing — it's a uniform slide of the whole take against the
+     * bar lines, which is the only way to align a grid that is nailed to ms 0.
+     */
+    applyDetectedTempo: (bpm, offsetMs) =>
+      set((s) => { applyTempoEstimate(s, bpm, offsetMs); }),
+
     setMetronomeEnabled: (enabled) =>
       set((s) => { s.metronomeEnabled = enabled; }),
 
@@ -368,6 +466,13 @@ export const useAppStore = create<AppState & AppActions>()(
     // driven by a drag gesture whose pixel→value maths can overshoot at the track's ends.
     setNoiseGate: (value) =>
       set((s) => { s.noiseGate = Math.max(0, Math.min(127, Math.round(value))); }),
+
+    // Clamped low but not high: unlike the gate's fixed 0-127 scale, the duration line's
+    // ceiling is the longest note in the session, which changes as notes are edited. The
+    // roll clamps the drag to that; storing an unbounded value keeps a floor set against a
+    // long note from being silently rewritten when that note is shortened or deleted.
+    setDurationFloorMs: (value) =>
+      set((s) => { s.durationFloorMs = Math.max(0, Math.round(value)); }),
 
     // Reopens a saved recording for editing — distinct from startRecording()
     // since it's not a new session (no gate check, no fresh recordingStartTime
@@ -394,6 +499,7 @@ export const useAppStore = create<AppState & AppActions>()(
         // deleted anything, a recording saved *with* one reopens with every note intact and
         // the slider exactly where it was left.
         s.noiseGate           = recording.noiseGate ?? 0;
+        s.durationFloorMs     = recording.durationFloorMs ?? 0;
       }),
 
     reset: () =>
@@ -417,3 +523,4 @@ export const selectMetronomeEnabled = (s: AppState & AppActions) => s.metronomeE
 export const selectRecordingTitle   = (s: AppState & AppActions) => s.recordingTitle;
 export const selectViewMode         = (s: AppState & AppActions) => s.viewMode;
 export const selectNoiseGate        = (s: AppState & AppActions) => s.noiseGate;
+export const selectDurationFloorMs  = (s: AppState & AppActions) => s.durationFloorMs;

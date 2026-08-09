@@ -40,7 +40,19 @@ export interface PlaybackOptions {
 
 export const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
 
-export type SnapDivision = 'off' | 4 | 8 | 16;
+/**
+ * Grid resolution, named by how many of them fit in a whole note — so 4 is a quarter, 8 an
+ * eighth, 16 a sixteenth.
+ *
+ * 12 is the odd one out and the reason this is a union rather than a power of two: it's the
+ * eighth-note **triplet**, three to the beat instead of two. Blues — which is most of what a
+ * harmonica plays — is overwhelmingly shuffle feel, where the off-beat note lands two thirds
+ * of the way through the beat rather than halfway. A straight eighth grid cannot express
+ * that, so snapping a shuffle to 1/8 doesn't tidy the transcription, it quantizes the swing
+ * out of it. Every formula below is written in whole notes and generalises to 12 without a
+ * special case: `4/12` is a third of a beat, exactly as `4/8` is half of one.
+ */
+export type SnapDivision = 'off' | 4 | 8 | 12 | 16;
 
 /** Grid unit in ms for a given snap division (e.g. 8 = an eighth note), or null if snap is off. */
 export function snapDivisionMs(division: SnapDivision, bpm: number): number | null {
@@ -234,7 +246,8 @@ export function barToMs(map: TempoMap, bar: number): number {
   return beatToMs(map, barToBeat(map, bar - 1));
 }
 
-/** Grid unit in quarter notes: 4 → 1 (quarter), 8 → 0.5 (eighth), 16 → 0.25 (16th). */
+/** Grid unit in quarter notes: 4 → 1 (quarter), 8 → 0.5 (eighth), 12 → 1/3 (eighth triplet),
+ *  16 → 0.25 (16th). */
 function unitBeatsOf(division: Exclude<SnapDivision, 'off'>): number {
   return 4 / division;
 }
@@ -278,8 +291,9 @@ export function gridLines(
   if (!(toMs > fromMs)) return [];
 
   const unit = unitBeatsOf(division);
-  // Subdivisions per beat — 4 → 1, 8 → 2, 16 → 4. Integer, so marking beat lines is an
-  // index test rather than a float comparison.
+  // Subdivisions per beat — 4 → 1, 8 → 2, 12 → 3, 16 → 4. Integer in every case, including
+  // the triplet (1 / (1/3) rounds to exactly 3), so marking beat lines stays an index test
+  // rather than a float comparison.
   const subsPerBeat = Math.round(1 / unit);
 
   const lines: GridLine[] = [];

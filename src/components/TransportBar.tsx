@@ -93,11 +93,11 @@ export function WebTransportBar({
           />
           <Divider styles={styles} />
           <View style={styles.webBpmControl}>
-            <Pressable onPress={() => setBpm(bpm - 5)} disabled={disabled} style={styles.webMiniStepBtn} accessibilityRole="button" accessibilityLabel="Decrease tempo">
+            <Pressable onPress={() => setBpm(bpm - 1)} disabled={disabled} style={styles.webMiniStepBtn} accessibilityRole="button" accessibilityLabel="Decrease tempo">
               <Ionicons name="remove" size={12} color={disabled ? theme.textMuted : theme.textSub} />
             </Pressable>
             <Text style={[styles.webBpmValue, disabled && { color: theme.textMuted }]}>{bpm} BPM</Text>
-            <Pressable onPress={() => setBpm(bpm + 5)} disabled={disabled} style={styles.webMiniStepBtn} accessibilityRole="button" accessibilityLabel="Increase tempo">
+            <Pressable onPress={() => setBpm(bpm + 1)} disabled={disabled} style={styles.webMiniStepBtn} accessibilityRole="button" accessibilityLabel="Increase tempo">
               <Ionicons name="add" size={12} color={disabled ? theme.textMuted : theme.textSub} />
             </Pressable>
           </View>

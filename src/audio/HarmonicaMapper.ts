@@ -2,6 +2,18 @@ import type { HarmonicaKey, HarmonicaType } from '@/types';
 
 // C-diatonic layout: maps C-space MIDI note → { tab, note name without octave }
 // Multiple-option notes use best mapping: non-bend first, then lower hole.
+//
+// Notation: a leading `-` is draw, no prefix is blow, `'` marks bend depth, `o` marks an
+// overblow/overdraw. The prefix always states the breath direction, so everything else
+// follows from which reed sits higher in each group: holes 1-6 bend on the draw (`-2'`)
+// and holes 8-10 bend on the blow (`8'`); an overblow is blown (`4o`) and an overdraw is
+// drawn (`-9o`).
+//
+// Overblow (holes 1-6) sounds a semitone above the DRAW reed; overdraw (holes 7-10) sounds
+// a semitone above the BLOW reed. The overdraws are what let a diatonic reach C#6, G#6 and
+// C#7 — the only pitches in the chromatic span it otherwise couldn't touch. They're brutal
+// to play, but "needs an extreme technique" is a different claim from "impossible", and the
+// grid used to make the second one.
 const C_DIATONIC: Record<number, string> = {
   60: '1',     // C4  hole 1 blow
   61: "-1'",   // C#4 hole 1 draw bend
@@ -28,16 +40,19 @@ const C_DIATONIC: Record<number, string> = {
   82: '6o',    // A#5 hole 6 overblow
   83: '-7',    // B5  hole 7 draw
   84: '7',     // C6  hole 7 blow
+  85: '-7o',   // C#6 hole 7 overdraw
   86: '-8',    // D6  hole 8 draw
-  87: "-8'",   // D#6 hole 8 blow bend
+  87: "8'",    // D#6 hole 8 blow bend
   88: '8',     // E6  hole 8 blow
-  89: '-9',    // F6  hole 9 draw (preferred over blow double bend)
-  90: "-9'",   // F#6 hole 9 blow bend
+  89: '-9',    // F6  hole 9 draw (preferred over hole 8 overdraw)
+  90: "9'",    // F#6 hole 9 blow bend
   91: '9',     // G6  hole 9 blow
+  92: '-9o',   // G#6 hole 9 overdraw
   93: '-10',   // A6  hole 10 draw (preferred over blow triple bend)
-  94: "-10''", // A#6 hole 10 blow double bend
-  95: "-10'",  // B6  hole 10 blow bend
+  94: "10''",  // A#6 hole 10 blow double bend
+  95: "10'",   // B6  hole 10 blow bend
   96: '10',    // C7  hole 10 blow
+  97: '-10o',  // C#7 hole 10 overdraw — the diatonic's true top, level with chromatic's
 };
 
 // 12-hole chromatic layout (Hohner Chromonica 270, C-space).
@@ -110,13 +125,26 @@ const NOTE_SEMITONES: Record<string, number> = {
 };
 
 // Reverse map: tab string → C-space MIDI (auto-includes overblows via C_DIATONIC entries)
-// '3' (hole 3 blow = G4) is added manually because C_DIATONIC maps G4 to '-2' (preferred),
-// so the auto-reversal omits this valid alternate position.
+// The manual entries are valid positions the auto-reversal can't see, because C_DIATONIC
+// maps their pitch to an easier alternate: hole 3 blow (G4 → '-2'), hole 3 overblow and
+// hole 8 overdraw (C5 → '4', F6 → '-9'). A user who types one should still get the right
+// pitch back, even though the mapper never emits it.
+//
+// The `-8'`-style entries are the pre-v2 spelling of the hole 8-10 blow bends, which used
+// a draw prefix (see migrateRecordings). Kept as read-only aliases so a tab that predates
+// the migration — or one hand-typed from an old chart — still resolves rather than
+// silently becoming unplayable; nothing writes them any more.
 const TAB_TO_C_MIDI: Record<string, number> = {
   ...Object.fromEntries(
     Object.entries(C_DIATONIC).map(([midi, tab]) => [tab, Number(midi)]),
   ),
-  '3': 67,
+  '3':   67,
+  '3o':  72,
+  '-8o': 89,
+  "-8'":   87,
+  "-9'":   90,
+  "-10''": 94,
+  "-10'":  95,
 };
 
 // Keys G–B have raw offset >= 7 and are shifted down an octave to stay in C-layout range.
@@ -222,24 +250,50 @@ export interface GridRow extends PlayablePosition {
 }
 
 /**
- * Every row the piano-roll editor draws — always the full chromatic ladder (gapless
- * across its range), not just the current instrument's own playable positions. For a
- * chromatic recording every row is real. For diatonic, chromatic's range is a strict
- * superset (diatonic never reaches outside it, and has real gaps within it — e.g. no
- * diatonic position produces C#6 or G#6 at all), so rows diatonic can't reach are kept
- * as unplayable placeholders (tab: '') rather than simply not existing. This is what
- * gives transpose/octave-shift somewhere real to land, and what a note "falls off the
- * edge" clamps against, instead of the instrument's own narrower position list.
+ * Every row the piano-roll editor draws — a gapless chromatic ladder, not just the
+ * current instrument's own playable positions. This is what gives transpose/octave-shift
+ * somewhere real to land, and what a note "falls off the edge" clamps against.
+ *
+ * Both instruments now cover their whole span: chromatic always did, and diatonic does too
+ * once the overdraws are counted (they fill C#6/G#6/C#7, the only holes the layout used to
+ * have). So `playable: false` no longer means "gap inside the range" — it means **outside
+ * this harp's range entirely**, which is only reachable via `extraMidis`.
+ *
+ * `extraMidis` are pitches that must have a row even though the instrument can't reach
+ * them — the pitches of the notes currently in the piece. Without it, translating to a
+ * lower-pitched harp doesn't grey out the notes above its ceiling, it deletes their rows:
+ * the note stays in the store and in every export while vanishing from the grid, with no
+ * way to see or fix it. The ladder is widened to cover them and stays gapless, since
+ * everything downstream indexes rows positionally and steps between adjacent ones.
  */
-export function getGridRows(key: HarmonicaKey, harmonicaType: HarmonicaType): GridRow[] {
-  const chromatic = getPlayablePositions(key, 'chromatic');
-  if (harmonicaType === 'chromatic') {
-    return chromatic.map((p) => ({ ...p, playable: true }));
+export function getGridRows(
+  key: HarmonicaKey,
+  harmonicaType: HarmonicaType,
+  extraMidis: readonly number[] = [],
+): GridRow[] {
+  const transpose = getTranspose(key);
+  // The instrument's own span, in real (not C-space) MIDI. Chromatic's is the wider of the
+  // two and diatonic now matches it exactly, but deriving it from the layout keeps this
+  // correct if either table ever grows.
+  const layout    = harmonicaType === 'chromatic' ? C_CHROMATIC : C_DIATONIC;
+  const cMidis    = Object.keys(layout).map(Number);
+  let low  = Math.min(...cMidis) + transpose;
+  let high = Math.max(...cMidis) + transpose;
+
+  for (const midi of extraMidis) {
+    if (!Number.isFinite(midi)) continue;
+    low  = Math.min(low,  Math.round(midi));
+    high = Math.max(high, Math.round(midi));
   }
-  return chromatic.map((p) => {
-    const tab = noteToTab(p.note, key, 'diatonic');
-    return tab ? { ...p, tab, playable: true } : { ...p, tab: '', playable: false };
-  });
+
+  const rows: GridRow[] = [];
+  // Highest pitch first — row index 0 is the top of the grid, matching getChromaticRows.
+  for (let midi = high; midi >= low; midi--) {
+    const note = midiToNoteName(midi);
+    const tab  = noteToTab(note, key, harmonicaType) ?? '';
+    rows.push({ tab, note, midi, playable: tab !== '' });
+  }
+  return rows;
 }
 
 /** Widest range worth drawing — the full MIDI span, which is what a piano roll editing

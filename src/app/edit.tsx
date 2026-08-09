@@ -18,6 +18,7 @@ import { Divider, IconButton } from '@/components/EditControls';
 import { WebTransportBar } from '@/components/TransportBar';
 import { createStyles, type EditStyles } from '@/app/editStyles';
 import { ExportOption } from '@/components/ExportOption';
+import { TEMPO_CONFIDENCE_GOOD, detectTempo } from '@/audio/detectTempo';
 import { useAudibleNotes } from '@/hooks/useAudibleNotes';
 import { useTheme } from '@/hooks/useTheme';
 import { useAppStore, selectTabNotes, selectKey, selectHarmonicaType, selectCanUndo, selectCanRedo, selectBpm, selectMetronomeEnabled, selectExportFmt, selectRecordingTitle, selectViewMode } from '@/store/useAppStore';
@@ -53,8 +54,13 @@ export default function EditScreen() {
   const {
     notes: audibleNotes, audibleCount, totalCount,
     gate: noiseGate, supported: noiseGateSupported, source: velocitySource,
+    durationFloorMs,
   } = useAudibleNotes();
-  const setNoiseGate   = useAppStore((s) => s.setNoiseGate);
+  const setNoiseGate       = useAppStore((s) => s.setNoiseGate);
+  const setDurationFloorMs = useAppStore((s) => s.setDurationFloorMs);
+  /** Either line hiding anything. The list view's drag-reorder can't run over a partial
+   *  list — see the onDragEnd handler — and it doesn't care which filter made it partial. */
+  const anyFilterActive = noiseGate > 0 || durationFloorMs > 0;
   const harmonicaKey   = useAppStore(selectKey);
   const harmonicaType  = useAppStore(selectHarmonicaType);
   const reorderNotes = useAppStore((s) => s.reorderNotes);
@@ -67,6 +73,7 @@ export default function EditScreen() {
   const redo         = useAppStore((s) => s.redo);
   const bpm               = useAppStore(selectBpm);
   const setBpm            = useAppStore((s) => s.setBpm);
+  const applyDetectedTempo = useAppStore((s) => s.applyDetectedTempo);
   const metronomeEnabled  = useAppStore(selectMetronomeEnabled);
   const setMetronomeEnabled = useAppStore((s) => s.setMetronomeEnabled);
   const recordingTitle    = useAppStore(selectRecordingTitle);
@@ -104,6 +111,8 @@ export default function EditScreen() {
   // it's a "give me room right now" gesture (the piano roll wants every pixel of width it
   // can get), not a durable preference about how the app should look.
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  /** What the last tempo detection found, shown beside the button until the notes change. */
+  const [detectResult, setDetectResult] = useState<string | null>(null);
   // Lives in the shared store (not local state) so the web TopBar — rendered in the
   // root layout, outside this screen's tree — can show and drive the same toggle next
   // to the app title.
@@ -165,17 +174,46 @@ export default function EditScreen() {
           onSelect={handleSelect}
           onDelete={deleteNote}
           onUpdate={updateNote}
-          // Reordering is switched off while the noise gate hides anything — see the
+          // Reordering is switched off while either filter hides anything — see the
           // onDragEnd handler below for why it can't be made to work on a partial list.
-          draggable={noiseGate <= 0}
+          draggable={!anyFilterActive}
           drag={drag}
           isActive={isActive}
           isPlayingNow={playingNoteId === item.id}
         />
       </ScaleDecorator>
     ),
-    [deleteNote, updateNote, selectedId, playingNoteId, noiseGate],
+    [deleteNote, updateNote, selectedId, playingNoteId, anyFilterActive],
   );
+
+  /**
+   * Read the tempo back off the performance.
+   *
+   * Runs on `audibleNotes`, not the full set: the filters exist to take the tracker's
+   * spurious blips off the roll, and those land off-grid by definition — scoring them would
+   * pull the confidence down on a take that is perfectly steady.
+   *
+   * The result is stated rather than applied silently. A tempo change moves every bar line
+   * under the user's notes, and a message naming the number is what makes that legible as
+   * something that just happened rather than something that broke.
+   */
+  function handleDetectTempo() {
+    const estimate = detectTempo(audibleNotes);
+    if (!estimate) {
+      setDetectResult('Not enough notes to read a tempo yet.');
+      return;
+    }
+    applyDetectedTempo(estimate.bpm, estimate.offsetMs);
+    const feel = estimate.feel === 'triplet' ? ' · shuffle feel, try the 1/8T grid' : '';
+    // Named as an estimate when it's a weak one, so a low-confidence guess isn't presented
+    // with the same certainty as a solid read of a steady take.
+    const hedge = estimate.confidence >= TEMPO_CONFIDENCE_GOOD ? '' : ' (rough — timing is loose)';
+    setDetectResult(`${estimate.bpm} BPM${hedge}${feel}`);
+  }
+
+  // The message describes a specific set of notes; once those change it's describing
+  // something that is no longer on screen.
+  useEffect(() => { setDetectResult(null); }, [tabNotes]);
 
   function handleAddNote() {
     const existing = useAppStore.getState().tabNotes;
@@ -397,8 +435,8 @@ export default function EditScreen() {
                     keyExtractor={(item) => item.id}
                     renderItem={renderItem}
                     onDragEnd={({ data }) => {
-                      // Refuses to run on a gated list, and `draggable` above already keeps
-                      // it from being reachable — this is the backstop.
+                      // Refuses to run on a filtered list, and `draggable` above already
+                      // keeps it from being reachable — this is the backstop.
                       //
                       // `reorderNotes` replaces the entire array, and this handler also
                       // re-times every note into one contiguous run. Handed a filtered
@@ -406,7 +444,7 @@ export default function EditScreen() {
                       // timeline onto the survivors. It can't be fixed by merging the
                       // hidden notes back in either: contiguous re-timing has no meaning
                       // when some of the run isn't on screen — there's nowhere to put them.
-                      if (noiseGate > 0) return;
+                      if (anyFilterActive) return;
                       let cursor = 0;
                       reorderNotes(data.map(note => {
                         const updated = { ...note, start_time: cursor };
@@ -467,6 +505,20 @@ export default function EditScreen() {
                       totalCount,
                       source: velocitySource,
                     } : undefined}
+                    // Its sibling in the Duration chart, hiding notes shorter than the line —
+                    // the tracker's and the neural engine's spurious blips, which the gate
+                    // can't reach because a ghost note inside a loud phrase is loud.
+                    //
+                    // Unconditional, unlike the gate: every note has a duration, so there's
+                    // no "nothing to threshold" case to withhold it for. `audibleCount` is
+                    // the count after *both* lines, which is what each readout reports.
+                    durationFilter={{
+                      value: durationFloorMs,
+                      onChange: setDurationFloorMs,
+                      allNotes: tabNotes,
+                      audibleCount,
+                      totalCount,
+                    }}
                   />
                 )}
               </View>
@@ -476,7 +528,6 @@ export default function EditScreen() {
           <WebToolbar
             tabNotesLength={tabNotes.length}
             viewMode={viewMode}
-            harmonicaKey={harmonicaKey}
             canUndo={canUndo}
             onUndo={undo}
             canRedo={canRedo}
@@ -597,7 +648,7 @@ export default function EditScreen() {
                 </View>
                 <View style={styles.bpmControl}>
                   <Pressable
-                    onPress={() => setBpm(bpm - 5)}
+                    onPress={() => setBpm(bpm - 1)}
                     style={styles.bpmStepBtn}
                     accessibilityRole="button"
                     accessibilityLabel="Decrease tempo"
@@ -606,7 +657,7 @@ export default function EditScreen() {
                   </Pressable>
                   <Text style={styles.bpmValue}>{bpm} BPM</Text>
                   <Pressable
-                    onPress={() => setBpm(bpm + 5)}
+                    onPress={() => setBpm(bpm + 1)}
                     style={styles.bpmStepBtn}
                     accessibilityRole="button"
                     accessibilityLabel="Increase tempo"
@@ -614,6 +665,24 @@ export default function EditScreen() {
                     <Ionicons name="add" size={14} color={theme.textSub} />
                   </Pressable>
                 </View>
+
+                {/* Reads the tempo back off the notes, instead of asking the user to find it
+                    with the +/- buttons. Note the two do opposite things and both are right:
+                    +/- re-times the tab to a tempo you choose, this moves the grid onto a
+                    tempo you already played. */}
+                <Pressable
+                  onPress={handleDetectTempo}
+                  style={styles.detectBtn}
+                  accessibilityRole="button"
+                  accessibilityLabel="Detect tempo from the notes"
+                >
+                  <Ionicons name="speedometer-outline" size={14} color={theme.textSub} />
+                  <Text style={styles.detectBtnText}>Detect</Text>
+                </Pressable>
+
+                {detectResult !== null && (
+                  <Text style={styles.detectResult} numberOfLines={1}>{detectResult}</Text>
+                )}
                 <Pressable
                   onPress={handleToggleMetronome}
                   style={[styles.metronomeBtn, metronomeEnabled && styles.metronomeBtnActive]}
@@ -854,123 +923,142 @@ export default function EditScreen() {
 // native still uses.
 
 
-// The "12-Chromatic · Key C" badge, made interactive — click to open a dropdown with a
-// Diatonic/Chromatic toggle and the same KeyGrid used at onboarding. Self-contained
-// (reads key/type/notes straight from the store) so it can drop into the web toolbar
-// without threading more props through WebToolbar than it already has.
+// The sidebar's KEY & TYPE section: a Transpose/Translate mode toggle, a
+// Diatonic/Chromatic toggle, and the same KeyGrid used at onboarding. Self-contained
+// (reads key/type/notes straight from the store) so the sidebar doesn't have to thread
+// any of it through as props.
 //
-// Key change (transposeToKey) is always safe — tab notation is key-independent, so no
-// note can ever become unplayable from it — and applies the moment you tap a key, no
-// confirmation needed. Type change (changeHarmonicaType) is the opposite: diatonic and
-// chromatic don't share a tab vocabulary, so a note's *pitch* has to be re-matched
-// against the new type's layout, which can leave notes unplayable. That only warns
-// first when it would actually cost something (diatonic → chromatic never does, since
-// chromatic is a strict superset) — computed here via the same noteToTab check
-// changeHarmonicaType itself uses internally, just read-only ahead of time.
-// variant='inline' is the list view sidebar's permanently-visible form — same
-// selection handlers and unplayable-note confirmation as the dropdown, but rendered
-// as an always-open type toggle + KeyGrid (onAccent) instead of a badge/chevron
-// trigger, matching how the Home screen's own sidebar shows its key/type picker.
-function KeyTypeControl({ theme, styles, variant = 'dropdown' }: { theme: Theme; styles: EditStyles; variant?: 'dropdown' | 'inline' }) {
+// The mode decides what a key tap preserves, and the two answers are both correct for
+// different players:
+//
+//   Transpose (transposeToKey) keeps the TABS and lets the music move — the same holes
+//   played on a different harp, which is physically what happens when you pick one up.
+//   Always safe: tab notation doesn't depend on key, so nothing can become unplayable.
+//
+//   Translate (translateToKey) keeps the MUSIC and rewrites the tabs — the song as
+//   recorded, re-fingered for the harp you actually own. This is the "I only have a C
+//   and this song wants a G" path. It can strand notes, because harps of different keys
+//   sit at different heights and the piece may run past the new one's range.
+//
+// Type change (changeHarmonicaType) is pitch-preserving by nature — diatonic and chromatic
+// don't share a tab vocabulary, so there's no tab to keep — which makes it the same shape
+// as Translate, and it warns the same way.
+//
+// Both warning paths run the same read-only noteToTab check the store actions use
+// internally, and both skip the confirmation entirely when nothing would be lost
+// (diatonic → chromatic never loses anything, chromatic being a strict superset).
+//
+// Mode is deliberately local, session-only state, defaulting to Transpose: it's a
+// modifier on the next key tap rather than a property of the instrument, so it shouldn't
+// outlive the visit and shouldn't quietly change what a tap does days later.
+type KeyChangeMode = 'transpose' | 'translate';
+
+const KEY_MODE_HINT: Record<KeyChangeMode, string> = {
+  transpose: 'Same tabs — the music changes key',
+  translate: 'Same music — the tabs change',
+};
+
+function KeyTypeControl({ styles }: { styles: EditStyles }) {
   const harmonicaKey  = useAppStore(selectKey);
   const harmonicaType = useAppStore(selectHarmonicaType);
   const tabNotes      = useAppStore(selectTabNotes);
   const transposeToKey = useAppStore((s) => s.transposeToKey);
+  const translateToKey = useAppStore((s) => s.translateToKey);
   const changeHarmonicaType = useAppStore((s) => s.changeHarmonicaType);
 
-  const [open, setOpen] = useState(false);
-  const [pendingType, setPendingType] = useState<{ type: HarmonicaType; count: number } | null>(null);
+  const [keyMode, setKeyMode] = useState<KeyChangeMode>('transpose');
+  // One pending slot for both confirmations — they render the identical sheet and differ
+  // only in wording and what they apply.
+  const [pending, setPending] = useState<{ title: string; confirmLabel: string; apply: () => void } | null>(null);
 
   if (!harmonicaKey) return null;
 
+  /** Notes with no position on the given harp — the cost of a pitch-preserving change. */
+  function strandedCount(key: HarmonicaKey, type: HarmonicaType): number {
+    return tabNotes.filter((n) => noteToTab(n.note, key, type) === null).length;
+  }
+
   function handleSelectKey(key: HarmonicaKey) {
-    transposeToKey(key);
-    setOpen(false);
+    if (key === harmonicaKey) return;
+    if (keyMode === 'transpose') {
+      transposeToKey(key);
+      return;
+    }
+    const count = strandedCount(key, harmonicaType);
+    if (count === 0) {
+      translateToKey(key);
+      return;
+    }
+    setPending({
+      title: `Translating to ${key} will leave ${count} note${count !== 1 ? 's' : ''} outside the harmonica’s range`,
+      confirmLabel: 'Translate Anyway',
+      apply: () => translateToKey(key),
+    });
   }
 
   function handleSelectType(type: HarmonicaType) {
     if (type === harmonicaType) return;
-    const count = tabNotes.filter((n) => noteToTab(n.note, harmonicaKey!, type) === null).length;
+    const count = strandedCount(harmonicaKey!, type);
     if (count === 0) {
       changeHarmonicaType(type);
-      setOpen(false);
       return;
     }
-    setPendingType({ type, count });
-  }
-
-  const typeToggle = (
-    <View style={variant === 'inline' ? styles.sidebarTypeToggle : styles.keyDropdownTypeToggle}>
-      {(['diatonic', 'chromatic'] as const).map((type) => (
-        <Pressable
-          key={type}
-          onPress={() => handleSelectType(type)}
-          style={[
-            variant === 'inline' ? styles.sidebarTypeSeg : styles.keyDropdownTypeSeg,
-            harmonicaType === type && (variant === 'inline' ? styles.sidebarTypeSegActive : styles.keyDropdownTypeSegActive),
-          ]}
-          accessibilityRole="radio"
-          accessibilityState={{ checked: harmonicaType === type }}
-        >
-          <Text style={[
-            variant === 'inline' ? styles.sidebarTypeText : styles.keyDropdownTypeText,
-            harmonicaType === type && (variant === 'inline' ? styles.sidebarTypeTextActive : styles.keyDropdownTypeTextActive),
-          ]}>
-            {type === 'diatonic' ? 'Diatonic' : 'Chromatic'}
-          </Text>
-        </Pressable>
-      ))}
-    </View>
-  );
-
-  const confirmModal = (
-    <ActionSheetModal
-      visible={pendingType !== null}
-      title={pendingType ? `Switching to ${pendingType.type === 'chromatic' ? 'Chromatic' : 'Diatonic'} will make ${pendingType.count} note${pendingType.count !== 1 ? 's' : ''} unplayable` : undefined}
-      options={[{
-        label: 'Switch Anyway',
-        onPress: () => {
-          if (pendingType) changeHarmonicaType(pendingType.type);
-          setOpen(false);
-        },
-      }]}
-      onClose={() => setPendingType(null)}
-    />
-  );
-
-  if (variant === 'inline') {
-    return (
-      <View style={styles.sidebarKeyTypeGroup}>
-        {typeToggle}
-        <KeyGrid selected={harmonicaKey} onSelect={handleSelectKey} onAccent />
-        {confirmModal}
-      </View>
-    );
+    setPending({
+      title: `Switching to ${type === 'chromatic' ? 'Chromatic' : 'Diatonic'} will make ${count} note${count !== 1 ? 's' : ''} unplayable`,
+      confirmLabel: 'Switch Anyway',
+      apply: () => changeHarmonicaType(type),
+    });
   }
 
   return (
-    <View style={styles.keyControlAnchor}>
-      <Pressable
-        onPress={() => setOpen((v) => !v)}
-        style={styles.webKeyBadge}
-        accessibilityRole="button"
-        accessibilityLabel={`${harmonicaType === 'chromatic' ? '12-Chromatic' : 'Diatonic'}, Key ${harmonicaKey} — change key or type`}
-      >
-        <Text style={styles.webKeyBadgeText}>
-          {harmonicaType === 'chromatic' ? '12-Chromatic' : 'Diatonic'} · Key {harmonicaKey}
-        </Text>
-        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={11} color={theme.textSub} />
-      </Pressable>
+    <View style={styles.sidebarKeyTypeGroup}>
+      <View style={styles.sidebarTypeToggle}>
+        {(['transpose', 'translate'] as const).map((mode) => (
+          <Pressable
+            key={mode}
+            onPress={() => setKeyMode(mode)}
+            style={[styles.sidebarTypeSeg, keyMode === mode && styles.sidebarTypeSegActive]}
+            accessibilityRole="radio"
+            accessibilityState={{ checked: keyMode === mode }}
+            accessibilityHint={KEY_MODE_HINT[mode]}
+          >
+            <Text style={[styles.sidebarTypeText, keyMode === mode && styles.sidebarTypeTextActive]}>
+              {mode === 'transpose' ? 'Transpose' : 'Translate'}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+      {/* The toggle does nothing on its own — it only changes what the key grid below
+          does — so the consequence is spelled out rather than left to the two verbs. */}
+      <Text style={styles.sidebarKeyModeHint}>{KEY_MODE_HINT[keyMode]}</Text>
 
-      {open && (
-        <View style={styles.keyDropdown}>
-          {typeToggle}
-          <View style={styles.keyDropdownDivider} />
-          <KeyGrid selected={harmonicaKey} onSelect={handleSelectKey} />
-        </View>
-      )}
+      <View style={styles.sidebarTypeToggle}>
+        {(['diatonic', 'chromatic'] as const).map((type) => (
+          <Pressable
+            key={type}
+            onPress={() => handleSelectType(type)}
+            style={[styles.sidebarTypeSeg, harmonicaType === type && styles.sidebarTypeSegActive]}
+            accessibilityRole="radio"
+            accessibilityState={{ checked: harmonicaType === type }}
+          >
+            <Text style={[styles.sidebarTypeText, harmonicaType === type && styles.sidebarTypeTextActive]}>
+              {type === 'diatonic' ? 'Diatonic' : 'Chromatic'}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
 
-      {confirmModal}
+      <KeyGrid selected={harmonicaKey} onSelect={handleSelectKey} onAccent />
+
+      <ActionSheetModal
+        visible={pending !== null}
+        title={pending?.title}
+        options={[{
+          label: pending?.confirmLabel ?? 'Continue',
+          onPress: () => pending?.apply(),
+        }]}
+        onClose={() => setPending(null)}
+      />
     </View>
   );
 }
@@ -1450,7 +1538,7 @@ function EditSidebar({
       ) : (
         <View style={styles.sidebarSection}>
           <Text style={styles.sidebarSectionLabel}>KEY & TYPE</Text>
-          <KeyTypeControl theme={theme} styles={styles} variant="inline" />
+          <KeyTypeControl styles={styles} />
         </View>
       )}
 
@@ -1635,12 +1723,11 @@ function EditSidebar({
 }
 
 function WebToolbar({
-  tabNotesLength, viewMode, harmonicaKey,
+  tabNotesLength, viewMode,
   canUndo, onUndo, canRedo, onRedo, justSaved, onSave, onInspectFrames, onNew, onAdd, theme, styles,
 }: {
   tabNotesLength: number;
   viewMode: 'list' | 'pianoRoll';
-  harmonicaKey: HarmonicaKey | null;
   canUndo: boolean;
   onUndo: () => void;
   canRedo: boolean;
@@ -1666,8 +1753,6 @@ function WebToolbar({
             <Text style={styles.webNoteCount}>{tabNotesLength} note{tabNotesLength !== 1 ? 's' : ''}</Text>
           </>
         )}
-
-        {tabNotesLength > 0 && harmonicaKey && <KeyTypeControl theme={theme} styles={styles} />}
       </View>
 
       {/* Edit + Actions + Export cluster */}

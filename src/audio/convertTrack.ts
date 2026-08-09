@@ -83,7 +83,7 @@ function fitTrackNotes(
  * picker over an empty list.
  */
 export function rankKeysForTrack(
-  track: Pick<MidiTrackData, 'notes' | 'velocityFloor'>,
+  track: Pick<MidiTrackData, 'notes' | 'velocityFloor' | 'durationFloorMs'>,
   harmonicaType: HarmonicaType,
 ): MidiKeyRanking | null {
   // The filtered set, matching what `convertTrackToRecording` will actually convert — a
@@ -105,9 +105,9 @@ export function convertTrackToRecording(
 ): ConversionResult | null {
   const harmonicaType = options.harmonicaType ?? 'diatonic';
 
-  // The track's velocity floor is applied here, at the boundary out of the Studio: a note
-  // hidden in the roll and silent in playback would be a surprise to find in the tab. The
-  // project keeps it either way, so lowering the line and re-converting brings it back.
+  // The track's floors are applied here, at the boundary out of the Studio: a note hidden
+  // in the roll and silent in playback would be a surprise to find in the tab. The project
+  // keeps it either way, so lowering a line and re-converting brings it back.
   const fit = fitTrackNotes(trackAudibleNotes(track));
   if (!fit) return null;
   const { notes: fitted, octaveShiftSemitones } = fit;

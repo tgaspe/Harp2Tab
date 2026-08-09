@@ -14,6 +14,7 @@
  */
 
 import { midiToNoteName, noteNameToMidi } from './HarmonicaMapper';
+import { passesDurationFloor } from './duration';
 import { passesVelocityFloor } from './velocity';
 import type { MidiNote, MidiTrackData, TabNote } from '@/types';
 
@@ -74,21 +75,23 @@ const tabNoteCache = new WeakMap<MidiTrackData, TabNote[]>();
 const visibleCache = new WeakMap<MidiTrackData, TabNote[]>();
 
 /**
- * A track's notes as its velocity floor leaves them — what the roll draws, what plays.
+ * A track's notes as its floors leave them — what the roll draws, what plays.
  *
- * The floor is applied *after* adaptation, never before: a note's id is its index in the
+ * The floors are applied *after* adaptation, never before: a note's id is its index in the
  * track's array, so filtering first would renumber every surviving note and send edits made
- * while the filter is up to the wrong ones.
+ * while a filter is up to the wrong ones.
  */
 export function visibleTrackNotes(track: MidiTrackData): TabNote[] {
   const cached = visibleCache.get(track);
   if (cached) return cached;
 
-  const all   = trackToTabNotes(track);
-  const floor = track.velocityFloor ?? 0;
-  const visible = floor <= 0
+  const all           = trackToTabNotes(track);
+  const floor         = track.velocityFloor ?? 0;
+  const durationFloor = track.durationFloorMs ?? 0;
+  const visible = floor <= 0 && durationFloor <= 0
     ? all
-    : all.filter((n) => passesVelocityFloor(n.velocity, floor));
+    : all.filter((n) =>
+        passesVelocityFloor(n.velocity, floor) && passesDurationFloor(n.duration, durationFloor));
   visibleCache.set(track, visible);
   return visible;
 }

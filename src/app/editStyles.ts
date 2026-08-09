@@ -250,6 +250,16 @@ export function createStyles(t: Theme) {
     // accentDeep, not accent: this label sits on the solid white pill above, where
     // plain accent is only 2.2:1 and the active segment ends up the *less* legible one.
     sidebarTypeTextActive: { color: t.accentDeep },
+    // Sits under the Transpose/Translate toggle, on the accent sidebar. Dimmer than the
+    // segment labels (0.8 white rather than full) because it's a consequence, not a
+    // control — but the gap between the two toggles keeps it clearly attached to the one
+    // above rather than reading as a label for Diatonic/Chromatic below.
+    sidebarKeyModeHint: {
+      fontSize:   FONT.xs,
+      fontFamily: Poppins.regular,
+      color:      'rgba(255,255,255,0.8)',
+      marginTop:  -4,
+    },
 
     // Sidebar action rows (Save / New Recording / Inspect Frames / Export trigger) —
     // same translucent-pill pattern as Home's sidebarRow, so all four read as one
@@ -426,6 +436,25 @@ export function createStyles(t: Theme) {
       textAlign:   'center',
       fontVariant: ['tabular-nums'],
     },
+    // Sized and skinned like the metronome toggle beside it, since both are icon actions
+    // hanging off the BPM readout — but it's a momentary action, not a state, so it has no
+    // "active" variant.
+    detectBtn: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      gap:               4,
+      height:            32,
+      borderRadius:      8,
+      paddingHorizontal: 9,
+      backgroundColor:   t.surface,
+      borderWidth:       1,
+      borderColor:       t.border,
+    },
+    detectBtnText: { fontSize: FONT.xs, fontFamily: Poppins.semiBold, color: t.textSub },
+    // Replaces the row's controls' usual quiet for a moment after a detection, then goes.
+    // Inline rather than a toast because it's an answer to a button two inches away.
+    detectResult: { fontSize: FONT.xs, fontFamily: Poppins.regular, color: t.textMuted, flexShrink: 1 },
+
     metronomeBtn: {
       width:            32,
       height:           32,
@@ -578,35 +607,11 @@ export function createStyles(t: Theme) {
 
     webNoteCount: { fontSize: 12, fontFamily: Poppins.regular, color: t.textMuted },
 
-    keyControlAnchor: { position: 'relative' },
-    webKeyBadge: {
-      flexDirection:     'row',
-      alignItems:        'center',
-      gap:               4,
-      backgroundColor:   t.surface,
-      borderRadius:      6,
-      borderWidth:       1,
-      borderColor:       t.border,
-      paddingHorizontal: 8,
-      paddingVertical:   4,
-      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
-    } as any,
-    webKeyBadgeText: { fontSize: 11, fontFamily: Poppins.semiBold, color: t.textSub },
-    keyDropdown: {
-      position: 'absolute',
-      top: '100%',
-      left: 0,
-      marginTop: 6,
-      width: 260,
-      backgroundColor: t.bg,
-      borderRadius: 10,
-      borderWidth: 1,
-      borderColor: t.border,
-      padding: 10,
-      gap: 10,
-      zIndex: 20,
-      ...(Platform.OS === 'web' ? { boxShadow: t.isDark ? '0 8px 24px rgba(0,0,0,0.4)' : '0 8px 24px rgba(0,0,0,0.15)' } : null),
-    } as any,
+    // The key/type picker lives only in the sidebar (see KeyTypeControl). The toolbar badge
+    // that used to open it as a dropdown was unreachable — WebToolbar renders only when the
+    // sidebar doesn't, i.e. when there are no notes, and the badge required notes — so it
+    // and its styles are gone. The keyDropdown* names below survive because the New
+    // Recording modal still uses them for its own key/type picker.
     keyDropdownTypeToggle: {
       flexDirection: 'row',
       backgroundColor: t.surface,

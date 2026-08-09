@@ -37,6 +37,7 @@ import {
   type MidiNote,
   type ParsedMidi,
 } from '@/audio/midiToNotes';
+import { detectTempo } from '@/audio/detectTempo';
 import {
   notesToTabs,
   rankKeysForMidi,
@@ -344,8 +345,22 @@ export default function ImportScreen() {
       return;
     }
 
+    // Read the tempo off the transcription instead of taking the 120 default. Without this
+    // every uploaded song opened the Studio at exactly 120 BPM — not a display quirk, the
+    // project genuinely carried it, so the bar ruler bore no relation to the performance.
+    //
+    // Applied whatever the confidence, because the alternative is not a better number — it's
+    // a hard-coded 120 that predates the audio. Even a loose reading of the actual onsets
+    // beats a constant, and the Studio's BPM stepper is right there to correct it.
+    //
+    // BPM only, deliberately — `estimate.offsetMs` is not applied here as it is in the tab
+    // editor. Shifting the notes would slide them out of registration with the frames parked
+    // under this project id just below, which the pitch lane and Frame Inspector read at
+    // their original times. So the grid gets the right spacing but keeps bar 1 at ms 0.
+    const estimate = detectTempo(notes.map((n) => ({ start_time: n.timeMs })));
     const project = projectFromMidiNotes(notes, title || 'Untitled project', {
       velocitySource: output.kind === 'frames' ? 'takeRelativeRms' : 'modelActivation',
+      bpm: estimate?.bpm,
     });
 
     // Parked under the *project* id, because this session has no recording id yet —

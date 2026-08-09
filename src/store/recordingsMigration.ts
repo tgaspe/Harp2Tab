@@ -10,8 +10,9 @@
 import type { RecordingSource, TabNote, TabRecording, VelocitySource } from '@/types';
 
 /** Bumped when the persisted shape changes. v1 renamed `TabNote.breathForce` → `velocity`
- *  and added `velocitySource`. Payloads written before versioning existed arrive as 0. */
-export const RECORDINGS_SCHEMA_VERSION = 1;
+ *  and added `velocitySource`. v2 re-spelled the hole 8-10 blow bends. Payloads written
+ *  before versioning existed arrive as 0. */
+export const RECORDINGS_SCHEMA_VERSION = 2;
 
 /**
  * What a recording's velocities must have come from, given how the tab was made.
@@ -60,14 +61,37 @@ export function migrateRecordings(
         ...recording,
         tabNotes: notes.map((rawNote) => {
           const { breathForce, ...note } = rawNote as TabNote & { breathForce?: number };
+          const tab = fromVersion < 2 ? migrateBlowBendTab(note.tab) : note.tab;
           const velocity = note.velocity ?? breathForce;
           // No value means nothing to attribute — a source tag on an absent velocity would
           // claim a measurement that was never taken.
           return velocity === undefined
-            ? note
-            : { ...note, velocity, velocitySource: note.velocitySource ?? inferred };
+            ? { ...note, tab }
+            : { ...note, tab, velocity, velocitySource: note.velocitySource ?? inferred };
         }),
       };
     }) as TabRecording[],
   };
+}
+
+/**
+ * v1 → v2: the hole 8-10 blow bends were written with a draw prefix (`-8'`, `-9'`, `-10'`,
+ * `-10''`) even though they are blown, not drawn.
+ *
+ * The pitches were always right, so nothing sounded wrong and nothing was unplayable — the
+ * tab just told the player to inhale on a note they have to exhale. Left alone, a library
+ * built before this fix would keep instructing that forever, and the same chart would read
+ * differently depending on when it was made. Rewriting is safe because the mapping is
+ * one-directional: no correctly-spelled tab collides with one of these four.
+ */
+const BLOW_BEND_RESPELLINGS: Record<string, string> = {
+  "-8'":   "8'",
+  "-9'":   "9'",
+  "-10'":  "10'",
+  "-10''": "10''",
+};
+
+export function migrateBlowBendTab(tab: string | undefined): string {
+  if (!tab) return tab ?? '';
+  return BLOW_BEND_RESPELLINGS[tab] ?? tab;
 }

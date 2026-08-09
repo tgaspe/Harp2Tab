@@ -178,6 +178,8 @@ export default function StudioScreen() {
 
   /** The track's velocity floor — 0 when it has none, which is the off position. */
   const velocityFloor = selectedTrack?.velocityFloor ?? 0;
+  /** Its duration floor, in ms. Same convention: absent reads as 0/off. */
+  const durationFloorMs = selectedTrack?.durationFloorMs ?? 0;
 
   /** What the roll actually draws and lets you edit. */
   const visibleNotes = useMemo(
@@ -663,6 +665,19 @@ export default function StudioScreen() {
                 totalCount:   editableNotes.length,
                 source:       selectedTrack.velocitySource,
               } : undefined}
+              // The Duration chart's line, thresholding note length. Per track and saved with
+              // it, exactly like the velocity floor, and equally outside undo.
+              //
+              // No `supported` gate: velocity is optional on a MIDI note, duration never is,
+              // so this control always has something to act on. `audibleCount` is the count
+              // after both lines — `visibleTrackNotes` applies them together.
+              durationFilter={{
+                value:    durationFloorMs,
+                onChange: (v) => updateTrack(selectedTrack.id, { durationFloorMs: v }),
+                allNotes:     editableNotes,
+                audibleCount: visibleNotes.length,
+                totalCount:   editableNotes.length,
+              }}
               headerLeft={
                 <View style={styles.rollHeader}>
                   <Text style={styles.rollTitle} numberOfLines={1}>{project.title}</Text>

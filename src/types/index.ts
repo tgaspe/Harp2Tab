@@ -93,6 +93,14 @@ export interface TabRecording {
    *  not an edit, so a recording saved at gate 60 still carries every quiet note and can be
    *  slid back open later. */
   noiseGate?: number;
+  /** Duration-floor threshold in milliseconds: notes shorter than it are hidden from the
+   *  editor, playback and export. Optional — absent means off, like every recording saved
+   *  before this existed.
+   *
+   *  Non-destructive on exactly the same terms as `noiseGate`, and stored beside it rather
+   *  than folded into one "filters" object: they're independent lenses over the same notes,
+   *  and a flat field is what keeps the session snapshot a plain diffable record. */
+  durationFloorMs?: number;
   /** How this tab was created. Optional: absent means a recording saved before the field
    *  existed. Frame Inspector needs it to tell "no frames because this predates frame
    *  retention" from "no frames because a MIDI import never had audio at all". */
@@ -159,6 +167,18 @@ export interface MidiTrackData {
    * reason `velocitySource` does: SMF has nowhere to put it.
    */
   velocityFloor?: number;
+  /**
+   * The track's duration-floor line, in milliseconds. Notes shorter than it are hidden from
+   * the roll, silent in playback, and dropped from what the Studio exports — never deleted,
+   * on the same terms as `velocityFloor`.
+   *
+   * Per track for the same reason: what counts as too short to be a real note depends on the
+   * part. A 60 ms event is a ghost in a sustained pad and an ordinary hi-hat in a drum lane.
+   *
+   * Optional, and absent means 0/off. Rides in the `trackMeta` sidecar because SMF has
+   * nowhere to put it.
+   */
+  durationFloorMs?: number;
 }
 
 export interface MidiProject {

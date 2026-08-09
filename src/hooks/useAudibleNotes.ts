@@ -1,5 +1,5 @@
 /**
- * The session's notes as the noise gate leaves them.
+ * The session's notes as the roll's two filters leave them.
  *
  * Deliberately a hook rather than a plain zustand selector: `s.tabNotes.filter(...)` inside
  * a selector returns a fresh array identity on every store read, which zustand compares by
@@ -13,24 +13,37 @@
  */
 
 import { useMemo } from 'react';
+import { passesDurationFloor } from '@/audio/duration';
 import { noteVelocity, passesVelocityFloor } from '@/audio/velocity';
-import { selectNoiseGate, selectTabNotes, useAppStore } from '@/store/useAppStore';
+import { selectDurationFloorMs, selectNoiseGate, selectTabNotes, useAppStore } from '@/store/useAppStore';
 import type { TabNote, VelocitySource } from '@/types';
 
-/** A note with no stated dynamic is always audible — see `passesVelocityFloor` for why
- *  that rule is load-bearing, and why it's shared with the Studio rather than inlined. */
-export function isAudible(note: TabNote, gate: number): boolean {
-  return passesVelocityFloor(noteVelocity(note), gate);
+/**
+ * Does a note survive both floors?
+ *
+ * AND, not OR: each line states an independent reason a note isn't wanted, so clearing one
+ * bar doesn't excuse failing the other. A note with no stated dynamic is always past the
+ * gate — see `passesVelocityFloor` for why that rule is load-bearing, and why both
+ * predicates are shared with the Studio rather than inlined here.
+ */
+export function isAudible(note: TabNote, gate: number, durationFloorMs = 0): boolean {
+  return passesVelocityFloor(noteVelocity(note), gate)
+    && passesDurationFloor(note.duration, durationFloorMs);
 }
 
 export interface AudibleNotes {
-  /** The gated set — what to render, play and export. */
+  /** The filtered set — what to render, play and export. */
   notes:        TabNote[];
+  /** How many notes survive **both** floors, which is what each line's readout reports.
+   *  So dragging one line moves the other's count: the number answers "how much is on
+   *  screen", the only reading that never overstates what the user can see. */
   audibleCount: number;
   /** Every note in the session, hidden ones included. Shown next to the audible count so
    *  it's visible that hiding isn't deleting. */
   totalCount:   number;
   gate:         number;
+  /** The duration line's position, in ms. 0 is off. */
+  durationFloorMs: number;
   /**
    * Whether the gate can do anything here — true once any note carries a dynamic.
    *
@@ -51,16 +64,19 @@ export interface AudibleNotes {
 }
 
 export function useAudibleNotes(): AudibleNotes {
-  const allNotes = useAppStore(selectTabNotes);
-  const gate     = useAppStore(selectNoiseGate);
+  const allNotes        = useAppStore(selectTabNotes);
+  const gate            = useAppStore(selectNoiseGate);
+  const durationFloorMs = useAppStore(selectDurationFloorMs);
 
   return useMemo(() => {
-    // The overwhelmingly common case is gate 0, where filtering would allocate a copy of
-    // the whole array on every render to produce exactly the same contents.
-    const notes = gate <= 0 ? allNotes : allNotes.filter((n) => isAudible(n, gate));
+    // The overwhelmingly common case is both floors off, where filtering would allocate a
+    // copy of the whole array on every render to produce exactly the same contents.
+    const notes = gate <= 0 && durationFloorMs <= 0
+      ? allNotes
+      : allNotes.filter((n) => isAudible(n, gate, durationFloorMs));
 
-    // Walked over the full set, not the gated one, so the label doesn't change as the user
-    // drags the slider past the last note of one source.
+    // Walked over the full set, not the filtered one, so the label doesn't change as the
+    // user drags a line past the last note of one source.
     let source: VelocitySource | 'mixed' | undefined;
     for (const n of allNotes) {
       if (n.velocitySource === undefined) continue;
@@ -73,8 +89,9 @@ export function useAudibleNotes(): AudibleNotes {
       audibleCount: notes.length,
       totalCount:   allNotes.length,
       gate,
+      durationFloorMs,
       supported:    allNotes.some((n) => noteVelocity(n) !== undefined),
       source,
     };
-  }, [allNotes, gate]);
+  }, [allNotes, gate, durationFloorMs]);
 }
