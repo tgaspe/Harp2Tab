@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePlayback } from '@/hooks/usePlayback';
 import { PLAYBACK_RATES, barDurationMs, type TempoMap } from '@/audio/tempo';
 import type { TabNote } from '@/types';
@@ -20,11 +20,23 @@ import type { TabNote } from '@/types';
  *     the region's own top.
  *   - The metronome click track is baked into the audio graph at `play()` time, so toggling
  *     it mid-playback changed a flag and nothing audible.
+ *   - So is every *note*, for the same reason (see the rescheduling block below), so editing
+ *     the roll while it played changed the picture and not the sound until a stop/start.
  *
  * Owning the loop region here too (rather than as a `useState` in each screen) is what makes
  * that possible: every one of those rules needs it, and a hook that has to be handed the
  * region by its caller can't guarantee the caller passes it to `play()` as well.
  */
+
+/**
+ * How long note edits must settle before playback is rebuilt around them.
+ *
+ * Edits arrive in bursts: a note drag commits once on release, but the velocity-threshold
+ * line writes on every step it crosses, and each rebuild tears the whole audio graph down
+ * and re-schedules it (on native, it re-renders the entire sequence to a WAV). Long enough
+ * to collapse a burst into one rebuild, short enough that an edit still reads as immediate.
+ */
+const RESCHEDULE_DEBOUNCE_MS = 120;
 
 export interface LoopRegion { startMs: number; endMs: number }
 
@@ -68,10 +80,20 @@ export function useRollTransport({
   );
   const totalMs = totalTimeMs ?? derivedTotalMs;
 
+  /** Set when notes change while paused. Pause only *suspends* the engine, so it is still
+   *  holding the pre-edit schedule and `resume()` would unsuspend exactly that. Rebuilding
+   *  right away would be wrong too — the user paused, so nothing should sound until they
+   *  press play — hence a flag the next play press consumes. This can't ride on
+   *  `usePlayback`'s own `pendingReseekRef`: that path rebuilds from the note list
+   *  `usePlayback` captured at `play()` time, which is the stale copy being replaced. */
+  const staleWhilePausedRef = useRef(false);
+
   /** One `play()` call site, so no rule can forget the loop region or the tempo map.
    *  `metronome` is an override for the toggle below, which has to restart with the *new*
    *  value before React has re-rendered with it. */
   const restart = useCallback((atMs: number, metronome = metronomeEnabled) => {
+    // Whatever was scheduled is gone; these notes are what the engine now holds.
+    staleWhilePausedRef.current = false;
     play(
       notes,
       { bpm, metronomeEnabled: metronome, rate: playbackRate, tempoMap },
@@ -79,6 +101,51 @@ export function useRollTransport({
       loopRegion ?? undefined,
     );
   }, [play, notes, bpm, metronomeEnabled, playbackRate, tempoMap, loopRegion]);
+
+  /* ── Rescheduling around live edits ────────────────────────────────────────────────────
+   * Both backends commit the entire sequence to the audio engine at `play()` time — web
+   * schedules every OscillatorNode up front, native pre-renders a WAV — so a note added,
+   * moved, resized, silenced or deleted mid-playback kept sounding the way it did when play
+   * was pressed. On screens whose whole purpose is editing, that meant a stop/start round
+   * trip to hear any change. Rebuilding from wherever the playhead currently is makes an
+   * edit audible on the next pass instead.
+   *
+   * Everything the effect below reads other than `notes` goes through a ref on purpose, so
+   * it stays keyed on `notes` alone: `currentTimeMs` in particular re-renders every
+   * animation frame while playing, and depending on it would re-arm the debounce ~60×/sec
+   * and never let it fire. */
+  const restartRef     = useRef(restart);     restartRef.current     = restart;
+  const isPlayingRef   = useRef(isPlaying);   isPlayingRef.current   = isPlaying;
+  const isPausedRef    = useRef(isPaused);    isPausedRef.current    = isPaused;
+  const currentTimeRef = useRef(currentTimeMs); currentTimeRef.current = currentTimeMs;
+
+  const rescheduleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelReschedule = useCallback(() => {
+    if (rescheduleTimerRef.current) {
+      clearTimeout(rescheduleTimerRef.current);
+      rescheduleTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isPlayingRef.current) return;  // stopped — the next play() picks up these notes anyway
+    if (isPausedRef.current) { staleWhilePausedRef.current = true; return; }
+    // Every note deleted mid-playback: play() refuses an empty sequence, so a rebuild would
+    // leave the old audio running under a stuck transport. Nothing left to hear — stop.
+    if (notes.length === 0) { stop(); return; }
+
+    rescheduleTimerRef.current = setTimeout(() => {
+      rescheduleTimerRef.current = null;
+      // The transport can have moved on during the debounce window.
+      if (!isPlayingRef.current) return;
+      if (isPausedRef.current) { staleWhilePausedRef.current = true; return; }
+      restartRef.current(currentTimeRef.current);
+    }, RESCHEDULE_DEBOUNCE_MS);
+
+    // Runs before the next edit re-arms, and on unmount — a pending rebuild never outlives
+    // the state it was queued against.
+    return cancelReschedule;
+  }, [notes, stop, cancelReschedule]);
 
   const onPlayToggle = useCallback(() => {
     if (!isPlaying) {
@@ -88,7 +155,14 @@ export function useRollTransport({
       restart(loopRegion ? loopRegion.startMs : currentTimeMs);
       return;
     }
-    if (isPaused) { resume(); return; }
+    // Edited while paused — resume() would unsuspend the pre-edit schedule, so rebuild from
+    // the playhead instead. Same position either way, so this is invisible apart from the
+    // edit being audible.
+    if (isPaused) {
+      if (staleWhilePausedRef.current) restart(currentTimeMs);
+      else resume();
+      return;
+    }
     pause();
   }, [isPlaying, isPaused, restart, loopRegion, currentTimeMs, resume, pause]);
 
@@ -107,6 +181,14 @@ export function useRollTransport({
     const barMs = barDurationMs(bpm);
     onSeek(Math.max(0, Math.min(totalMs, currentTimeMs + direction * barMs)));
   }, [bpm, onSeek, totalMs, currentTimeMs]);
+
+  // Drops any queued rebuild rather than relying on the timer's own guards to notice the
+  // transport went away — stop is the one control that means "nothing further should sound."
+  const onStop = useCallback(() => {
+    cancelReschedule();
+    staleWhilePausedRef.current = false;
+    stop();
+  }, [cancelReschedule, stop]);
 
   const onCycleRate = useCallback(() => {
     const i = PLAYBACK_RATES.indexOf(playbackRate as (typeof PLAYBACK_RATES)[number]);
@@ -127,7 +209,7 @@ export function useRollTransport({
     isPlaying, isPaused, currentTimeMs, totalTimeMs: totalMs,
     loopRegion, setLoopRegion,
     onPlayToggle, onSeek, onSkipBar, onCycleRate, onToggleMetronome,
-    onStop: stop,
+    onStop,
     loopEnabled, setLoopEnabled, playbackRate,
   };
 }

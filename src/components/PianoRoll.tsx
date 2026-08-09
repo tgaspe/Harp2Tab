@@ -2162,6 +2162,26 @@ export function PianoRoll({
             </Pressable>
           ))}
 
+          {/* At rest the filter is a grey hairline lying on the chart's floor with a grey knob
+              at one end — which reads as the chart's bottom border, not as a control, so the
+              feature is invisible until someone drags something they had no reason to think
+              was draggable. This names it. It takes Reset's slot rather than a row of its own:
+              the two are mutually exclusive states of the same control (hint while idle, Reset
+              once it's biting), so the strip never changes height or reflows between them —
+              which a second row would have, the panel's expanded height being a constant.
+              Shrinkable and clipped to one line, so a narrow viewport eats the hint rather than
+              pushing the collapse chevron off the edge. Not shown while collapsed: there's no
+              line on screen to drag. */}
+          {metricTab === 'velocity' && velocityFilter && velocityFilter.value === 0
+            && metricHasData && !panelCollapsed && (
+            <View style={styles.velocityFloorHint} pointerEvents="none">
+              <Ionicons name="swap-vertical" size={10} color={theme.textMuted} />
+              <Text style={styles.velocityFloorHintText} numberOfLines={1}>
+                Drag the line at the bottom up to hide quiet notes
+              </Text>
+            </View>
+          )}
+
           {/* Reset lives up here rather than beside the line, because down in the chart it
               would have to share the right edge with the line's own readout and collide with
               it at every low threshold — exactly where a user who overshot needs it. Only
@@ -4131,6 +4151,22 @@ function createStyles(t: Theme) {
       fontSize: 9,
       color: t.textMuted,
       opacity: 0.8,
+    },
+    // Deliberately unlike the Reset chip it shares a slot with: no border, no background, no
+    // pointer cursor. Same position, but it has to read as a caption rather than as a button
+    // the user is being asked to press.
+    velocityFloorHint: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 3,
+      flexShrink: 1,
+      marginLeft: 2,
+    },
+    velocityFloorHintText: {
+      fontFamily: Poppins.regular,
+      fontSize: 9,
+      color: t.textMuted,
+      flexShrink: 1,
     },
     // In the tab strip, immediately after the metric tabs — laid out in flow, so it doesn't
     // disturb the chevron's `marginLeft: 'auto'` pin at the right edge.
