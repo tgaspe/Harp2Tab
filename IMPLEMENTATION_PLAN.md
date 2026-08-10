@@ -1,7 +1,7 @@
 # Harp2Tab — Full Roadmap Implementation Plan
 
-> Status as of 2026-08-01: Phases 0–6 are implemented on `web_version`. Phases 7+ are
-> still just this plan — not started.
+> Status as of 2026-08-09: Phases 0–6 and 11 are implemented on `web_version`. Phases 7–10
+> and 12 are still just this plan — not started.
 >
 > - [x] Phase 0 — Recording-session foundation
 > - [x] Phase 1 — Home-as-library + recording history
@@ -19,6 +19,13 @@
 >       (11-6), which is blocked on a product decision — see below.
 >       Harnesses: `verify-midi-studio.ts` (65 cases), `verify-export.ts` (16),
 >       `perf-studio-lanes.ts` (the 11-4 spike). Existing suites still green.
+> - [ ] Phase 12 — UX pass: home naming/sidebar, landing page + SEO, profile page,
+>       calibration timing, MIDI Studio fixes, first-run tutorials (added 2026-08-09).
+>       Not dependent on 7–10 except 12-3's pricing (Phase 8) and 12-4 (Phase 7).
+> - [ ] Phase 13 — Record → transcribe → Studio: retain the take's PCM, pick an engine and
+>       tune its params after Finish, land in the Studio as a draft (added 2026-08-10).
+>       Independent of 7–10. Carries one monetization decision (where the free-tier session
+>       is consumed) — see Decisions under the phase.
 >
 > **Phase 11 — what shipped, against what was planned**
 > - 11-1…11-5, 11-8…11-10 complete. End-to-end: import MIDI → Open in Studio → edit →
@@ -757,6 +764,814 @@ Nearly free once multi-voice mixing exists (11-4) — `synthesizeWav` is already
 5. Track layer + per-track instruments (11-4).
 6. Conversion boundary (11-5) — first end-to-end shippable milestone.
 7. Control lanes (11-6), arrange view (11-7), quantize (11-8), blank projects (11-9), multi-track export (11-10).
+
+## Phase 12 — UX pass: naming, first-run, landing page, Studio fixes
+Not a feature phase — a list of things that are built but wrong, plus the two surfaces the
+product still has no version of at all (a landing page and a profile page). Collected from
+the user's todo list of 2026-08-09. Ordered below by screen, not by dependency; the
+dependency-ordered build order is at the end of the phase.
+
+Every claim below was checked against the code on `web_version` at commit `335f332`.
+
+---
+
+# Phase 12 — Detailed implementation plan (written 2026-08-09)
+
+## 12-1 · Home — section naming and organization
+
+**What's there now.** Three different label conventions for two kinds of content
+(`src/app/index.tsx`):
+- `MIDI STUDIO · N PROJECTS` (`:790`) — named after the *editor*, not the content.
+- `YOUR LIBRARY · N RECORDINGS` (`:828`) — named after the *container*, and "recordings"
+  is wrong for two of the three ways a tab gets created (audio upload, MIDI import).
+- `RECENT RECORDINGS` (`:658`, `:927`) — the empty-state and native variants, a third name
+  for the same list.
+
+Nothing on the screen says the two sections hold different *kinds* of thing: one is
+unconstrained multi-track source material, the other is a finished harmonica line. That
+distinction is the whole point of Phase 11's conversion boundary, and the home screen is
+where it's least visible.
+
+**Change.** Name them by content and by stage:
+- `MIDI PROJECTS · N` with a one-line subtitle ("Multi-track source — convert a track to
+  tabs"), replacing `MIDI STUDIO · N PROJECTS`.
+- `HARMONICA TABS · N` replacing `YOUR LIBRARY · N RECORDINGS`, and the same word used in
+  the two empty states and the native `RECENT RECORDINGS` header, so the list has one name
+  everywhere.
+- Keep projects above tabs — the ordering rationale at `index.tsx:785-787` (source sits
+  upstream of result) still holds and is what the new names make legible.
+
+**Open question, not blocking:** the search / key-filter / sort / grid-list toolbar
+(`:827-883`) serves the tabs list only; projects render as a bare grid. Recommend leaving
+it that way until a realistic library has >12 projects — a second toolbar doubles the
+chrome for a section most users will have three rows of.
+
+## 12-2 · Home — the left sidebar
+
+### Stats get cut off at the bottom
+`fullSidebar` (`index.tsx:1299`) is a plain `View` inside `dashboardShell`
+(`flexDirection:'row', flex:1`, `:1293`). Only the library side scrolls
+(`dashboardMainScroll`, `:1312`) — this was deliberate, so the panel reads as a persistent
+app-shell rail. But the rail's own content is: section label + 4 action rows + the
+type/key picker + the free-tier counter + a divider + `YOUR STATS`. On a short viewport
+that overflows the panel's fixed height with no way to reach the overflow, and `YOUR
+STATS` is last, so it is exactly what disappears.
+
+**Fix.** Make the rail's content a `ScrollView` (the panel itself keeps its full-height
+background and right-edge hairline — scroll the contents, not the chrome). Two variants
+worth deciding between:
+- Whole rail scrolls. Simplest; stats reachable by scrolling.
+- Actions scroll, stats pinned to the bottom via a `flexGrow:1` spacer. Better if stats are
+  meant to be glanceable rather than sought out.
+
+Recommend the second: after the rewrite below, the stats are the panel's only
+non-actionable content, and a stat you have to scroll to isn't a dashboard.
+
+### The stats themselves are not worth the space
+Today: `Recordings` = `recordings.length` and `Notes Transcribed` = `totalNotes`
+(`:771-773`). The first number is already printed in the section header two feet to the
+right; the second is a number with no scale to read it against.
+
+**Change** to stats that answer a question, all computable from data `TabRecording`
+already carries (no new plumbing — `duration`, `key`, `createdAt`, `tabNotes` all exist):
+- Total time transcribed (sum of `duration`) — the honest "how much have I done" number.
+- Most-used key (mode of `key`) — actually useful; tells you which harp you reach for.
+- This week (count where `createdAt` is within 7 days) — the only number on the panel that
+  can change today, which is what makes a dashboard stat worth reading.
+
+Drop the raw recording count. Keep `StatTile`'s `layout="row" onAccent` shape (`:771`) —
+it's the styling, not the content, that works.
+
+### "New Project" button — name and icon
+`index.tsx:717-730` (sidebar) and `:433` (empty-state hero). Two problems: the label
+"New Project" doesn't say a project of *what*, sitting directly beneath "Upload Audio" and
+"Upload MIDI" which both say exactly what they take; and the icon is `options-outline`, a
+sliders/settings glyph that reads as "preferences", not "new multi-track document".
+
+**Change.** Label to **"New MIDI Project"** (matches the section rename in 12-1, and the
+existing `accessibilityLabel="New MIDI Studio project"` at `:724`, which should stay in
+sync). Icon to something that reads as layered tracks — `layers-outline` or
+`albums-outline`; `add-circle-outline` if the emphasis should be on *new* rather than on
+*multi-track*. Note `options-outline` is also the project card's icon (`:802`) and the
+Studio's identity elsewhere — change both or neither, so a project's glyph is the same in
+the button that creates it and the card that opens it.
+
+**Keep:** the button is deliberately not gated on a selected harmonica key (`:714-716`) —
+a blank project has no harp until conversion. Don't "fix" that while renaming.
+
+## 12-3 · Landing page — a surface that does not exist yet
+
+**Current state, verified.** There is no landing page and no marketing route: `/` is
+`KeySelectionScreen`, the app itself. `src/app/+html.tsx` is the only HTML shell and it
+sets *no* `<title>`, no meta description, no canonical, no Open Graph or Twitter tags — it
+exists purely to force non-overlay scrollbars. `public/` contains only `models/`. So
+there is no SEO surface to improve; this is a from-scratch build.
+
+### Routing decision (do this first — 12-5 depends on it)
+Recommend `/` becomes the landing page and the app moves to `/app`, because the SEO value
+belongs on the root URL and a marketing page behind a redirect earns nothing. Consequences
+to handle in the same change:
+- The first-launch `router.replace('/onboarding')` at `index.tsx:142-143` — being removed
+  in 12-5 anyway, so sequence these together.
+- `HIDDEN_ROUTES` in `src/components/TopBar.web.tsx:22` — the landing page needs its own
+  header (marketing nav, "Open the app" CTA), not the in-app `TopBar`.
+- Native must not get the landing page: on Android/iOS the app is the app. Gate by
+  `Platform.OS === 'web'`, or keep the landing at a web-only route file.
+- Every internal `router.push('/')` / `replace('/')` (onboarding's `finish`/`skip`,
+  `onboarding.tsx:219-228`; the logo's back-to-library affordance in the Studio) has to
+  point at the new app root.
+
+### Harmonica image
+No usable photo exists — `assets/images/` holds icons, logos, a splash, `tabIcons/`, and an
+unused `tutorial-web.png`. Needs a licensed photograph or a commissioned/rendered
+illustration. Ship it with explicit `width`/`height` (CLS is a ranking input, and this is
+the largest element above the fold), and export a `@2x`; a hero photo at full-bleed width
+is the heaviest asset on the page.
+
+### SEO
+All of this is new work:
+- Per-page `<title>`, meta description, canonical, OG + Twitter card tags. `+html.tsx` is
+  static and shared, so per-route metadata needs Expo Router's `Head` (or a post-export
+  step over `dist/`). **Check `https://docs.expo.dev/versions/v55.0.0/` before writing
+  any of it** — per project convention, and this specific API has moved between versions.
+- `public/robots.txt` and a `sitemap.xml` (`public/` is copied into the export).
+- JSON-LD `SoftwareApplication` with `offers` — the pricing table below is what makes it
+  eligible for rich results.
+- Real copy targeting real queries: "harmonica tabs from audio", "convert MIDI to
+  harmonica tab", "harmonica tab maker", "harmonica tab notation". Each entry point on the
+  home screen (record / upload audio / upload MIDI) is one of these queries — the landing
+  page's sections should mirror them rather than being generic feature bullets.
+- Static export means content is in the HTML at crawl time only if it renders without
+  interaction — keep the landing page free of client-only gating.
+
+### Subscription plans section
+Prices are already locked (`project_web_version_plan` memory, 2026-07-29): **$3.49/mo,
+$27.99/yr, $44.99 lifetime**. Nothing in code carries them — `src/app/paywall.tsx:36`
+reads `product.displayPrice` from the Play SKU, and `:60-61` says "one-time purchase · no
+subscription".
+
+**The conflict to resolve before writing the pricing table:** publishing subscription
+tiers on the landing page announces a model that Phase 8's billing (RevenueCat + Stripe)
+doesn't yet implement, while the live Android paywall promises the opposite. Options:
+1. Ship a static pricing table now with web plans marked "Coming soon" (+ email capture).
+   Recommended — the landing page needs a price to be a landing page, and JSON-LD `offers`
+   needs one too.
+2. Ship the landing page without pricing until Phase 8 lands. Safer, weaker page.
+
+Either way the table must state the grandfathering promise plainly ("bought Harp2Tab on
+Google Play? You keep lifetime access") — that promise was made to real paying users and
+the landing page is now the most public place it can be broken.
+
+**Dependency:** the actual purchase flow is Phase 8. The landing page can ship before it;
+the pricing *buttons* cannot do anything real until then.
+
+## 12-4 · Profile page — carried forward, still gated on Phase 7
+
+No profile route exists. `src/app/settings.tsx` is the only per-user surface (mic
+sensitivity, theme, recalibrate, rate, purchase state) and there is no identity in the app
+at all — no auth, no account, `isPurchased` is a local boolean in `harp2tab-settings`.
+
+A profile page is therefore **not buildable before Phase 7 (Firebase Auth)** in any form
+worth building: with no account it would be Settings with a different title.
+
+Once Phase 7 lands, the profile page is where these belong: account (email, provider,
+sign out), entitlement/subscription status and manage-billing link (Phase 8), and the
+per-user stats displaced from the home sidebar in 12-2 — they suit a profile page better
+than a rail.
+
+**Decision needed:** a separate `/profile` route, or a section at the top of Settings.
+Recommend a section in Settings until there is enough there to justify a route.
+
+## 12-5 · Calibration only before the first recording
+
+**What happens now.** `index.tsx:142-143` redirects to `/onboarding` on first launch,
+before the user has done anything. Consequences:
+- A user who only ever uploads a MIDI file is forced through microphone calibration.
+- On web it fires a **microphone permission prompt on first page load** — the single worst
+  time to ask, and something browsers actively penalize. It also collides with 12-3: an
+  SEO landing page whose first interaction is a mic prompt is not a landing page.
+- Calibration is the app's first impression instead of the library.
+
+**Change.** Delete the redirect; run calibration at the point of need — inside
+`handleStart` (`index.tsx:189-196`), after the free-tier gate and before
+`startRecording()`, and only when it hasn't been done. Same for any other route into
+`/recording`.
+
+**Ordering matters:** the gate check (`resolveSessionGate` → rating modal / paywall) must
+stay first. Calibrating and *then* being told the session is paywalled is worse than the
+current behaviour.
+
+**State.** Add `hasCalibratedMic: boolean` to `useSettingsStore`
+(`src/store/useSettingsStore.ts:11-23`) — **alongside** `hasCompletedOnboarding`, not
+renamed over it. The persisted key `harp2tab-settings` already holds the old flag for every
+shipped Android user; reusing the name would be fine, but shipped users who completed the
+old onboarding did calibrate, so the migration is "seed `hasCalibratedMic` from
+`hasCompletedOnboarding`" — write that explicitly rather than letting it fall out of a
+rename. Zustand's default shallow merge means a key absent from persisted state keeps its
+initializer value, so new users default to `false` with no migration code.
+
+**`/onboarding` needs a return destination.** `finish()` and `skip()` both hardcode
+`router.replace('/')` (`onboarding.tsx:219-228`). Add a `returnTo` param so entering from
+Start Recording lands in `/recording`, not back at the library. The existing
+`?skipPermission=true` entry from Settings (`settings.tsx:107`) must keep working
+unchanged.
+
+**Don't lose the welcome.** Removing the first-launch screen removes the app's only
+introduction. On web the landing page (12-3) replaces it; on native, the first-run tour
+(12-6) does. Sequence 12-7 so native isn't left with no first-run anything in between.
+
+## 12-6 · MIDI Studio
+
+### a) Footer tooltips render below the button and get clipped
+`IconButton`'s tooltip is `position:'absolute', top:'100%', marginTop:6`
+(`src/app/editStyles.ts:594-605`). Correct in the top toolbar, wrong in `WebTransportBar`,
+which sits on the bottom edge of the screen in both hosts (`studio.tsx:703`,
+`edit.tsx:777`) — the label is drawn below the viewport edge and is cut off.
+
+**Fix.** Add a `tooltipPlacement?: 'above' | 'below'` prop to `IconButton`
+(`src/components/EditControls.tsx:26-73`), defaulting to `'below'` so the toolbar is
+untouched, with a `tooltipAbove` style (`bottom:'100%'`, `marginBottom:6`). Pass `'above'`
+from every `IconButton` in `WebTransportBar` (loop, metronome, skip back/forward, stop,
+undo, redo — `TransportBar.tsx:84-160`).
+
+Two things to check in the same pass:
+- **Horizontal clipping.** Tooltips are `left: 0` with `whiteSpace: nowrap`; the rightmost
+  buttons in `webTransportSideRight` (`TransportBar.tsx:138`) can run off the right edge.
+  A `'right'` alignment variant may be needed, as `PianoRoll`'s `ToolButton` already has
+  (`toolTooltipRight`, `PianoRoll.tsx:3699-3701`).
+- **The speed button** (`TransportBar.tsx:163-171`) and the BPM steppers (`:96-102`) are
+  bare `Pressable`s with no tooltip at all — worth giving them the same treatment while the
+  component is open.
+
+`PianoRoll`'s own `toolTooltip` (`PianoRoll.tsx:3684-3697`) has the identical `top:'100%'`
+assumption but lives in the top tool row, so it's correct today. Leave it; note it here so
+it isn't rediscovered if that row ever moves.
+
+### b) Project title should be editable
+`studio.tsx:683` renders `project.title` as a static `<Text>` inside `headerLeft`. The tab
+editor already solves this: `ChartTitle` (`edit.tsx:1125-1156`) is a `TextInput` styled as
+a heading, with a hover-revealed input box on web precisely because a heading-styled field
+gives no sign it's editable.
+
+**Fix.** Port that pattern into the Studio's `headerLeft`, wired to the store's existing
+`renameProject(id, title)` (`useMidiProjectsStore.ts:58-62`). Keep the track-count subtitle
+underneath (`studio.tsx:684-687`).
+
+**Watch:** `renameProject` bumps `updatedAt`, and the home screen orders projects by it —
+committing on every keystroke would churn `updatedAt` and re-sort the grid mid-type.
+Commit on blur (or debounce), holding the typed value in local state meanwhile.
+
+### c) Help modal doesn't describe this page
+`HelpModal` + `TOOL_HELP` live in `PianoRoll.tsx:2426-2474` and are titled **"Piano Roll
+Help"**. Both hosts render the same content, so in the Studio it: describes a
+"Key & Type (sidebar)" control and the whole Transpose-vs-Translate distinction
+(`TOOL_HELP`'s last entry) for a sidebar the Studio does not have; and says nothing about
+the track panel (select / colour rail / collapse), per-track instrument, **Convert to
+tabs** — the screen's entire purpose — the per-track velocity and duration floors
+(`studio.tsx:660-680`), Export, or tempo/time-signature editing.
+
+**Fix.** Parameterize the modal by host: keep the genuinely shared piano-roll entries
+(tools, snap, grid, quantize, zoom, loop pin, semitone/octave shift) in one array, and pass
+host-specific entries plus a title in from the caller — a `helpSections` prop, or a
+`variant: 'tab' | 'studio'` if the entries stay colocated. The Studio drops the key/type
+entry and adds its own; the tab editor's content is unchanged.
+
+Its content is also the reference for 12-7 — write the Studio entries before the tour, so
+the tour can point at Help rather than restate it.
+
+### d) Convert-track modal should list every key
+`ConvertTrackModal.tsx:28` caps the list at `ALTERNATES_SHOWN = 3` (`:49`). The three
+best-scoring keys are usually the right answer, but the user who owns exactly one harmonica
+needs *their* key, and if it ranked fourth the modal simply doesn't offer it.
+
+**Fix.** Render all 12 in the existing `ScrollView` (`:61`), keeping ranked order and
+marking the top three as recommended — the ranking is the value; hiding the rest isn't.
+`ranking.unplayableByKey` is already keyed by every key (`:50`, `:89`), so the evidence
+line needs no new computation.
+
+Check while doing it:
+- `KeyCandidateList` (`src/components/KeyCandidateList.tsx`) for any fixed-height or
+  no-scroll assumption from when the list was always three rows.
+- The card is `maxHeight:'100%'` with `scroll: { flexShrink: 1 }` (`:158`, `:171`), so a
+  12-row list should scroll inside the card rather than overflow — verify at a short
+  viewport, since the type row, the two note paragraphs, Convert and Cancel are all outside
+  the scroll area.
+- **Same convention on the import screen** (`src/app/import.tsx`, which shares
+  `KeyCandidateList` and the same 3-candidate cut). Decide deliberately whether both
+  change; recommend yes — a user hitting the same wall in two places for the same reason.
+
+## 12-7 · First-run tutorial on the important pages
+
+**Scope — which pages.** Three: **Home** (the library and its three entry points),
+**Tab Editor** (`/edit`), **MIDI Studio** (`/studio`). Deliberately excluded: `/recording`
+(calibration is its first-run experience after 12-5), `/import` (already a stepped flow
+that explains itself), `/settings`, `/export`.
+
+**Shape.** A short step-through overlay pointing at real controls, dismissible at any
+step, with a "Replay tutorials" row in Settings. Not a text modal: the editor and Studio
+toolbars are dense enough that a paragraph won't attach to anything. 3–5 steps per surface,
+maximum.
+
+**State.** One key in `useSettingsStore`, not one boolean per surface:
+`toursSeen: Partial<Record<'home' | 'edit' | 'studio', boolean>>`. Adding a fourth surface
+later then needs no store migration — the default shallow merge replaces the whole object
+with the persisted one, so an unknown surface reads `undefined` → falsy → not seen, which
+is the behaviour wanted. Settings' replay row clears the object.
+
+**Don't duplicate Help.** The help modal (12-6c) is the reference documentation; each tour
+should end by pointing at it.
+
+**Existing asset:** `assets/images/tutorial-web.png` exists and is referenced nowhere in
+`src/`. Look at it before commissioning anything — it may be an earlier attempt at this.
+
+**Interaction with 12-5:** on native, removing the forced onboarding leaves no first-run
+introduction at all until this ships. Either build 12-7's Home tour in the same change as
+12-5, or keep the onboarding redirect on native until it lands.
+
+## Decisions still needed (blocking the items they sit under)
+1. **Landing route** — `/` = landing with the app at `/app`, or a separate marketing
+   route? Everything else in 12-3 and the removal in 12-5 hangs off this.
+2. **Pricing on the landing page before Phase 8 billing exists** — publish with "Coming
+   soon", or hold the section back?
+3. **Profile page** — its own route, or a section inside Settings (and confirm it waits
+   for Phase 7)?
+4. **All-12-keys in the convert modal** — Studio only, or the import screen too?
+
+## Verification
+- 12-2 stats/scroll: check the sidebar at 1440×720 and 1280×640 — the two heights where the
+  panel currently overflows — not just a full-height desktop window.
+- 12-5 is the highest-risk item here because it touches persisted state that shipped users
+  already have. Test three cases explicitly: a fresh install (calibrates at first record,
+  not at launch), an existing user with `hasCompletedOnboarding: true` (never re-calibrates),
+  and a user who only uploads MIDI (never sees a mic prompt at all — verify on web, where
+  the permission dialog is the observable).
+- 12-6a: hover every transport button at a viewport short enough that the bar sits at the
+  screen edge; the failure mode is invisible in a tall window.
+- 12-6d: a 12-row key list in the convert modal at a 640px-tall viewport, confirming the
+  card scrolls internally and Convert/Cancel stay reachable.
+- 12-3 SEO: `curl` the exported HTML from `dist/` and confirm the title/description/OG tags
+  are in the served markup — not just present in the React tree.
+- Per project convention, restart the web dev server with `--clear` and confirm the served
+  bundle reflects the change before browser-testing.
+
+## Suggested build order
+1. **12-6 (Studio fixes)** — self-contained, no decisions pending, and the tooltip fix
+   (12-6a) also fixes the tab editor. Order within: (a) tooltips, (d) key list, (b) title,
+   (c) help content.
+2. **12-1 + 12-2 (home naming, sidebar scroll, stats, button)** — pure UI, no new state.
+3. **12-5 (calibration timing)** — after the naming work so the home screen it lands on is
+   already correct; before the landing page, which depends on the redirect being gone.
+4. **12-7 (tours)** — needs 12-6c's help content as its reference, and covers the
+   first-run gap 12-5 opens on native.
+5. **12-3 (landing page)** — largest item, needs decisions 1 and 2, and wants Phase 8's
+   pricing story settled to be fully honest.
+6. **12-4 (profile)** — after Phase 7. Not startable before it.
+
+## Phase 13 — Record → transcribe → Studio (neural transcription for live takes)
+
+Basic Pitch currently reaches only the file-import path. Recording is pMPM-only, and its
+audio is thrown away the moment it is analysed. This phase retains the take, lets the user
+choose an engine and tune its parameters after hearing themselves play, and lands the
+result in the Studio as a draft — the same destination file import already uses.
+
+```
+Record  →  live pMPM HUD (unchanged, notes marked provisional)  →  Finish
+                                    ↓
+                      retained PCM  →  /import (audio lane)
+                                    ↓
+                        ENGINE PICKER          ← no compute yet
+                                    ↓
+                   run chosen engine's expensive half  ← once
+                                    ↓
+                        TUNE STEP (params)     ← re-runs cheap half only
+                                    ↓
+                          Open in Studio
+```
+
+### The invariant that holds it together
+
+Both engines have the same two-phase shape: an expensive pass over audio, then a cheap
+re-segmentation of its output.
+
+| | Expensive (once) | Cheap (per param change) |
+|---|---|---|
+| Basic Pitch | `runInference` — CNN over the audio | `segment` — pure over 3 matrices |
+| pMPM | `transcribe` — NSDF DSP → `RawFrame[]` | `framesToNotes` — no DSP at all |
+
+**Rule for the param schema: a declared param re-runs only the cheap half.** Anything
+needing a fresh inference, or a fresh capture, is a Settings-level decision and does not
+belong on the tune screen. That is what rules out sample rate, retention format and
+frame/hop-at-capture as engine params, and what makes the engine picker free to change
+your mind about.
+
+## 13-1 · Retain PCM during capture
+
+`src/native/AudioCapture.web.ts` is the blocker: `onaudioprocess` (`:49`) computes rms and
+pitch per 2048-block and discards `samples`. Basic Pitch needs a whole `DecodedAudio`.
+
+- Add `setRetaining(on: boolean)` and `takeRetainedPcm(): DecodedAudio | null`.
+- The block must be copied regardless — `getChannelData(0)` returns a reused view, so a
+  `.slice()` was always mandatory.
+- **Capture stays at the device rate.** No resampling and no `NoteDetector` recalibration:
+  every threshold in `DEFAULT_NOTE_DETECTOR_CONFIG` is calibrated against 2048-sample
+  frames at that rate (~42.7ms at 48kHz), and `basicPitch.web.ts:12-14` warns specifically
+  against a global rate change for this reason. `resampleToModelRate`
+  (`basicPitch.web.ts:122`) converts to the model's 22050 later, properly, via
+  `OfflineAudioContext`.
+- **Float32 is the default retention format**; Int16 is opt-in (13-8). Latch the choice at
+  `startCapture()` — the format cannot change mid-take — and have `takeRetainedPcm()`
+  widen back to Float32 only when the Int16 path was used. At the 5-minute cap: ~58MB
+  Float32, ~29MB Int16.
+- Cap retention at `MAX_DURATION_MS` (5 min, `audioImport.ts:50`) and set a `truncated`
+  flag rather than silently keeping a partial take.
+- `stopCapture()` must **not** clear the buffer — Finish reads it after teardown.
+- Mirror both exports in `src/native/AudioCapture.ts` as no-ops returning `null`. Native's
+  Basic Pitch is already `available: false` (`basicPitch.ts:18`) and `getAlgorithm` falls
+  back to pMPM, so nothing on native changes.
+
+**Pause must gate retention.** `useAudioCapture.ts:106-109` already fires an effect on
+every pause transition — call `setRetaining(!isPaused)` there. Dropping paused audio keeps
+the retained timeline aligned with the live one, which already discounts pauses.
+
+## 13-2 · Split `runAudioImport` at the decode seam
+
+`runAudioImport.ts` owns `decodeAudioFile` (`:73`), but a recording arrives already
+decoded. Extract `runTranscription({ audio, harmonicaType, algorithm, params?, … })` —
+everything from `:77` down, unchanged — leaving `runAudioImport` as decode + call so
+`scripts/verify-audio-import.ts` keeps its entry point.
+
+## 13-3 · Widen the hand-off slot
+
+`pendingImport.ts` holds a `PickedAudioFile` because a DOM `File` cannot travel through
+router params. A retained take has the same problem, so the slot becomes a union:
+
+```ts
+type PendingImport =
+  | { kind: 'file';    picked: PickedAudioFile }
+  | { kind: 'decoded'; audio: DecodedAudio; title: string; truncated: boolean;
+      algorithm: TranscriptionAlgorithmId; params: ParamValues }
+```
+
+The `decoded` variant carries the engine choice because the recording path asks for it
+before navigating (13-7), so `/import` must not ask again. `kind: 'file'` carries no
+choice and lands in the `choosing` phase instead. The guard at `import.tsx:186` branches
+on the variant.
+
+## 13-4 · Per-engine param schema
+
+Extend `TranscriptionAlgorithm` (`algorithms/index.ts:54`), which already carries
+`producesFrames` / `polyphonic` / `available` as per-engine capability flags the UI reads
+instead of hardcoding. Add a declared param list — id, label, type, range, default,
+`advanced?` — plus a two-phase pair so the tune screen never needs to know which engine it
+is driving:
+
+```ts
+prepare(audio, options): Promise<Prepared>                 // expensive, once
+resegment(prepared, params): Promise<TranscriptionOutput>  // cheap, per change
+```
+
+This also retires the hardcoded `DEFAULT_ALGORITHM_ID` at `import.tsx:278` — there has
+never been a picker, despite the registry comment promising one.
+
+**Basic Pitch** maps straight onto the existing `runInference` / `segment` split. Declared
+params: onset threshold, frame threshold, minimum note length, Melodia trick. Deliberately
+**not** min/max frequency — `basicPitch.web.ts:47-56` documents that constraining there
+zeroes posteriogram bins before onset inference and the Melodia trick have run, and
+measured worse against a reference Python run on the same recording.
+
+**pMPM** declares the currently-frozen `DEFAULT_NOTE_DETECTOR_CONFIG` (`NoteDetector.ts:26`):
+grace, confirm, min duration, min gap, envelope ratios. Plus hop as advanced —
+`analyzeSamples.ts:22` pins `HOP = PITCH_WINDOW_SIZE` by choice, and its comment (`:18-19`)
+says why: matching the offline hop to the live frame rate is what makes an uploaded file
+segment into notes the same way a recording does.
+
+**Asymmetry to design around:** pMPM's cheap half is key-dependent — it segments on tab
+identity, which is exactly what makes trying all 12 candidate keys cheap
+(`algorithms/index.ts:9`). Its tune preview therefore needs a key. The recording flow has
+one; file import defers the key to conversion and does not. Recording gets full pMPM
+tuning; import either uses the provisional key or hides those params. Basic Pitch has no
+such constraint.
+
+## 13-5 · Engine picker and tune step
+
+**Neither of these is a new route.** The picker is a modal component with two hosts; the
+tune step is a `Phase` variant of `/import`, exactly as `midiConfirm` already is. Net new
+routes for the phase: zero.
+
+`import.tsx`'s `Phase` union (`:73`) gains two variants, and the comment above it ("audio
+has no confirm phase") must be rewritten rather than left to contradict the code:
+
+```ts
+| { kind: 'choosing' }   // renders the shared modal over a quiet backdrop
+| { kind: 'tune'; prepared: Prepared; params: ParamValues; notes: MidiNote[] }
+```
+
+`choosing` exists only for the **file-import** path, which has no earlier moment to ask.
+The recording path arrives with the choice already made (13-7) and skips straight to
+`working`.
+
+- On confirm, run `prepare` once with the existing progress/cancel wiring — the
+  `loadingModel` stage already exists for Basic Pitch's first run per session.
+- Param changes call `resegment` only, debounced ~150ms. Not free for Basic Pitch:
+  `segment` defensively copies the frame and onset matrices on every call (`:239-241`,
+  mandatory, since `outputToNotesPoly` → `constrainFrequency` zeroes bins in place), which
+  is ~36MB transient on a 5-minute take.
+- Preview with note count plus the piano roll. `previewNotes` (`import.tsx:126`) already
+  builds `TabNote[]` with no harmonica mapping, so it works before any key is settled.
+- **Release `prepared` when the step closes.** The Basic Pitch matrices are ~90MB at the
+  5-minute cap (88 + 88 + 264 bins at ~86 frames/sec), which dwarfs the retained PCM in
+  either format. This is the single biggest memory lever in the phase.
+
+Two escapes, both free because pMPM ran live throughout:
+
+- **"Use the live transcription"** → `router.replace('/edit')` with the `tabNotes` already
+  in the session. This is today's behaviour preserved as a fast path, and the fallback when
+  the model fetch fails — `runInference` already throws an actionable error for that
+  (`:174-181`).
+- **"Open with defaults"** → skip tuning entirely, releasing the matrices immediately for
+  everyone who does not care.
+
+### Screen A — engine picker (a modal, not a screen)
+
+A bounded decision — two rows and two buttons — so it is a modal, not a phase layout.
+`ConvertTrackModal` is the precedent: a real decision taken in a modal, with a scrolling
+list and `maxHeight` + internal scroll so the actions stay reachable (`:157-159`).
+
+**Two hosts, one component.** Being a modal is what makes that possible; a phase would
+belong to whichever screen owned it.
+
+- **Recording** — opens on Finish, before any navigation (13-7). The user stays with the
+  take they just played instead of being bounced to a screen that immediately asks a
+  question.
+- **File import** — opens on mount during the `choosing` phase, over the header block with
+  no progress bar, since there is no earlier moment to ask.
+
+Inside, it reuses the `CandidateList` / `CandidateRow` pair the MIDI track chooser already
+uses, which is correct semantically as well as visually: it is a radiogroup with
+`accessibilityRole` already wired (`CandidateRow.tsx:30,67-69`).
+
+```
+  ╔══════════════════════════════════════════════╗
+  ║  How should this be transcribed?             ║
+  ║  Take 3 · 1:47                               ║
+  ║                                              ║
+  ║  ┌────────────────────────────────────────┐  ║
+  ║  │ ● Neural transcription (Basic Pitch)   │  ║
+  ║  │   Reads real recordings far more       │  ║
+  ║  │   accurately, and hears chords and     │  ║
+  ║  │   double-stops.                        │  ║
+  ║  │   hears chords · slower · loads a model│  ║
+  ║  ├────────────────────────────────────────┤  ║
+  ║  │ ○ Classic pitch tracker                │  ║
+  ║  │   One note at a time. Instant.         │  ║
+  ║  │   single voice · instant · inspectable │  ║
+  ║  └────────────────────────────────────────┘  ║
+  ║                                              ║
+  ║  The live pass already found 47 notes.       ║
+  ║                                              ║
+  ║  [ Transcribe ]   [ Use the live version ]   ║
+  ╚══════════════════════════════════════════════╝
+```
+
+- One row per `availableAlgorithms()`. `title` is the engine's existing `label`, `subtitle`
+  its existing `description` — both already written as user-facing copy, so no new strings.
+- The third line is derived from the capability flags, not hand-written per engine:
+  `polyphonic` and `producesFrames` become chips. Adding an engine later gets its chips for
+  free.
+- **The live-pass note count is the frame for the decision** and costs nothing — pMPM
+  already ran. It is what tells a user whether the neural pass is worth waiting for. Shown
+  only on the recording host; a file import has no live pass to report.
+- No compute happens here, so moving between rows is instant and reversible.
+- Dismissing the modal is not a third answer. On the recording host it returns to the take
+  (nothing is lost — the PCM is retained and Finish can be pressed again); on the import
+  host it returns to Home, matching what cancelling an import already does.
+
+### Screen B — tune step (a phase, deliberately not a modal)
+
+The substantial new UI, and the one place a modal would be wrong. This is a workspace, not
+a decision: two columns, a piano roll that wants every pixel, minutes of continuous slider
+work, and a recompute state whose whole requirement is that the preview stays stable while
+you drag. A modal sized to hold that is a screen with a scrim over a screen you cannot see
+— it pays the chrome and loses the space, and on the eventual native port a two-column
+modal is not viable at all.
+
+**The version that deletes this screen, and why it is rejected.** Transcribe on defaults
+straight to the Studio, and put the params in a Studio side panel: one less surface, the
+real editor as the preview, re-tunable any time. But re-segmenting replaces the note set
+wholesale, and by the time that panel is reachable the user may have moved, trimmed or
+deleted notes. Re-tuning would then silently destroy their edits, and the fix is a "this
+discards your changes" confirmation on a slider drag. Tuning *before* the project exists
+has nothing to destroy, which is exactly what makes the step cheap to interact with.
+
+Two columns on web, stacked on native — same split the recording screen uses, and the
+params rail takes the same 320px as its notes column (`recording.tsx:398`) so the two
+screens agree.
+
+```
+   Transcribing Take 3 — 112 notes            [ ⟳ updating ]
+  ┌────────────────────────────────┬──────────────────────┐
+  │                                │ ONSET SENSITIVITY    │
+  │                                │ ──────●─────  0.50   │
+  │      piano-roll preview        │                      │
+  │      (updates live)            │ NOTE CONFIDENCE      │
+  │                                │ ────●───────  0.30   │
+  │                                │                      │
+  │                                │ SHORTEST NOTE        │
+  │                                │ ──●─────────  58 ms  │
+  │                                │                      │
+  │                                │ [x] Follow melodic   │
+  │                                │     lines            │
+  │                                │                      │
+  │                                │ › Advanced           │
+  │                                │                      │
+  │                                │ Reset to defaults    │
+  └────────────────────────────────┴──────────────────────┘
+   [ Open in Studio ]   [ Back ]   [ Use the live transcription ]
+```
+
+- Controls are `SliderInput` (`value`/`min`/`max`/`step`/`onChange`/`formatLabel` — already
+  exactly the shape a declared param needs) plus switches for booleans. The schema from
+  13-4 drives the rail; the screen renders whatever the chosen engine declares and knows
+  nothing about either engine.
+- **Labels are in the user's language, not the library's.** `onsetThreshold` is "onset
+  sensitivity", `frameThreshold` is "note confidence", `minNoteLengthMs` is "shortest
+  note", `melodiaTrick` is "follow melodic lines". The schema carries the label; the param
+  id stays internal.
+- Params marked `advanced` sit behind a collapsed disclosure — that is where hop lives for
+  pMPM, with its recalibration caveat as helper text.
+- Preview is the existing `PianoRoll`, fed by `previewNotes` (`import.tsx:126`), which
+  already builds `TabNote[]` with no harmonica mapping and therefore works before any key
+  is settled.
+
+### States
+
+The debounce makes this a four-state screen, and getting the recomputing state wrong is
+what would make it feel broken:
+
+1. **preparing** — the existing progress bar and `stageLabel`, unchanged.
+2. **idle** — preview and note count current.
+3. **recomputing** — **keep the previous preview on screen** and show a small inline
+   indicator next to the count. Blanking the roll on every slider tick would strobe the
+   whole screen while dragging.
+4. **empty result** — params so strict that nothing survives. This must be an *inline*
+   state with the reset affordance right there, never the error screen: the user is one
+   slider-drag from a good result.
+
+⚠️ **Code implication:** `runAudioImport` currently throws `AudioImportError('noAudio')`
+when the output is empty (`runAudioImport.ts:80`). That is right for a one-shot import and
+wrong for interactive tuning, where empty is an ordinary intermediate state. `resegment`
+must return an empty result rather than throw; only the initial `prepare` keeps the throw.
+
+### Component work this needs
+
+**`SliderInput` has no accessibility props at all** — it is a pure `Gesture.Pan` control
+with no `accessibilityRole="adjustable"`, no `accessibilityValue`, and no keyboard
+handling. A rail built from it would be entirely keyboard-inaccessible on web, which is not
+acceptable for the screen where the transcription is actually decided. It needs
+`accessibilityRole="adjustable"`, `accessibilityValue`, `accessibilityLabel`, and
+arrow-key increment/decrement by `step` when focused. This also fixes the existing
+mic-sensitivity slider in Settings, so it is a general win rather than Phase 13 overhead.
+
+## 13-6 · Land in the Studio
+
+`openStudioFromAudio` (`import.tsx:322`) already does all of it: tempo estimate,
+`projectFromMidiNotes`, frame parking under the project id, `saveProject`, and
+`router.replace('/studio')`. One change is needed — the resulting project must carry
+`source: 'recording'` rather than `'audioUpload'` (`RecordingSource`, `types/index.ts:117`),
+so Frame Inspector reports the right origin.
+
+## 13-7 · Recording screen
+
+- **`handleStop` opens the engine modal instead of navigating.** Sequence: stop capture,
+  flush the detector, read `takeRetainedPcm()`, show the modal. Only on confirm does it
+  write the `decoded` hand-off (with the chosen engine) and push `/import`. "Use the live
+  version" routes to `/edit` from here and never touches the import screen at all — which
+  is today's behaviour exactly, so the fast path costs one extra tap and no new code path.
+- `incrementRecordingCount()` moves out of `handleStop` (see Decisions below).
+- The modal must open *after* the capture teardown, not before: the flush at
+  `useAudioCapture.ts:97` is what commits the last note played, and the live-pass count
+  shown in the modal would otherwise be short by one.
+- Keep every `LiveAnalysisPanel` track. Reducing the live view to loudness would make
+  recording worse in exchange for nothing: pMPM's cost is one NSDF pass over blocks that
+  were captured anyway, and keeping it running is what provides the fallback above. Mark
+  the NOTES track provisional, since Finish replaces it.
+- Surface remaining time against the 5-minute cap, and a clear state when retention stops.
+
+UI, concretely:
+
+- **Elapsed becomes elapsed-against-cap.** `recording.tsx:141` renders a bare `0:00`; it
+  becomes `2:14 / 5:00`, switching to `theme.warning` in the final minute. The take length
+  now matters to the user because it bounds what can be transcribed, so it has to be
+  visible before they hit the wall rather than after.
+- **The NOTES header gets a "live" chip** next to its count (`recording.tsx:197-198`), with
+  the empty-state copy extended to say the live read is provisional. Finish replaces these
+  notes, and a user who spent the take watching them appear needs to know that before it
+  happens, not after.
+- **Retention-stopped notice** when the cap is reached: the `noticeRow` + warning-icon
+  pattern the import screen already uses for the octave-shift notice. Recording continues
+  and the live HUD keeps working — only retention stops — so the copy must say exactly
+  that, or it reads as "recording stopped".
+- Everything else on the screen is unchanged. In particular the four `LiveAnalysisPanel`
+  tracks all stay.
+
+## 13-8 · Settings
+
+`useSettingsStore` gains: default engine, last-used params **per engine** (so the tune step
+opens where the user left it), and the Int16 retention toggle from 13-1 — off by default,
+described in terms of longer takes rather than bit depth.
+
+Sample rate stays out. It looks like a storage control but is a transcription-quality
+control: lowering it halves the live frame rate, which pushes `confirmMs: 40` and
+`minDipMs: 50` below a single frame and silently degrades onset timing with nothing on
+screen connecting the two. If a user-facing storage knob is wanted, the honest one is
+**maximum take length**, which is the linear lever on both the PCM and the matrices.
+
+UI: a new **Transcription** section on `settings.tsx`, matching the existing card/row
+layout the mic-sensitivity control sits in.
+
+- **Default engine** — the segmented-control idiom already there for theme
+  (`THEME_SEGMENTS`, `settings.tsx:14`), or `CandidateList` if the descriptions are worth
+  showing twice. Segmented is probably right; the picker screen is where descriptions
+  belong.
+- **Maximum take length** — `SliderInput` with `formatLabel` in minutes.
+- **Smaller recordings in memory** (the Int16 toggle) — a switch, off by default, described
+  as what it does for the user ("keeps longer takes without using as much memory") and not
+  as a bit depth. This is the one control here where the honest framing is the whole point:
+  it must not read as a quality setting, because it is not one.
+- **Reset transcription settings** — clears the per-engine saved params. Necessary because
+  those persist silently across sessions, so a user who tuned themselves into a corner
+  three takes ago has no other way back.
+
+## 13-9 · Verification
+
+Extend `scripts/verify-audio-import.ts` to drive `runTranscription` from a synthesized
+`DecodedAudio` (`scripts/make-test-wav.ts` already exists), asserting:
+
+- Re-segmenting one `prepare` at several param sets gives stable, monotonic note counts.
+  This is the property the whole tune step rests on, and the in-place-zeroing hazard is
+  exactly the kind of bug that would break it silently.
+- Int16 round-trip through `takeRetainedPcm` does not move detected pitches.
+- Any hop change is measured, not assumed.
+
+UI checks, in the spirit of the per-viewport testing Phase 12 uses:
+
+- The tune step at 1280×640 — the params rail must scroll internally while the footer
+  actions stay reachable, the same failure the convert modal hit at that height.
+- Drag a slider continuously and confirm the preview never blanks between updates. This is
+  the state-3 requirement above and is invisible in a screenshot.
+- Drive the whole tune step by keyboard alone, after the `SliderInput` accessibility work.
+- Park every param at its extreme to reach the empty-result state and confirm it renders
+  inline with a reset, rather than falling through to the error screen.
+- Per project convention, restart the web dev server with `--clear` and confirm the served
+  bundle reflects the change before browser-testing.
+
+## Decisions still needed
+
+1. **Where the free-tier session is consumed.** Today `handleStop` calls
+   `incrementRecordingCount()` (`recording.tsx:117`), so a take costs a session the moment
+   the user stops playing. The Studio path deliberately does not: `import.tsx:313` states
+   the gate belongs at conversion, "where a tab is actually produced", and `commitMidi`
+   spends it there (`:419`). Matching import makes **recording free until conversion**, and
+   a user could record, tune and export MIDI from the Studio without spending a session.
+   Recommendation: match import — consistency wins and conversion is the honest moment —
+   but this is a monetization call, not a refactor.
+2. **Whether pMPM stays a user-visible choice** once Basic Pitch is the default and the
+   live HUD covers the "am I being heard" job, or becomes an invisible fallback only.
+3. **Whether the retained take should persist.** As planned above it is memory-only: held
+   in the capture module, handed through `pendingImport`, released after the tune step. A
+   browser reload between Finish and Open loses it, and "re-transcribe this recording with
+   different settings" from the library is not possible later. Persisting it needs a new
+   IndexedDB store keyed by recording id — `storage.ts` is localStorage and caps around
+   5MB, which a take of any length blows past immediately. Recommendation: ship
+   memory-only, and treat persistence as its own item once the flow has proven itself.
+
+## Suggested build order
+
+1. **13-1** — the blocker; nothing else is testable until the take is retained.
+2. **13-2 + 13-3** — pure seams, no UI, independently verifiable.
+3. **13-4** — the schema, with Basic Pitch's params implemented first (its split already
+   exists) and pMPM's after.
+4. **`SliderInput` accessibility** — small, self-contained, and a hard prerequisite for
+   Screen B being usable. Also fixes the existing Settings slider, so it stands alone even
+   if the rest of the phase slips.
+5. **Screen A (the engine modal)** — a `CandidateList` in a `Modal`, no new pipeline
+   behind it. Ship it on the import host first, where it replaces the hardcoded
+   `DEFAULT_ALGORITHM_ID`: that is a complete, user-visible improvement to file import on
+   its own, independent of anything in 13-1.
+6. **Screen B (the tune phase)** — the substantial UI, once the schema and the modal exist.
+7. **13-6 + 13-7** — Studio routing and the recording screen, which is where the modal
+   gains its second host.
+8. **13-8 + 13-9** — settings persistence and the harness.
+
+Note that steps 4–5 deliver value without 13-1: an engine picker and accessible sliders
+improve file import whether or not take retention ever lands. If the phase has to be cut
+short, cut from the front of the pipeline work, not from these.
+
+One copy item that falls between steps: the progress screen's hint
+(`import.tsx:807-810`) currently asserts "Pitch detection doesn't need the key — the
+harmonica key is worked out afterwards." That stays true for Basic Pitch but not for a
+pMPM tune preview launched from a recording, where the key drives segmentation. The string
+becomes engine-dependent when 13-4 lands.
 
 ## Cross-cutting technical risks (apply across phases, not phase-specific)
 - **`nsdf`/clarity is typed but never populated.** `AudioFrame.nsdf` exists in the type but Android's Kotlin module never sets it and web hardcodes `0`. Frame Inspector (Phase 2) only has real `frequency`/`rms`/post-hoc `confidence` to show — a genuine pitch-clarity track would need new native + JS work, not just wiring up an existing value.

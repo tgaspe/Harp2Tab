@@ -93,42 +93,30 @@ function FilterDropdown({ pillPrefix = '', value, options, onSelect, theme, styl
 // `layout="row"` is the sidebar's compact icon-and-two-line-stack form — used for the
 // dashboard's secondary/glanceable stats, which shouldn't be as visually loud as the
 // primary "column" tile form (kept around in case a future full-width band needs it).
-function StatTile({ icon, value, label, styles, theme, accent = 'accent', layout = 'column', onAccent = false }: {
+/**
+ * One library stat, as a chip in the dashboard header's stat strip.
+ *
+ * Replaced a two-layout `StatTile` that existed to sit in the left rail. The rail was the
+ * wrong home for these: it is otherwise entirely actions, and a stat wedged under them was
+ * both the least glanceable thing on the panel and the first thing a short viewport cut
+ * off. Up beside the greeting they're read on arrival, which is when a "here's where you
+ * left off" number is worth anything.
+ *
+ * Value and label sit on one line rather than stacked, so the strip stays one row tall and
+ * reads as a sentence fragment ("3h 42m transcribed") instead of a card.
+ */
+function StatPill({ icon, value, label, styles, theme }: {
   icon: keyof typeof Ionicons.glyphMap;
   value: string;
   label: string;
   styles: ReturnType<typeof createStyles>;
   theme: Theme;
-  accent?: 'accent' | 'warning';
-  layout?: 'column' | 'row';
-  /** Row sits directly on the accent-colored sidebar (no white card underneath it
-   *  anymore) — needs light/white text and icon instead of the normal dark-on-white set. */
-  onAccent?: boolean;
 }) {
-  const iconColor = onAccent ? '#fff' : accent === 'warning' ? theme.warning : theme.accent;
-
-  if (layout === 'row') {
-    return (
-      <View style={styles.statRow}>
-        <View style={[
-          styles.statRowIconWrap,
-          onAccent ? styles.statRowIconWrapOnAccent : accent === 'warning' && styles.statRowIconWrapWarning,
-        ]}>
-          <Ionicons name={icon} size={16} color={iconColor} />
-        </View>
-        <View style={styles.statRowText}>
-          <Text style={[styles.statRowValue, onAccent && styles.statRowValueOnAccent]}>{value}</Text>
-          <Text style={[styles.statRowLabel, onAccent && styles.statRowLabelOnAccent]}>{label}</Text>
-        </View>
-      </View>
-    );
-  }
-
   return (
-    <View style={styles.statTile}>
-      <Ionicons name={icon} size={18} color={iconColor} />
-      <Text style={styles.statValue}>{value}</Text>
-      <Text style={styles.statLabel}>{label}</Text>
+    <View style={styles.statPill}>
+      <Ionicons name={icon} size={14} color={theme.accent} />
+      <Text style={styles.statPillValue}>{value}</Text>
+      <Text style={styles.statPillLabel}>{label}</Text>
     </View>
   );
 }
@@ -430,7 +418,7 @@ export default function KeySelectionScreen() {
           accessibilityLabel="New MIDI Studio project"
         >
           <Ionicons name="add-circle-outline" size={18} color={theme.textSub} />
-          <Text style={[styles.uploadBtnText, styles.uploadBtnTextEnabled]}>New Project</Text>
+          <Text style={[styles.uploadBtnText, styles.uploadBtnTextEnabled]}>New MIDI Project</Text>
         </Pressable>
       </View>
 
@@ -469,9 +457,42 @@ export default function KeySelectionScreen() {
     });
   const libraryFiltersActive = libraryKeyFilter !== 'all' || librarySearchTrimmed !== '';
 
-  // Retention stat (web, returning users only) — "look how much you've built" number,
-  // computed from the same recordings array as the list, not tracked separately.
-  const totalNotes = recordings.reduce((sum, r) => sum + r.tabNotes.length, 0);
+  // Sidebar stats (web, returning users only) — computed from the same recordings array as
+  // the list, not tracked separately.
+  //
+  // These replaced a raw recording count (already printed in the section header a few inches
+  // to the right) and a total note count (a number with no scale to read it against). Each
+  // one here answers a question instead: how much have I done, which harp do I actually
+  // reach for, and — the only figure on the panel that can change today — what have I done
+  // this week. All three come out of fields `TabRecording` already carries.
+  const libraryStats = useMemo(() => {
+    const totalMs = recordings.reduce((sum, r) => sum + r.duration, 0);
+
+    const keyCounts = new Map<HarmonicaKey, number>();
+    for (const r of recordings) keyCounts.set(r.key, (keyCounts.get(r.key) ?? 0) + 1);
+    // Ties break on whichever key was seen first, which is insertion order — arbitrary but
+    // stable, and a tie means there is no most-used key to be wrong about.
+    let topKey: HarmonicaKey | null = null;
+    let topCount = 0;
+    for (const [key, count] of keyCounts) {
+      if (count > topCount) { topKey = key; topCount = count; }
+    }
+
+    const weekAgo   = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const thisWeek  = recordings.filter((r) => r.createdAt >= weekAgo).length;
+
+    return { totalMs, topKey, topCount, thisWeek };
+  }, [recordings]);
+
+  /** Sidebar-width duration: "3h 42m" / "42m" / "48s". Never zero-padded — this is a
+   *  headline figure, not a timecode. */
+  function totalDurationLabel(ms: number): string {
+    const totalMinutes = Math.floor(ms / 60000);
+    if (totalMinutes < 1) return `${Math.round(ms / 1000)}s`;
+    const hours   = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+  }
 
   // Split button (main = start with current selection, chevron = open the key/type
   // dropdown) — shared markup between the hero's larger card version and the dashboard
@@ -655,10 +676,10 @@ export default function KeySelectionScreen() {
               {/* Empty-state: nothing to manage yet, so no sidebar — just the hero above
                   and the empty-library prompt below, single column throughout. */}
               <View style={styles.section}>
-                <Text style={styles.sectionLabel}>RECENT RECORDINGS</Text>
+                <Text style={styles.sectionLabel}>HARMONICA TABS</Text>
                 <View style={styles.recordingsEmpty}>
                   <Ionicons name="file-tray-outline" size={26} color={theme.textMuted} />
-                  <Text style={styles.recordingsEmptyTitle}>No recordings yet</Text>
+                  <Text style={styles.recordingsEmptyTitle}>No tabs yet</Text>
                   <Text style={styles.recordingsEmptyText}>
                     Record a new song or upload an audio/MIDI file to get started.
                   </Text>
@@ -671,107 +692,112 @@ export default function KeySelectionScreen() {
             // happens to sit next to the library — sits outside the ScrollView entirely;
             // only the library side scrolls, same app-shell pattern as GitHub/Linear/etc.
             <View style={styles.dashboardShell}>
+              {/* The panel is the chrome and stays put; its *contents* scroll. Unscrollable,
+                  the rail's content (label + 4 actions + key/type picker + free-tier
+                  counter) overflows a short viewport with no way to reach the overflow, so
+                  whatever sits last is simply unreachable. */}
               <View style={styles.fullSidebar}>
-                <View style={styles.sidebarSection}>
-                  <Text style={styles.sidebarSectionLabel}>QUICK ACTIONS</Text>
+                <ScrollView
+                  style={styles.sidebarScroll}
+                  contentContainerStyle={styles.sidebarScrollContent}
+                  showsVerticalScrollIndicator={false}
+                >
+                  <View style={styles.sidebarSection}>
+                    <Text style={styles.sidebarSectionLabel}>QUICK ACTIONS</Text>
 
-                  <Pressable
-                    onPress={handleUploadAudio}
-                    disabled={!selectedKey}
-                    style={({ pressed, hovered }: any) => [
-                      styles.sidebarRow,
-                      !selectedKey && styles.sidebarRowDisabled,
-                      (pressed || hovered) && !!selectedKey && styles.sidebarRowPressed,
-                    ]}
-                    accessibilityRole="button"
-                    accessibilityLabel="Upload audio file"
-                    accessibilityState={{ disabled: !selectedKey }}
-                  >
-                    <View style={styles.sidebarRowIconWrap}>
-                      <Ionicons name="cloud-upload-outline" size={16} color="rgba(255,255,255,0.85)" />
+                    <Pressable
+                      onPress={handleUploadAudio}
+                      disabled={!selectedKey}
+                      style={({ pressed, hovered }: any) => [
+                        styles.sidebarRow,
+                        !selectedKey && styles.sidebarRowDisabled,
+                        (pressed || hovered) && !!selectedKey && styles.sidebarRowPressed,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel="Upload audio file"
+                      accessibilityState={{ disabled: !selectedKey }}
+                    >
+                      <View style={styles.sidebarRowIconWrap}>
+                        <Ionicons name="cloud-upload-outline" size={16} color="rgba(255,255,255,0.85)" />
+                      </View>
+                      <Text style={styles.sidebarRowText}>Upload Audio</Text>
+                    </Pressable>
+
+                    <Pressable
+                      onPress={handleUploadMidi}
+                      disabled={!selectedKey}
+                      style={({ pressed, hovered }: any) => [
+                        styles.sidebarRow,
+                        !selectedKey && styles.sidebarRowDisabled,
+                        (pressed || hovered) && !!selectedKey && styles.sidebarRowPressed,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel="Upload MIDI file"
+                      accessibilityState={{ disabled: !selectedKey }}
+                    >
+                      <View style={styles.sidebarRowIconWrap}>
+                        <Ionicons name="musical-note-outline" size={16} color="rgba(255,255,255,0.85)" />
+                      </View>
+                      <Text style={styles.sidebarRowText}>Upload MIDI</Text>
+                    </Pressable>
+
+                    {/* Not gated on a harmonica key, unlike the three above it: a blank
+                        Studio project has no harmonica yet — the key is chosen at
+                        conversion, which is where a tab actually gets produced. */}
+                    <Pressable
+                      onPress={handleNewProject}
+                      style={({ pressed, hovered }: any) => [
+                        styles.sidebarRow,
+                        (pressed || hovered) && styles.sidebarRowPressed,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel="New MIDI Studio project"
+                    >
+                      {/* `add-circle-outline`, matching the empty-state hero's version of this
+                          same button. `options-outline` — a sliders glyph — read as
+                          "preferences" here; it stays the Studio's *identity* mark on the
+                          project card and on "Open in Studio", where it isn't a create action. */}
+                      <View style={styles.sidebarRowIconWrap}>
+                        <Ionicons name="add-circle-outline" size={16} color="rgba(255,255,255,0.85)" />
+                      </View>
+                      <Text style={styles.sidebarRowText}>New MIDI Project</Text>
+                    </Pressable>
+
+                    {uploadErrorBanner}
+
+                    <Pressable
+                      onPress={handleStart}
+                      disabled={!selectedKey}
+                      style={({ pressed, hovered }: any) => [
+                        styles.sidebarRow,
+                        styles.sidebarRowPrimary,
+                        !selectedKey && styles.sidebarRowDisabled,
+                        (pressed || hovered) && !!selectedKey && styles.sidebarRowPrimaryPressed,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel="Start Recording"
+                      accessibilityState={{ disabled: !selectedKey }}
+                    >
+                      <View style={styles.sidebarRowIconWrap}>
+                        <View style={styles.recordDot} />
+                      </View>
+                      <Text style={[styles.sidebarRowText, styles.sidebarRowTextPrimary]}>Start Recording</Text>
+                    </Pressable>
+
+                    {/* Permanent, not behind a chevron — the key/type picker is part of the
+                        panel's normal flow so it's always visible, not a toggle to discover.
+                        No card wrapper — sits straight on the panel so the sidebar reads as
+                        one homogeneous blue surface, not a blue frame around a white box. */}
+                    <View style={styles.sidebarInlineDropdown}>
+                      {sidebarTypeSection}
+                      {sidebarKeySection}
                     </View>
-                    <Text style={styles.sidebarRowText}>Upload Audio</Text>
-                  </Pressable>
 
-                  <Pressable
-                    onPress={handleUploadMidi}
-                    disabled={!selectedKey}
-                    style={({ pressed, hovered }: any) => [
-                      styles.sidebarRow,
-                      !selectedKey && styles.sidebarRowDisabled,
-                      (pressed || hovered) && !!selectedKey && styles.sidebarRowPressed,
-                    ]}
-                    accessibilityRole="button"
-                    accessibilityLabel="Upload MIDI file"
-                    accessibilityState={{ disabled: !selectedKey }}
-                  >
-                    <View style={styles.sidebarRowIconWrap}>
-                      <Ionicons name="musical-note-outline" size={16} color="rgba(255,255,255,0.85)" />
-                    </View>
-                    <Text style={styles.sidebarRowText}>Upload MIDI</Text>
-                  </Pressable>
-
-                  {/* Not gated on a harmonica key, unlike the three above it: a blank
-                      Studio project has no harmonica yet — the key is chosen at
-                      conversion, which is where a tab actually gets produced. */}
-                  <Pressable
-                    onPress={handleNewProject}
-                    style={({ pressed, hovered }: any) => [
-                      styles.sidebarRow,
-                      (pressed || hovered) && styles.sidebarRowPressed,
-                    ]}
-                    accessibilityRole="button"
-                    accessibilityLabel="New MIDI Studio project"
-                  >
-                    <View style={styles.sidebarRowIconWrap}>
-                      <Ionicons name="options-outline" size={16} color="rgba(255,255,255,0.85)" />
-                    </View>
-                    <Text style={styles.sidebarRowText}>New Project</Text>
-                  </Pressable>
-
-                  {uploadErrorBanner}
-
-                  <Pressable
-                    onPress={handleStart}
-                    disabled={!selectedKey}
-                    style={({ pressed, hovered }: any) => [
-                      styles.sidebarRow,
-                      styles.sidebarRowPrimary,
-                      !selectedKey && styles.sidebarRowDisabled,
-                      (pressed || hovered) && !!selectedKey && styles.sidebarRowPrimaryPressed,
-                    ]}
-                    accessibilityRole="button"
-                    accessibilityLabel="Start Recording"
-                    accessibilityState={{ disabled: !selectedKey }}
-                  >
-                    <View style={styles.sidebarRowIconWrap}>
-                      <View style={styles.recordDot} />
-                    </View>
-                    <Text style={[styles.sidebarRowText, styles.sidebarRowTextPrimary]}>Start Recording</Text>
-                  </Pressable>
-
-                  {/* Permanent, not behind a chevron — the key/type picker is part of the
-                      panel's normal flow so it's always visible, not a toggle to discover.
-                      No card wrapper — sits straight on the panel so the sidebar reads as
-                      one homogeneous blue surface, not a blue frame around a white box. */}
-                  <View style={styles.sidebarInlineDropdown}>
-                    {sidebarTypeSection}
-                    {sidebarKeySection}
+                    {freeCounterLabel && (
+                      <Text style={styles.dashboardCounter}>{freeCounterLabel}</Text>
+                    )}
                   </View>
-
-                  {freeCounterLabel && (
-                    <Text style={styles.dashboardCounter}>{freeCounterLabel}</Text>
-                  )}
-                </View>
-
-                <View style={styles.sidebarDivider} />
-
-                <View style={styles.sidebarSection}>
-                  <Text style={styles.sidebarSectionLabel}>YOUR STATS</Text>
-                  <StatTile layout="row" onAccent icon="albums-outline" value={String(recordings.length)} label="Recordings" styles={styles} theme={theme} />
-                  <View style={styles.statRowDividerOnAccent} />
-                  <StatTile layout="row" onAccent icon="musical-notes-outline" value={String(totalNotes)} label="Notes Transcribed" styles={styles} theme={theme} />
-                </View>
+                </ScrollView>
               </View>
 
               <ScrollView
@@ -782,13 +808,48 @@ export default function KeySelectionScreen() {
                 <Text style={styles.dashboardTitle}>Welcome back</Text>
                 <Text style={styles.dashboardSubtitle}>Here's where you left off.</Text>
 
+                {/* Scrolls away with the greeting it belongs to — this is page header, read
+                    on arrival, not a persistent readout to browse the library against. */}
+                {recordings.length > 0 && (
+                  <View style={styles.statStrip}>
+                    <StatPill
+                      icon="time-outline"
+                      value={totalDurationLabel(libraryStats.totalMs)}
+                      label="transcribed"
+                      styles={styles} theme={theme}
+                    />
+                    {/* Only meaningful once there's something to be most-used: with one
+                        recording every key is the top key, which says nothing. */}
+                    {libraryStats.topKey && recordings.length > 1 && (
+                      <StatPill
+                        icon="musical-note-outline"
+                        value={libraryStats.topKey}
+                        label="most-used key"
+                        styles={styles} theme={theme}
+                      />
+                    )}
+                    <StatPill
+                      icon="calendar-outline"
+                      value={String(libraryStats.thisWeek)}
+                      label="this week"
+                      styles={styles} theme={theme}
+                    />
+                  </View>
+                )}
+
                 {/* Projects sit above recordings because they're upstream of them: a
                     project is what a tab gets converted *out of*, so finding one is how you
                     get back to editing the source rather than the result. */}
                 {midiProjects.length > 0 && (
                   <View style={styles.section}>
+                    {/* Named for what the section holds, not for the editor that opens it —
+                        and the subtitle is the only place on this screen that says what
+                        makes a project a different kind of thing from a tab. */}
                     <Text style={styles.libraryToolbarLabel}>
-                      MIDI STUDIO · {midiProjects.length} PROJECT{midiProjects.length !== 1 ? 'S' : ''}
+                      MIDI PROJECTS · {midiProjects.length}
+                    </Text>
+                    <Text style={styles.sectionSubtitle}>
+                      Multi-track source — convert a track to tabs
                     </Text>
                     <View style={styles.projectGrid}>
                       {midiProjects.map((project) => (
@@ -826,7 +887,7 @@ export default function KeySelectionScreen() {
                 <View style={[styles.section, styles.dashboardLibrary]}>
                   <View style={styles.libraryToolbar}>
                       <Text style={styles.libraryToolbarLabel}>
-                        YOUR LIBRARY · {recordings.length} RECORDING{recordings.length !== 1 ? 'S' : ''}
+                        HARMONICA TABS · {recordings.length}
                       </Text>
 
                       <View style={styles.libraryToolbarRight}>
@@ -835,7 +896,7 @@ export default function KeySelectionScreen() {
                           <TextInput
                             value={librarySearch}
                             onChangeText={setLibrarySearch}
-                            placeholder="Search recordings..."
+                            placeholder="Search tabs..."
                             placeholderTextColor={theme.textMuted}
                             style={styles.searchInput}
                             accessibilityLabel="Search recordings"
@@ -902,7 +963,7 @@ export default function KeySelectionScreen() {
                       <View style={styles.recordingsEmpty}>
                         <Ionicons name="search-outline" size={26} color={theme.textMuted} />
                         <Text style={styles.recordingsEmptyTitle}>
-                          {libraryFiltersActive ? 'No matching recordings' : 'No recordings yet'}
+                          {libraryFiltersActive ? 'No matching tabs' : 'No tabs yet'}
                         </Text>
                         <Text style={styles.recordingsEmptyText}>
                           {libraryFiltersActive
@@ -924,7 +985,7 @@ export default function KeySelectionScreen() {
             >
               {orderedRecordings.length > 0 && (
                 <View style={styles.section}>
-                  <Text style={styles.sectionLabel}>RECENT RECORDINGS</Text>
+                  <Text style={styles.sectionLabel}>HARMONICA TABS</Text>
                   <View style={styles.recordingsList}>
                     {orderedRecordings.map((recording) => (
                       <RecordingCard
@@ -1049,6 +1110,14 @@ function createStyles(t: Theme) {
       fontFamily:    Poppins.bold,
       color:         t.textMuted,
       letterSpacing: 1.2,
+    },
+    // Sits under a section label to say what the section's contents *are*, where the label
+    // alone can only say what they're called.
+    sectionSubtitle: {
+      fontSize:   FONT.xs,
+      fontFamily: Poppins.regular,
+      color:      t.textMuted,
+      marginTop:  4,
     },
     libraryToolbarRight: {
       flexDirection: 'row',
@@ -1299,16 +1368,19 @@ function createStyles(t: Theme) {
     fullSidebar: {
       width:              300,
       flexShrink:         0,
-      gap:                16,
       backgroundColor:    t.sidebarBg,
-      paddingHorizontal:  20,
-      paddingVertical:    28,
       // The literal top-to-bottom division line the color contrast alone wasn't enough of.
       // Dark mode inverts it: the rail is darker than the page there, so a black hairline
       // would blend into both sides instead of dividing them.
       borderRightWidth:   1,
       borderRightColor:   t.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.18)',
     },
+    // The padding moved off `fullSidebar` and onto the scroll content so the panel's
+    // background and its right-edge hairline still run the full height while only the
+    // contents scroll. Still needed with the stats gone: the label, four action rows, the
+    // key/type picker and the free-tier counter overflow a short viewport on their own.
+    sidebarScroll:        { flex: 1 },
+    sidebarScrollContent: { paddingHorizontal: 20, paddingVertical: 28 },
     dashboardMainScroll: { flex: 1 },
     dashboardMainScrollContent: {
       paddingHorizontal: 40,
@@ -1334,9 +1406,6 @@ function createStyles(t: Theme) {
       letterSpacing: 1,
       marginBottom:  6,
     },
-    // Hairline between the two sections — the only divider *inside* the panel; the panel's
-    // own right edge (fullSidebar below) carries the line separating it from the library.
-    sidebarDivider: { height: 1, backgroundColor: 'rgba(255,255,255,0.18)', marginVertical: 18 },
     dashboardCounter: { fontSize: 10, fontFamily: Poppins.regular, color: 'rgba(255,255,255,0.65)', marginTop: 4 },
 
     sidebarRow: {
@@ -1367,37 +1436,25 @@ function createStyles(t: Theme) {
     // On the solid white pill (sidebarRowPrimary) — needs accentDeep, see editStyles.
     sidebarRowTextPrimary: { color: t.accentDeep },
 
-    // Column-layout stat tile — currently unused (the sidebar uses the "row" layout below)
-    // but kept as the StatTile component's other supported form for a future full-width
-    // band, so it isn't reinvented from scratch if one ever gets built again.
-    statTile: { flex: 1, alignItems: 'center', paddingVertical: 20, gap: 6 },
-    statValue: { fontSize: FONT.xl, fontFamily: SpaceGrotesk.bold, color: t.textPrimary },
-    statLabel: {
-      fontSize:      FONT.xs,
-      fontFamily:    Poppins.regular,
-      color:         t.textMuted,
-      letterSpacing: 0.3,
+    // The header's stat strip. `flexWrap` rather than a fixed row: three pills fit any
+    // desktop width the dashboard layout appears at, but the strip shouldn't be the thing
+    // that decides how narrow the window is allowed to get. No vertical margin — the
+    // scroll container's own `gap: 16` spaces it off the greeting like every other block
+    // in this column.
+    statStrip: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    statPill: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      gap:               6,
+      paddingVertical:   7,
+      paddingHorizontal: 12,
+      borderRadius:      999,
+      borderWidth:       1,
+      borderColor:       t.border,
+      backgroundColor:   t.surface,
     },
-
-    // Sidebar's compact "row" stat form — icon chip + two-line value/label stack, sitting
-    // straight on the accent panel (see StatTile's onAccent variant) instead of a card.
-    statRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8 },
-    statRowIconWrap: {
-      width:            34,
-      height:           34,
-      borderRadius:     10,
-      backgroundColor:  t.accentSoft,
-      alignItems:       'center',
-      justifyContent:   'center',
-    },
-    statRowIconWrapWarning:  { backgroundColor: t.warningSoft },
-    statRowIconWrapOnAccent: { backgroundColor: 'rgba(255,255,255,0.18)' },
-    statRowText: { gap: 1 },
-    statRowValue: { fontSize: FONT.md, fontFamily: SpaceGrotesk.bold, color: t.textPrimary },
-    statRowValueOnAccent: { color: '#fff' },
-    statRowLabel: { fontSize: FONT.xs, fontFamily: Poppins.regular, color: t.textMuted },
-    statRowLabelOnAccent: { color: 'rgba(255,255,255,0.75)' },
-    statRowDividerOnAccent: { height: 1, backgroundColor: 'rgba(255,255,255,0.16)' },
+    statPillValue: { fontSize: FONT.sm, fontFamily: SpaceGrotesk.bold, color: t.textPrimary },
+    statPillLabel: { fontSize: FONT.xs, fontFamily: Poppins.regular, color: t.textMuted },
 
     chooseFileBtn: {
       borderWidth:     1.5,

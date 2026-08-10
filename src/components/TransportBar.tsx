@@ -1,7 +1,7 @@
 import React from 'react';
 import { Pressable, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Divider, IconButton } from '@/components/EditControls';
+import { Divider, IconButton, Tooltip } from '@/components/EditControls';
 import type { Theme } from '@/theme';
 import type { EditStyles } from '@/app/editStyles';
 import type { EditHistory } from '@/hooks/useEditHistory';
@@ -77,6 +77,10 @@ export function WebTransportBar({
   // dead-centered regardless of what either side's content weighs — space-between
   // would instead push them off-center.
   const disabled = tabNotesLength === 0;
+  // Every tooltip in this bar opens upward: the bar is pinned to the bottom edge of the
+  // screen in both hosts (`edit.tsx`, `studio.tsx`), so the default downward placement
+  // draws the label past the viewport, where it is simply cut off.
+  const tip = 'above' as const;
   return (
     <View style={[styles.webTransportBar, glued && styles.webTransportBarGlued, compact && styles.webTransportBarCompact, containerStyle]}>
       <View style={styles.webTransportSide}>
@@ -88,6 +92,7 @@ export function WebTransportBar({
             disabled={disabled}
             variant={loopEnabled ? 'active' : 'ghost'}
             selected={loopEnabled}
+            tooltipPlacement={tip}
             theme={theme}
             styles={styles}
           />
@@ -108,6 +113,7 @@ export function WebTransportBar({
             disabled={disabled}
             variant={metronomeEnabled ? 'active' : 'ghost'}
             selected={metronomeEnabled}
+            tooltipPlacement={tip}
             theme={theme}
             styles={styles}
           />
@@ -115,8 +121,8 @@ export function WebTransportBar({
       </View>
 
       <View style={styles.webTransportCenter}>
-        <IconButton icon="play-skip-back" label="Back one bar" onPress={onSkipBack} disabled={disabled} theme={theme} styles={styles} iconSize={13} />
-        <IconButton icon="stop" label="Stop" onPress={onStop} disabled={disabled} theme={theme} styles={styles} iconSize={13} />
+        <IconButton icon="play-skip-back" label="Back one bar" onPress={onSkipBack} disabled={disabled} tooltipPlacement={tip} theme={theme} styles={styles} iconSize={13} />
+        <IconButton icon="stop" label="Stop" onPress={onStop} disabled={disabled} tooltipPlacement={tip} theme={theme} styles={styles} iconSize={13} />
         <Pressable
           onPress={onPlayToggle}
           disabled={disabled}
@@ -132,7 +138,7 @@ export function WebTransportBar({
         >
           <Ionicons name={isPlaying && !isPaused ? 'pause' : 'play'} size={compact ? 14 : 17} color={disabled ? theme.textMuted : '#fff'} />
         </Pressable>
-        <IconButton icon="play-skip-forward" label="Forward one bar" onPress={onSkipForward} disabled={disabled} theme={theme} styles={styles} iconSize={13} />
+        <IconButton icon="play-skip-forward" label="Forward one bar" onPress={onSkipForward} disabled={disabled} tooltipPlacement={tip} theme={theme} styles={styles} iconSize={13} />
       </View>
 
       <View style={[styles.webTransportSide, styles.webTransportSideRight]}>
@@ -144,6 +150,7 @@ export function WebTransportBar({
                 label="Undo"
                 onPress={history.undo}
                 disabled={!history.canUndo}
+                tooltipPlacement={tip}
                 theme={theme}
                 styles={styles}
                 iconSize={13}
@@ -153,6 +160,7 @@ export function WebTransportBar({
                 label="Redo"
                 onPress={history.redo}
                 disabled={!history.canRedo}
+                tooltipPlacement={tip}
                 theme={theme}
                 styles={styles}
                 iconSize={13}
@@ -160,15 +168,23 @@ export function WebTransportBar({
               <Divider styles={styles} />
             </>
           )}
-          <Pressable
-            onPress={onCycleRate}
-            disabled={disabled}
-            style={({ hovered }: any) => [styles.webSpeedBtn, !disabled && hovered && styles.webIconBtnHover]}
-            accessibilityRole="button"
-            accessibilityLabel={`Playback speed: ${playbackRate}x. Tap to change.`}
-          >
-            <Text style={[styles.webSpeedBtnText, disabled && { color: theme.textMuted }]}>{playbackRate}x</Text>
-          </Pressable>
+          {/* The one control in the bar that renders its own text rather than an icon, and
+              so the one that had no tooltip: "1x" says what the speed is, not that the
+              button changes it. */}
+          <Tooltip label="Playback speed" placement={tip} disabled={disabled} styles={styles}>
+            {(hoverProps) => (
+              <Pressable
+                onPress={onCycleRate}
+                disabled={disabled}
+                {...hoverProps}
+                style={({ hovered }: any) => [styles.webSpeedBtn, !disabled && hovered && styles.webIconBtnHover]}
+                accessibilityRole="button"
+                accessibilityLabel={`Playback speed: ${playbackRate}x. Tap to change.`}
+              >
+                <Text style={[styles.webSpeedBtnText, disabled && { color: theme.textMuted }]}>{playbackRate}x</Text>
+              </Pressable>
+            )}
+          </Tooltip>
           <Text style={styles.webPlayTime}>
             {formatElapsed(currentTimeMs)} / {formatElapsed(totalTimeMs)}
           </Text>

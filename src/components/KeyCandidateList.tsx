@@ -9,7 +9,7 @@
  */
 
 import React from 'react';
-import { CandidateKeyBadge, CandidateList, CandidateRow } from './CandidateRow';
+import { CandidateGroupLabel, CandidateKeyBadge, CandidateList, CandidateRow } from './CandidateRow';
 import type { KeyCandidate } from '@/audio/notesToTabs';
 import type { HarmonicaKey } from '@/types';
 
@@ -42,24 +42,45 @@ interface Props {
   onSelect: (key: HarmonicaKey) => void;
   /** The row's stats line, and how the whole row reads to a screen reader. */
   describe: (candidate: KeyCandidate) => { stats: string; accessibilityLabel: string };
+  /**
+   * How many leading candidates the scoring actually stands behind.
+   *
+   * The list used to *be* this number — callers sliced to the top three and the other nine
+   * keys were unreachable, so someone who owns exactly one harmonica and whose key ranked
+   * fourth was offered no way to pick it. The ranking is the value; hiding the rest of the
+   * list isn't. Every key renders, in ranked order, with the heading marking where the
+   * recommendation ends. Omit to label nothing.
+   */
+  recommendedCount?: number;
 }
 
-export function KeyCandidateList({ candidates, selectedKey, onSelect, describe }: Props) {
+export function KeyCandidateList({
+  candidates, selectedKey, onSelect, describe, recommendedCount,
+}: Props) {
+  // Nothing to divide when the recommendation covers the whole list — a "recommended"
+  // heading over every row says nothing, and an empty "other keys" run is worse.
+  const grouped = recommendedCount !== undefined
+    && recommendedCount > 0
+    && recommendedCount < candidates.length;
+
   return (
     <CandidateList>
-      {candidates.map((candidate) => {
+      {candidates.map((candidate, index) => {
         const selected = candidate.key === selectedKey;
         const { stats, accessibilityLabel } = describe(candidate);
         return (
-          <CandidateRow
-            key={candidate.key}
-            leading={<CandidateKeyBadge label={candidate.key} selected={selected} />}
-            title={positionLabel(candidate.position)}
-            subtitle={stats}
-            selected={selected}
-            onPress={() => onSelect(candidate.key)}
-            accessibilityLabel={accessibilityLabel}
-          />
+          <React.Fragment key={candidate.key}>
+            {grouped && index === 0 && <CandidateGroupLabel label="RECOMMENDED" />}
+            {grouped && index === recommendedCount && <CandidateGroupLabel label="ALL OTHER KEYS" />}
+            <CandidateRow
+              leading={<CandidateKeyBadge label={candidate.key} selected={selected} />}
+              title={positionLabel(candidate.position)}
+              subtitle={stats}
+              selected={selected}
+              onPress={() => onSelect(candidate.key)}
+              accessibilityLabel={accessibilityLabel}
+            />
+          </React.Fragment>
         );
       })}
     </CandidateList>

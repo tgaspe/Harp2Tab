@@ -78,6 +78,19 @@ export function CandidateRow({
   );
 }
 
+/**
+ * Divides a long list into named runs — "the ones we recommend" and "everything else".
+ *
+ * Inside the `radiogroup` rather than outside it, because the split is a labelling of one
+ * list of choices, not two lists: the ranking is continuous and the heading only says where
+ * confidence in it stops.
+ */
+export function CandidateGroupLabel({ label }: { label: string }) {
+  const theme  = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
+  return <Text style={styles.groupLabel}>{label}</Text>;
+}
+
 /** The leading slot for a key row — the harmonica's letter, emphasized when selected. */
 export function CandidateKeyBadge({ label, selected }: { label: string; selected: boolean }) {
   const theme  = useTheme();
@@ -121,6 +134,13 @@ function createStyles(theme: Theme) {
       fontFamily: Poppins.regular,
       fontSize:   FONT.xs,
       color:      theme.textSub,
+    },
+    groupLabel: {
+      fontFamily:    Poppins.semiBold,
+      fontSize:      FONT.xs,
+      color:         theme.textMuted,
+      letterSpacing: 0.8,
+      marginTop:     4,
     },
     keyBadge: {
       fontFamily: SpaceGrotesk.bold,

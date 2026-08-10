@@ -75,9 +75,11 @@ type Phase =
   | { kind: 'midiConfirm'; parsed: MidiImportResult; selection: TrackSelection; chosenKey: HarmonicaKey }
   | { kind: 'error';   code: ImportErrorCode; message: string };
 
-/** How many candidate keys the confirm step offers. The winner plus the two next-best,
- *  which in practice is straight harp plus the cross-harp positions around it. */
-const ALTERNATES_SHOWN = 3;
+/** How many of the confirm step's candidate keys carry the recommendation — the winner plus
+ *  the two next-best, which in practice is straight harp plus the cross-harp positions
+ *  around it. All 12 are offered; this is only where the heading stops. Same cut as the
+ *  Studio's convert modal, since it's a user hitting the same wall for the same reason. */
+const RECOMMENDED_KEYS = 3;
 
 function durationLabel(ms: number): string {
   const total   = Math.round(ms / 1000);
@@ -474,7 +476,6 @@ export default function ImportScreen() {
     // Chromatic covers every semitone in its range, so all 12 keys score identically and a
     // key list would carry no information — the key picked on Home stands.
     const showKeys       = harmonicaType === 'diatonic';
-    const candidates     = ranking.ranked.slice(0, ALTERNATES_SHOWN);
     const unplayable     = ranking.unplayableByKey[chosenKey] ?? 0;
     const selectedTrack  = selection === 'all'
       ? null
@@ -598,7 +599,8 @@ export default function ImportScreen() {
             <>
               <Text style={styles.sectionLabel}>TARGET HARMONICA</Text>
               <KeyCandidateList
-                candidates={candidates}
+                candidates={ranking.ranked}
+                recommendedCount={RECOMMENDED_KEYS}
                 selectedKey={chosenKey}
                 onSelect={(key) => setPhase({ ...phase, chosenKey: key })}
                 describe={(candidate) => {

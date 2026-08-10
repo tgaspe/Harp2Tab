@@ -24,8 +24,9 @@ import type { Theme } from '@/theme';
 import type { HarmonicaKey, HarmonicaType } from '@/types';
 
 /** The winner plus the two next-best — in practice straight harp and the cross-harp
- *  positions around it. Matches what the import screen offers. */
-const ALTERNATES_SHOWN = 3;
+ *  positions around it. Everything below them still renders; this is only where the
+ *  "recommended" heading stops. Matches what the import screen offers. */
+const RECOMMENDED_KEYS = 3;
 
 interface Props {
   visible:       boolean;
@@ -46,7 +47,6 @@ export function ConvertTrackModal({
   const theme  = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
 
-  const candidates = ranking.ranked.slice(0, ALTERNATES_SHOWN);
   const unplayable = ranking.unplayableByKey[chosenKey] ?? 0;
   const shift      = ranking.octaveShiftSemitones;
 
@@ -82,7 +82,8 @@ export function ConvertTrackModal({
             </View>
 
             <KeyCandidateList
-              candidates={candidates}
+              candidates={ranking.ranked}
+              recommendedCount={RECOMMENDED_KEYS}
               selectedKey={chosenKey}
               onSelect={onSelectKey}
               describe={(candidate) => {

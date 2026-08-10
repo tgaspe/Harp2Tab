@@ -593,9 +593,7 @@ export function createStyles(t: Theme) {
     iconBtnWrap: { position: 'relative' },
     tooltip: {
       position: 'absolute',
-      top: '100%',
       left: 0,
-      marginTop: 6,
       paddingHorizontal: 7,
       paddingVertical: 4,
       borderRadius: 5,
@@ -603,6 +601,11 @@ export function createStyles(t: Theme) {
       zIndex: 20,
       ...(Platform.OS === 'web' ? { boxShadow: '0 2px 6px rgba(0,0,0,0.25)', whiteSpace: 'nowrap' } : null),
     } as any,
+    // Placement is a per-control choice, not a constant: the top toolbar has room beneath
+    // its buttons, the transport bar sits on the bottom edge of the screen in both hosts
+    // and a tooltip drawn below it lands past the viewport edge, clipped.
+    tooltipBelow: { top: '100%', marginTop: 6 },
+    tooltipAbove: { bottom: '100%', marginBottom: 6 },
     tooltipText: { fontSize: 10, fontFamily: Poppins.semiBold, color: t.bg },
 
     webNoteCount: { fontSize: 12, fontFamily: Poppins.regular, color: t.textMuted },

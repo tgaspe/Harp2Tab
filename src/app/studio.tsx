@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { ActionSheetModal } from '@/components/ActionSheetModal';
@@ -679,13 +679,18 @@ export default function StudioScreen() {
                 totalCount:   editableNotes.length,
               }}
               headerLeft={
-                <View style={styles.rollHeader}>
-                  <Text style={styles.rollTitle} numberOfLines={1}>{project.title}</Text>
-                  <Text style={styles.rollSubtitle} numberOfLines={1}>
-                    {tracks.length} track{tracks.length === 1 ? '' : 's'}
-                    {selectedTrack ? ` · ${selectedTrack.name} (${instrumentName(selectedTrack.program)})` : ''}
-                  </Text>
-                </View>
+                <ProjectTitle
+                  // Remount on a project switch so the field re-seeds from the new title
+                  // instead of carrying the previous project's text across.
+                  key={project.id}
+                  title={project.title}
+                  onRename={(title) => mutate({ ...project, title })}
+                  subtitle={
+                    `${tracks.length} track${tracks.length === 1 ? '' : 's'}`
+                    + (selectedTrack ? ` · ${selectedTrack.name} (${instrumentName(selectedTrack.program)})` : '')
+                  }
+                  styles={styles}
+                />
               }
             />
           ) : (
@@ -729,6 +734,60 @@ export default function StudioScreen() {
   );
 }
 
+/**
+ * The project's name, editable in place, in the piano roll's tool row.
+ *
+ * The same affordance the tab editor's `ChartTitle` uses and for the same reason: a field
+ * styled as a heading gives no sign it is a field, so on web the pointer paints its box in.
+ * Sized for the tool row rather than the editor's page title, which is the slot it occupies.
+ *
+ * The typed value is held here and committed on blur, for two reasons. `PianoRoll` is the
+ * heaviest component on the screen and lifting every keystroke into the project would
+ * re-render it per character. And the rename goes through the screen's `mutate` — the draft,
+ * like every other edit here — *not* the store's `renameProject`: with edits held in a draft
+ * until Save, a direct store write would be overwritten by the next `saveProject`, which
+ * replaces the whole project with the draft it holds.
+ */
+function ProjectTitle({
+  title, subtitle, onRename, styles,
+}: {
+  title:    string;
+  subtitle: string;
+  onRename: (title: string) => void;
+  styles:   ReturnType<typeof createStyles>;
+}) {
+  const [value, setValue]     = useState(title);
+  const [hovered, setHovered] = useState(false);
+
+  function commit() {
+    const next = value.trim();
+    // An emptied title is a slip, not an instruction — a project with no name is
+    // unfindable on Home. Snap back rather than commit it.
+    if (!next) { setValue(title); return; }
+    if (next !== title) onRename(next);
+  }
+
+  return (
+    <View
+      style={styles.rollHeader}
+      {...(Platform.OS === 'web'
+        ? { onMouseEnter: () => setHovered(true), onMouseLeave: () => setHovered(false) }
+        : null)}
+    >
+      <TextInput
+        value={value}
+        onChangeText={setValue}
+        onBlur={commit}
+        onSubmitEditing={commit}
+        returnKeyType="done"
+        style={[styles.rollTitleInput, hovered && styles.rollTitleInputHovered]}
+        accessibilityLabel="Project name"
+      />
+      <Text style={styles.rollSubtitle} numberOfLines={1}>{subtitle}</Text>
+    </View>
+  );
+}
+
 function createStyles(t: Theme) {
   return StyleSheet.create({
     screen: { flex: 1, backgroundColor: t.bg },
@@ -740,7 +799,21 @@ function createStyles(t: Theme) {
       borderTopColor:   t.separator,
     },
     rollHeader: { minWidth: 0, maxWidth: 320 },
-    rollTitle:    { fontFamily: Poppins.bold, fontSize: 14, color: t.textPrimary },
+    // Was a static <Text> at these metrics; the input keeps them so the row's height and
+    // rhythm are unchanged, with negative horizontal margin cancelling the padding that
+    // gives the hover box its inset — the title still starts flush with the row.
+    rollTitleInput: {
+      fontFamily:        Poppins.bold,
+      fontSize:          14,
+      color:             t.textPrimary,
+      paddingVertical:   2,
+      paddingHorizontal: 4,
+      marginHorizontal:  -4,
+      borderRadius:      6,
+      backgroundColor:   'transparent',
+      ...(Platform.OS === 'web' ? { outlineStyle: 'none', cursor: 'text' } as any : null),
+    } as any,
+    rollTitleInputHovered: { backgroundColor: t.surfaceAlt },
     rollSubtitle: { fontFamily: SpaceGrotesk.regular, fontSize: 11, color: t.textMuted },
     notice: {
       marginHorizontal: 16,
