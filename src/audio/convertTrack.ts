@@ -99,7 +99,7 @@ export function rankKeysForTrack(
  * the articulation floor. A caller should say so rather than opening an empty editor.
  */
 export function convertTrackToRecording(
-  project: Pick<MidiProject, 'id' | 'title' | 'tempos'>,
+  project: Pick<MidiProject, 'id' | 'title' | 'tempos' | 'origin'>,
   track: MidiTrackData,
   options: ConvertOptions = {},
 ): ConversionResult | null {
@@ -144,7 +144,11 @@ export function convertTrackToRecording(
       // MIDI carries a real tempo map, but a tab session holds a single BPM, so the
       // opening tempo is what transfers. The map stays with the project.
       bpm:           project.tempos[0]?.bpm ? Math.round(project.tempos[0].bpm) : undefined,
-      source:        'midiStudio',
+      // The project's own origin when it states one — a transcribed take is a recording
+      // however many Studio edits it collected on the way here, and Frame Inspector reads
+      // this to decide what it can show. Projects saved before `origin` existed, and every
+      // genuine MIDI import, keep reporting the route.
+      source:        project.origin ?? 'midiStudio',
       sourceProjectId: project.id,
       sourceTrackId:   track.id,
     },

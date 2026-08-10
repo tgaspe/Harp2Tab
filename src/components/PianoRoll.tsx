@@ -503,6 +503,21 @@ interface PianoRollProps {
   /** Overrides the technique-derived note colour. The Studio passes the active track's
    *  colour, since technique is a harmonica idea and there's no harmonica at that stage. */
   noteColor?:     string;
+  /**
+   * Draw the notes, don't offer to change them — the import preview's mode.
+   *
+   * Every control that writes goes away rather than being disabled: the tool picker, snap,
+   * the grid resolution, quantize, transpose, help, the loop-region pins, the ruler's
+   * click-to-seek, note dragging, click-to-create, the marquee, and the keyboard shortcuts.
+   * What survives is everything that only changes *what you can see* — zoom, fit to
+   * content, scrolling, and the data panel's read-only charts.
+   *
+   * Stronger than passing no-op handlers, and deliberately so. A control that quietly does
+   * nothing reads as broken, and on the import screen the writes have somewhere real to
+   * land: the roll falls back to the tab session's store for any bulk handler its host
+   * omits, so a quantize there would edit whatever the user has open in the editor.
+   */
+  viewOnly?:      boolean;
   /** Tracks other than the one being edited, drawn behind it and completely inert. Keeping
    *  them non-interactive is a hard requirement, not a simplification: interactivity here
    *  means a gesture-handler instance per note, which is what the note culling below exists
@@ -597,7 +612,7 @@ export interface RollFilter {
 }
 
 export function PianoRoll({
-  notes, harmonicaKey, harmonicaType, bpm, tempoMap, rows, rowHeight, noteColor, backgroundLanes,
+  notes, harmonicaKey, harmonicaType, bpm, tempoMap, rows, rowHeight, noteColor, backgroundLanes, viewOnly,
   onUpdateMany, onCreateMany, readNotesAfterWrite, selectedId, onSelect, onCreate, onUpdate, onDelete, onDeleteMany, isPlaying, currentTimeMs, onSeek,
   loopRegion, onLoopRegionChange, headerLeft, velocityFilter, durationFilter,
 }: PianoRollProps) {
@@ -674,7 +689,12 @@ export function PianoRoll({
   // directly draggable — matches Signal's mouseMode split. `selectedIds` (marquee, local
   // to this component) is intentionally separate from the `selectedId` prop (single,
   // shared with the parent/list view) rather than trying to unify them.
-  const [mouseMode, setMouseMode] = useState<'pencil' | 'selection'>('pencil');
+  const [mouseModeSetting, setMouseMode] = useState<'pencil' | 'selection'>('pencil');
+  // A view-only roll has no tool picker to get back out of Selection with, and selection
+  // mode is not merely inert there — it routes every note through the group overlay, which
+  // only a marquee can populate. Pinned to pencil so the notes draw at all; `interactive`
+  // below is what actually keeps them from being draggable.
+  const mouseMode = viewOnly ? 'pencil' : mouseModeSetting;
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const mouseModeRef   = useRef(mouseMode);   mouseModeRef.current   = mouseMode;
   const selectedIdsRef = useRef(selectedIds); selectedIdsRef.current = selectedIds;
@@ -690,7 +710,7 @@ export function PianoRoll({
   // Reanimated shared value. Drives the selection tool's additive click/drag-marquee.
   const shiftHeldRef = useRef(false);
   useEffect(() => {
-    if (Platform.OS !== 'web') return;
+    if (Platform.OS !== 'web' || viewOnly) return;
     function onKeyDown(e: KeyboardEvent) { if (e.key === 'Shift') shiftHeldRef.current = true; }
     function onKeyUp(e: KeyboardEvent) { if (e.key === 'Shift') shiftHeldRef.current = false; }
     window.addEventListener('keydown', onKeyDown);
@@ -699,7 +719,7 @@ export function PianoRoll({
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, []);
+  }, [viewOnly]);
 
   // Marquee drag preview — driven entirely on the UI thread via shared values (like the
   // note-block drag previews below) rather than React state, since onUpdate fires at
@@ -1352,7 +1372,10 @@ export function PianoRoll({
   }
 
   useEffect(() => {
-    if (Platform.OS !== 'web' || positions.length === 0) return;
+    // Every shortcut below either edits or picks a tool, so a view-only roll registers
+    // none of them — and being window-level, they'd otherwise be live for a screen that
+    // has no visible control doing the same thing.
+    if (Platform.OS !== 'web' || positions.length === 0 || viewOnly) return;
 
     // These are window-level listeners, so they fire while the user is typing in a field
     // somewhere else on the screen too — which meant a "1" in the recording-title box
@@ -1442,7 +1465,7 @@ export function PianoRoll({
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [positions, onUpdate, onDelete, onSelect, deleteMany]);
+  }, [positions, onUpdate, onDelete, onSelect, deleteMany, viewOnly]);
 
   // Modifier + scroll to zoom, cursor-anchored so the timestamp under the pointer stays
   // fixed on screen as the scale changes (the same technique used by Signal/most DAWs) —
@@ -1551,7 +1574,11 @@ export function PianoRoll({
   // shifted via a transform for scroll-sync, so the gesture's local x is already in the
   // same content-space coordinates as bar/note positions — no manual scrollX offset
   // needed, same reasoning as the grid's own background gesture.
-  const rulerTapGesture = Gesture.Tap().onEnd((e, success) => {
+  //
+  // Disabled rather than absent when view-only: there's nothing to seek to on a roll with
+  // no playhead, and a ruler that silently jumped a playhead the user can't see would be
+  // the one interactive thing left on a picture.
+  const rulerTapGesture = Gesture.Tap().enabled(!viewOnly).onEnd((e, success) => {
     if (success) runOnJS(onSeek)(Math.max(0, (e.x / pxPerSecond) * 1000));
   });
 
@@ -1620,7 +1647,8 @@ export function PianoRoll({
   // dropping a pin; with no active drag, it clears an already-dropped first pin instead
   // of leaving the user stuck waiting to place a second one they no longer want.
   useEffect(() => {
-    if (Platform.OS !== 'web') return;
+    // No dock to drag a pin out of when the roll is view-only, so nothing to abort.
+    if (Platform.OS !== 'web' || viewOnly) return;
     function onKeyDown(e: KeyboardEvent) {
       if (e.key !== 'Escape') return;
       if (pinDockDragging.value) {
@@ -1632,7 +1660,7 @@ export function PianoRoll({
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [viewOnly]);
 
   // A plain Pressable nested inside a gesture-heavy ancestor is untested territory in
   // this file — every other interactive element inside one (resize handles, etc.) is
@@ -1780,11 +1808,15 @@ export function PianoRoll({
     if (success) runOnJS(handleSelectionTapAt)(e.x, e.y);
   });
 
-  const backgroundGesture = mouseMode === 'pencil'
-    ? Gesture.Tap().onEnd((e, success) => {
-        if (success) runOnJS(handleCreateNoteAt)(e.x, e.y);
-      })
-    : Gesture.Race(selectionTapGesture, marqueeGesture);
+  // A disabled gesture rather than a missing GestureDetector, so the grid's element tree is
+  // the same shape in both modes — the scroll views around it are sensitive to it.
+  const backgroundGesture = viewOnly
+    ? Gesture.Tap().enabled(false)
+    : mouseMode === 'pencil'
+      ? Gesture.Tap().onEnd((e, success) => {
+          if (success) runOnJS(handleCreateNoteAt)(e.x, e.y);
+        })
+      : Gesture.Race(selectionTapGesture, marqueeGesture);
 
   return (
     <View style={styles.outer} onLayout={handleViewportLayout}>
@@ -1831,6 +1863,10 @@ export function PianoRoll({
           </View>
         </View>
 
+        {/* Every control in this cluster writes — tools, snap, quantize, transpose — and
+            the help sheet documents exactly them. A view-only roll keeps the left cluster
+            (title, zoom, fit) and shows nothing here. */}
+        {!viewOnly && (
         <View style={styles.toolbarRowRight}>
           <View style={styles.toolToggle}>
             <Pressable
@@ -1968,6 +2004,7 @@ export function PianoRoll({
             <Ionicons name="help" size={14} color={helpOpen ? '#fff' : theme.textSub} />
           </Pressable>
         </View>
+        )}
       </View>
 
       {/* Bar ruler — follows the grid's horizontal scroll via a transform, not its own
@@ -1975,25 +2012,31 @@ export function PianoRoll({
           A click seeks. The dock to its left is what places an A/B loop region — see
           pinDockGesture above. */}
       <View style={styles.rulerRow}>
+        {/* The rail itself stays in the view-only case even with no dock in it: its width
+            is what holds the ruler in register with the frozen label column below. */}
         <View style={styles.pinDockRail}>
-          <GestureDetector gesture={pinDockGesture}>
-            <View
-              {...(Platform.OS === 'web'
-                ? { onMouseEnter: () => setPinDockHovered(true), onMouseLeave: () => setPinDockHovered(false) }
-                : null)}
-              style={styles.pinDock}
-              accessible
-              accessibilityLabel="Drag out a loop-region pin"
-            >
-              <Ionicons name="flag-outline" size={9} color="#fff" />
-            </View>
-          </GestureDetector>
-          {pinDockHovered && (
-            <View style={styles.pinDockTooltip} pointerEvents="none">
-              <Text style={styles.pinDockTooltipText}>
-                Drag to place a loop-region pin{'\n'}Drop one, then drag another for the other end
-              </Text>
-            </View>
+          {!viewOnly && (
+            <>
+              <GestureDetector gesture={pinDockGesture}>
+                <View
+                  {...(Platform.OS === 'web'
+                    ? { onMouseEnter: () => setPinDockHovered(true), onMouseLeave: () => setPinDockHovered(false) }
+                    : null)}
+                  style={styles.pinDock}
+                  accessible
+                  accessibilityLabel="Drag out a loop-region pin"
+                >
+                  <Ionicons name="flag-outline" size={9} color="#fff" />
+                </View>
+              </GestureDetector>
+              {pinDockHovered && (
+                <View style={styles.pinDockTooltip} pointerEvents="none">
+                  <Text style={styles.pinDockTooltipText}>
+                    Drag to place a loop-region pin{'\n'}Drop one, then drag another for the other end
+                  </Text>
+                </View>
+              )}
+            </>
           )}
         </View>
 
@@ -2010,7 +2053,7 @@ export function PianoRoll({
                 visibleEndMs={visibleEndMs}
               />
 
-              {loopRegion && (
+              {loopRegion && !viewOnly && (
                 <Animated.View style={[styles.loopRegionBand, loopRegionAnimatedStyle]}>
                   <GestureDetector gesture={loopRegionResizeLeftGesture}>
                     <View style={styles.loopRegionHandleLeft} />
@@ -2032,11 +2075,11 @@ export function PianoRoll({
               )}
 
               {/* First pin, dropped and waiting for its partner. */}
-              {firstPinMs !== null && (
+              {firstPinMs !== null && !viewOnly && (
                 <View pointerEvents="none" style={[styles.pinLine, { left: (firstPinMs / 1000) * pxPerSecond }]} />
               )}
               {/* Live ghost pin while actively dragging one out of the dock. */}
-              <Animated.View pointerEvents="none" style={[styles.pinLine, pinDockAnimatedStyle]} />
+              {!viewOnly && <Animated.View pointerEvents="none" style={[styles.pinLine, pinDockAnimatedStyle]} />}
 
               {showPlayhead && (
                 <View pointerEvents="none" style={[styles.playheadWrap, { left: playheadLeft - 4 }]}>
@@ -2094,10 +2137,16 @@ export function PianoRoll({
             scrollEventThrottle={16}
           >
             <GestureDetector gesture={backgroundGesture}>
+              {/* onMouseMove survives a view-only roll — it feeds the zoom anchor, and
+                  cursor-anchored zoom is one of the things that stays. The context menu
+                  doesn't: its only action is deleting the note under the pointer. */}
               <View
                 style={[styles.grid, { width: gridWidth, height: gridHeight }]}
                 {...(Platform.OS === 'web'
-                  ? ({ onContextMenu: handleGridContextMenu, onMouseMove: handleGridMouseMove } as object)
+                  ? ({
+                      ...(viewOnly ? null : { onContextMenu: handleGridContextMenu }),
+                      onMouseMove: handleGridMouseMove,
+                    } as object)
                   : null)}
               >
                 {visibleRows.map(({ row: p, index }) => {
@@ -2171,7 +2220,7 @@ export function PianoRoll({
                       rowHeight={rowH}
                       noteColor={noteColor}
                       snapDivision={snapDivision}
-                      interactive={mouseMode === 'pencil'}
+                      interactive={mouseMode === 'pencil' && !viewOnly}
                       isSelected={mouseMode === 'pencil' ? selectedId === note.id : selectedIds.includes(note.id)}
                       onSelect={onSelect}
                       onUpdate={onUpdate}
@@ -2211,7 +2260,7 @@ export function PianoRoll({
                     and gridWidth collapses to ~viewportWidth when there are no notes (see
                     its own computation above), so centering within the grid here also
                     centers within the visible viewport — no scroll-position math needed. */}
-                {notes.length === 0 && mouseMode === 'pencil' && (
+                {notes.length === 0 && mouseMode === 'pencil' && !viewOnly && (
                   <View pointerEvents="none" style={[styles.emptyGridHint, { width: gridWidth, height: gridHeight }]}>
                     <Ionicons name="add-circle-outline" size={22} color={theme.textMuted} />
                     <Text style={styles.emptyGridHintText}>Click anywhere to add your first note</Text>
@@ -2404,7 +2453,11 @@ export function PianoRoll({
         </View>
       )}
 
-      <HelpModal visible={helpOpen} onClose={() => setHelpOpen(false)} theme={theme} styles={styles} />
+      {/* Documents the tools, shortcuts and gestures — none of which exist on a view-only
+          roll, and there's no button left to open it with either. */}
+      {!viewOnly && (
+        <HelpModal visible={helpOpen} onClose={() => setHelpOpen(false)} theme={theme} styles={styles} />
+      )}
     </View>
   );
 }
@@ -3154,7 +3207,12 @@ function PianoRollNoteBlock({
 
     const changes: NoteUpdate = {};
     if (newStart !== note.start_time) changes.start_time = newStart;
-    if (newPos.tab !== note.tab) { changes.tab = newPos.tab; changes.note = newPos.note; }
+    // Compared by pitch, not by tab: rows are unique by `note` but *not* by `tab` — the
+    // Studio's chromatic ladder gives every row tab: '', and the editor's ladder gives
+    // that to every unplayable row. Gating on tab meant those drags committed the
+    // horizontal move and silently dropped the vertical one, snapping the note back to
+    // its original row.
+    if (newPos.note !== note.note) { changes.tab = newPos.tab; changes.note = newPos.note; }
     if (Object.keys(changes).length > 0) onUpdate(note.id, changes);
   }
 
@@ -3378,7 +3436,8 @@ function GroupSelectionOverlay({
       const newPos = positions[newRow];
       const changes: NoteUpdate = {};
       if (newStart !== note.start_time) changes.start_time = newStart;
-      if (newPos.tab !== note.tab) { changes.tab = newPos.tab; changes.note = newPos.note; }
+      // By pitch, not by tab — see commitMove for why tab isn't a usable row identity.
+      if (newPos.note !== note.note) { changes.tab = newPos.tab; changes.note = newPos.note; }
       if (Object.keys(changes).length > 0) updates.push({ id: note.id, changes });
     }
     applyMany(updates);

@@ -1,4 +1,7 @@
-import { addAudioFrameListener, startCapture, stopCapture, setThreshold } from '@/native/AudioCapture';
+import {
+  addAudioFrameListener, setMaxTakeMs, setRetaining, setRetentionFormat, setThreshold,
+  startCapture, stopCapture,
+} from '@/native/AudioCapture';
 import { createNoteDetector } from '@/audio/NoteDetector';
 import { pushFrame } from '@/audio/frameBuffer';
 import { selectHarmonicaType, selectIsPaused, selectIsRecording, selectKey, selectRecordingId, useAppStore } from '@/store/useAppStore';
@@ -16,6 +19,8 @@ export function useAudioCapture(): { permissionDenied: boolean } {
   const recordingStartTime = useAppStore((s) => s.recordingStartTime);
   const stopRecording      = useAppStore((s) => s.stopRecording);
   const micSensitivity     = useSettingsStore((s) => s.micSensitivity);
+  const compactTakes       = useSettingsStore((s) => s.compactTakes);
+  const maxTakeMinutes     = useSettingsStore((s) => s.maxTakeMinutes);
   const [permissionDenied, setPermissionDenied] = useState(false);
 
   const isPausedRef  = useRef(isPaused);
@@ -60,6 +65,11 @@ export function useAudioCapture(): { permissionDenied: boolean } {
       if (cancelled) return;
 
       setThreshold((micSensitivity / 100) * 0.05);
+      // Set before the capture graph exists: the format is latched when the take starts,
+      // so a later flip of the setting applies to the next take rather than corrupting
+      // this one's buffer with two block types.
+      setRetentionFormat(compactTakes ? 'int16' : 'float32');
+      setMaxTakeMs(maxTakeMinutes * 60 * 1000);
       startCapture();
 
       const detector = createNoteDetector(
@@ -106,6 +116,11 @@ export function useAudioCapture(): { permissionDenied: boolean } {
   useEffect(() => {
     isPausedRef.current = isPaused;
     detectorRef.current?.reset();
+    // Paused audio is dropped rather than kept, which is what keeps the retained take
+    // aligned with the live timeline: the elapsed clock already discounts pauses, so
+    // recording the silence would slide every note after a pause later than the HUD
+    // showed it.
+    setRetaining(!isPaused);
   }, [isPaused]);
 
   // Live sensitivity adjustment while recording

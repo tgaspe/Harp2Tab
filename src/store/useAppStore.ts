@@ -109,6 +109,8 @@ interface AppActions {
   startRecording: () => void;
   startImportedSession: (title: string | undefined, source: RecordingSource) => void;
   stopRecording:  () => void;
+  abortRecording: () => void;
+  discardSession: () => void;
   pauseRecording: () => void;
   resumeRecording:() => void;
   addTabNote:     (note: Omit<TabNote, 'id'>) => void;
@@ -242,6 +244,42 @@ export const useAppStore = create<AppState & AppActions>()(
         // inside makes the whole thing one undo away for anyone who disagrees.
         const estimate = detectTempo(s.tabNotes);
         if (estimate) applyTempoEstimate(s, estimate.bpm, estimate.offsetMs);
+      }),
+
+    // Close the capture down without interpreting the take. `stopRecording` can't stand in
+    // for this: it runs the automatic tempo pass, so aborting through it would leave the
+    // *discarded* take's bpm on the session that follows.
+    //
+    // Notes are left alone deliberately — the capture teardown flushes the note still
+    // sounding (useAudioCapture's cleanup) one commit after this, so whoever calls this is
+    // expected to clear or replace them afterwards, once that flush has landed.
+    abortRecording: () =>
+      set((s) => {
+        s.isRecording = false;
+        s.isPaused    = false;
+      }),
+
+    // Abandon the take outright — the counterpart to stopRecording(), which *keeps* what was
+    // captured. No tempo estimate and no history entry: there is nothing left to undo back
+    // to, and pushing one would make Discard reachable by Ctrl+Z on the next session.
+    //
+    // Deliberately not `reset()`: selectedKey/harmonicaType/bpm and the rest of the user's
+    // setup survive, same reasoning as startNewRecordingSession — discarding a take is not
+    // asking to be sent back to key selection.
+    discardSession: () =>
+      set((s) => {
+        s.isRecording        = false;
+        s.isPaused           = false;
+        s.recordingStartTime = null;
+        s.recordingId        = null;
+        s.tabNotes           = [];
+        s.history            = [];
+        s.future             = [];
+        s.recordingTitle     = '';
+        s.sourceProjectId    = null;
+        s.sourceTrackId      = null;
+        s.noiseGate          = 0;
+        s.durationFloorMs    = 0;
       }),
 
     pauseRecording: () =>

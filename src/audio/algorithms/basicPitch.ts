@@ -9,7 +9,7 @@
  */
 
 import { AudioImportError, type DecodedAudio } from '../audioImport';
-import type { TranscriptionAlgorithm, TranscriptionOutput } from './index';
+import type { Prepared, Segmentation, TranscriptionAlgorithm } from './index';
 
 export const basicPitchAlgorithm: TranscriptionAlgorithm = {
   id:             'basicPitch',
@@ -18,8 +18,19 @@ export const basicPitchAlgorithm: TranscriptionAlgorithm = {
   available:      false,
   producesFrames: false,
   polyphonic:     true,
+  // Nothing declares a parameter it can't run. An empty schema also means that if this
+  // engine ever did surface here by mistake, the tune screen would render an empty rail
+  // rather than controls wired to nothing.
+  params:         [],
 
-  async transcribe(_audio: DecodedAudio): Promise<TranscriptionOutput> {
+  async prepare(_audio: DecodedAudio): Promise<Prepared> {
+    throw new AudioImportError(
+      'unsupportedFormat',
+      'Neural transcription is only available on the web version.',
+    );
+  },
+
+  async resegment(): Promise<Segmentation> {
     throw new AudioImportError(
       'unsupportedFormat',
       'Neural transcription is only available on the web version.',

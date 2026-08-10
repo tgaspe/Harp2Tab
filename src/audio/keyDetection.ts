@@ -13,6 +13,7 @@
  */
 
 import { framesToNotes } from './framesToNotes';
+import type { NoteDetectorConfig } from './NoteDetector';
 import { positionOf, scoreTabbedNotes, type KeyCandidate } from './notesToTabs';
 import { midiOfFrequency, octaveShiftForMidiRange } from './pitchRange';
 import { HARMONICA_KEYS } from '@/constants/keys';
@@ -63,23 +64,31 @@ function scoreKey(
   key: HarmonicaKey,
   harmonicaType: HarmonicaType,
   voicedMs: number,
+  config?: Partial<NoteDetectorConfig>,
 ): Omit<KeyCandidate, 'position'> {
   // A pitch with no position on this harp never becomes a note at all here (unlike MIDI
   // import, which keeps it as `tab: ''`), so the unmapped share only shows up as coverage
   // missing from the voiced total — which is exactly what `voicedMs` is the denominator for.
-  const notes = framesToNotes(frames, key, harmonicaType);
+  const notes = framesToNotes(frames, key, harmonicaType, config);
   return { key, ...scoreTabbedNotes(notes, voicedMs) };
 }
 
 export function detectHarmonicaKey(
   rawFrames: RawFrame[],
   harmonicaType: HarmonicaType,
+  /**
+   * The segmenter settings the transcription is being tuned with. Ranking has to use the
+   * same ones the committed notes will: scoring is "re-run the cheap step and look at what
+   * came out", so scoring with defaults while committing with tuned values would recommend
+   * a harp for a segmentation the user is not going to get.
+   */
+  config?: Partial<NoteDetectorConfig>,
 ): KeyDetectionResult {
   const octaveShiftSemitones = octaveShiftForRange(rawFrames);
   const frames  = shiftFrames(rawFrames, octaveShiftSemitones);
   const voiced  = voicedDurationMs(frames);
 
-  const scored = HARMONICA_KEYS.map((key) => scoreKey(frames, key, harmonicaType, voiced));
+  const scored = HARMONICA_KEYS.map((key) => scoreKey(frames, key, harmonicaType, voiced, config));
   scored.sort((a, b) => b.score - a.score);
 
   // The best-fitting harp is taken as 1st position, which is what every other position is

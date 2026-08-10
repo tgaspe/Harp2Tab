@@ -19,7 +19,8 @@
 
 import type { DecodedAudio } from '../audioImport';
 import type { MidiNote } from '../midiToNotes';
-import type { RawFrame } from '@/types';
+import type { NoteDetectorConfig } from '../NoteDetector';
+import type { HarmonicaKey, HarmonicaType, RawFrame } from '@/types';
 
 export type TranscriptionAlgorithmId = 'basicPitch' | 'pmpm';
 
@@ -51,6 +52,128 @@ export interface TranscribeOptions {
   shouldCancel?: () => boolean;
 }
 
+// ── Two-phase transcription ─────────────────────────────────────────────────────
+//
+// Both engines have the same shape underneath: one expensive pass over the audio, then a
+// cheap re-reading of what that pass produced.
+//
+//   | engine      | expensive (once)        | cheap (per parameter change)          |
+//   |-------------|-------------------------|---------------------------------------|
+//   | Basic Pitch | evaluateModel — a CNN   | outputToNotesPoly — pure, 3 matrices  |
+//   | pMPM        | analyzeSamples — NSDF   | framesToNotes — no DSP at all         |
+//
+// Splitting them is what makes a tuning screen affordable: every declared parameter below
+// re-runs only the cheap half, so a slider drag costs milliseconds instead of a re-analysis.
+// That is also the rule for what may be declared at all — anything needing a fresh pass over
+// the audio (Basic Pitch's sample rate, pMPM's analysis hop) is a settings-level decision and
+// deliberately isn't here, however tempting a slider for it looks.
+
+export type ParamValue  = number | boolean;
+export type ParamValues = Record<string, ParamValue>;
+
+interface ParamBase {
+  /** Internal, and the key in `ParamValues` — the library's own name for the knob. */
+  id:        string;
+  /**
+   * The user's name for it, not the library's. "onsetThreshold" is a fact about
+   * `outputToNotesPoly`; "onset sensitivity" is a fact about the recording, and the person
+   * dragging the slider is thinking about the recording.
+   */
+  label:     string;
+  /** One line under the control. Says which direction does what, since no slider label can. */
+  help?:     string;
+  /** Hidden behind a disclosure. For knobs that are real but that nobody should have to
+   *  meet to get a good transcription. */
+  advanced?: boolean;
+}
+
+export interface NumberParam extends ParamBase {
+  kind:    'number';
+  min:     number;
+  max:     number;
+  step:    number;
+  default: number;
+  /** Renders the value with its unit. Slider values are bare numbers; "58 ms" is not. */
+  format:  (v: number) => string;
+}
+
+export interface BooleanParam extends ParamBase {
+  kind:    'boolean';
+  default: boolean;
+}
+
+export type TranscriptionParam = NumberParam | BooleanParam;
+
+/** The engine's own defaults, as a plain bag the tune screen can reset to. */
+export function defaultParams(algorithm: TranscriptionAlgorithm): ParamValues {
+  const values: ParamValues = {};
+  for (const param of algorithm.params) values[param.id] = param.default;
+  return values;
+}
+
+/**
+ * A user's saved values, made safe to use.
+ *
+ * Anything the schema no longer declares is dropped and anything newly declared falls back
+ * to its default, so a schema change can't strand someone on a value that has no control —
+ * these are persisted per engine and outlive any single build.
+ */
+export function withDefaults(algorithm: TranscriptionAlgorithm, saved?: ParamValues): ParamValues {
+  const values = defaultParams(algorithm);
+  if (!saved) return values;
+  for (const param of algorithm.params) {
+    const value = saved[param.id];
+    if (param.kind === 'number' && typeof value === 'number' && Number.isFinite(value)) {
+      values[param.id] = Math.max(param.min, Math.min(param.max, value));
+    } else if (param.kind === 'boolean' && typeof value === 'boolean') {
+      values[param.id] = value;
+    }
+  }
+  return values;
+}
+
+/**
+ * The expensive pass's result, held so the cheap half can be re-run against it.
+ *
+ * Opaque on purpose: the tune screen drives both engines through this without knowing which
+ * it has. `dispose()` is not optional politeness — Basic Pitch's three matrices come to
+ * ~90MB on a five-minute take, which dwarfs the retained PCM in either format and is the
+ * single biggest memory lever in the flow.
+ */
+export interface Prepared {
+  algorithm:  TranscriptionAlgorithmId;
+  durationMs: number;
+  /** Engine-private. Nothing outside the engine that made it may read this. */
+  data:       unknown;
+  dispose(): void;
+}
+
+export interface PrepareOptions extends TranscribeOptions {
+  /**
+   * Only the frame lane uses these, and it genuinely needs them: NoteDetector segments on
+   * *tab identity*, so a frame stream cannot become notes without a harmonica to read it
+   * against. That asymmetry is deliberate and is what makes scoring all 12 candidate keys
+   * cheap in the first place. The note lane ignores both.
+   */
+  harmonicaType?: HarmonicaType;
+  harmonicaKey?:  HarmonicaKey;
+}
+
+export interface Segmentation {
+  output: TranscriptionOutput;
+  /**
+   * Frame-lane only: how these parameters configure the segmenter that turns the stream
+   * into notes.
+   *
+   * The frame lane's notes genuinely do not exist yet at this point — segmenting is
+   * key-dependent, and the key isn't settled until detection has run over these very frames
+   * — so the parameters travel as configuration rather than as a result, and the one place
+   * that knows the key applies them. Null for the note lane, which has already committed
+   * its notes and has no segmenter to configure.
+   */
+  detectorConfig: Partial<NoteDetectorConfig> | null;
+}
+
 export interface TranscriptionAlgorithm {
   id:          TranscriptionAlgorithmId;
   /** Shown in the picker. Deliberately not the internal name — "pMPM" means nothing to a
@@ -64,7 +187,19 @@ export interface TranscriptionAlgorithm {
   producesFrames: boolean;
   /** Whether it can hear more than one note at a time. */
   polyphonic:  boolean;
-  transcribe(audio: DecodedAudio, options?: TranscribeOptions): Promise<TranscriptionOutput>;
+  /** What the tune screen renders. Order is display order. */
+  params:      readonly TranscriptionParam[];
+  /** The expensive half. Reports progress and honours cancellation; run once per take. */
+  prepare(audio: DecodedAudio, options?: PrepareOptions): Promise<Prepared>;
+  /**
+   * The cheap half. Pure with respect to `prepared`, which is what lets it be called on
+   * every slider tick — an implementation that consumed or mutated its input would degrade
+   * silently over a tuning session rather than failing outright.
+   *
+   * Returns an empty result rather than throwing when nothing survives. Empty is an ordinary
+   * intermediate state while dragging a threshold, not a failure.
+   */
+  resegment(prepared: Prepared, params: ParamValues): Promise<Segmentation>;
 }
 
 import { basicPitchAlgorithm } from './basicPitch';

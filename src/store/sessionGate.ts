@@ -1,4 +1,4 @@
-import { RATING_BONUS, RECORDING_LIMIT, type RatingStatus } from './useSettingsStore';
+import { FREE_TIER_ENABLED, RATING_BONUS, RECORDING_LIMIT, type RatingStatus } from './useSettingsStore';
 
 /**
  * Shared free-tier gate for every "start a new session" entry point (record,
@@ -17,6 +17,10 @@ export function resolveSessionGate(params: {
   totalRecordingsUsed: number;
   ratingStatus:        RatingStatus;
 }): SessionGateResult {
+  // The one place the switch has to be honoured — every entry point routes through here, so
+  // nothing can gate a session while the free tier is off.
+  if (!FREE_TIER_ENABLED) return 'allow';
+
   const effectiveLimit = computeEffectiveLimit(params.ratingStatus);
   if (params.isPurchased || params.totalRecordingsUsed < effectiveLimit) return 'allow';
   return params.ratingStatus === 'notShown' ? 'showRating' : 'showPaywall';

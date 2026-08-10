@@ -4,8 +4,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { SliderInput } from '@/components/SliderInput';
+import { Toggle } from '@/components/Toggle';
 import { useTheme } from '@/hooks/useTheme';
-import { useSettingsStore, type ThemeOverride } from '@/store/useSettingsStore';
+import { availableAlgorithms } from '@/audio/algorithms';
+import {
+  FREE_TIER_ENABLED, MAX_TAKE_MINUTES, MIN_TAKE_MINUTES, useSettingsStore, type ThemeOverride,
+} from '@/store/useSettingsStore';
 import { FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_TOP, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
@@ -25,6 +29,15 @@ export default function SettingsScreen() {
   const isPurchased        = useSettingsStore((s) => s.isPurchased);
   const setMicSensitivity  = useSettingsStore((s) => s.setMicSensitivity);
   const setThemeOverride   = useSettingsStore((s) => s.setThemeOverride);
+  const defaultAlgorithm   = useSettingsStore((s) => s.defaultAlgorithm);
+  const compactTakes       = useSettingsStore((s) => s.compactTakes);
+  const maxTakeMinutes     = useSettingsStore((s) => s.maxTakeMinutes);
+  const setDefaultAlgorithm = useSettingsStore((s) => s.setDefaultAlgorithm);
+  const setCompactTakes     = useSettingsStore((s) => s.setCompactTakes);
+  const setMaxTakeMinutes   = useSettingsStore((s) => s.setMaxTakeMinutes);
+  const resetTranscriptionParams = useSettingsStore((s) => s.resetTranscriptionParams);
+
+  const engines = useMemo(() => availableAlgorithms(), []);
 
   async function handleRate() {
     const pkg = 'com.chewpacastudios.harp2tab';
@@ -60,7 +73,8 @@ export default function SettingsScreen() {
           showsVerticalScrollIndicator={false}
         >
 
-          {!isPurchased && (
+          {/* No limit is being enforced, so there is nothing to upgrade past. */}
+          {FREE_TIER_ENABLED && !isPurchased && (
             <Pressable
               onPress={() => router.push('/paywall')}
               style={({ pressed, hovered }: any) => [
@@ -123,6 +137,128 @@ export default function SettingsScreen() {
                 </Pressable>
               </View>
             </View>
+
+            {/* TRANSCRIPTION — web only, and not as a hedge: take retention and the neural
+                engine are both web-only today, so on native every control here would either
+                do nothing or offer a choice of one. */}
+            {Platform.OS === 'web' && (
+              <View style={styles.sectionBlock}>
+                <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>TRANSCRIPTION</Text>
+                <View style={styles.card}>
+                  <View style={styles.cardRow}>
+                    <Ionicons name="sparkles-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
+                    <View style={styles.rowBody}>
+                      <Text style={styles.rowLabel}>Default Engine</Text>
+                      <Text style={styles.rowDesc}>
+                        Which engine the picker opens on. You are still asked every time, so
+                        this is a starting point rather than a lock.
+                      </Text>
+                      {/* Segmented rather than the descriptive row list the picker uses —
+                          the descriptions belong where the choice is actually being made. */}
+                      <View style={styles.segmented}>
+                        {engines.map((algorithm) => {
+                          const active = defaultAlgorithm === algorithm.id;
+                          return (
+                            <Pressable
+                              key={algorithm.id}
+                              onPress={() => setDefaultAlgorithm(algorithm.id)}
+                              style={[styles.segment, active && styles.segmentActive]}
+                              accessibilityRole="radio"
+                              accessibilityState={{ checked: active }}
+                              accessibilityLabel={`${algorithm.label} as the default engine`}
+                            >
+                              <Text
+                                style={[styles.segmentText, active && styles.segmentTextActive]}
+                                numberOfLines={1}
+                              >
+                                {algorithm.polyphonic ? 'Neural' : 'Classic'}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  </View>
+
+                  <View style={styles.separator} />
+
+                  <View style={styles.cardRow}>
+                    <Ionicons name="timer-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
+                    <View style={styles.rowBody}>
+                      <Text style={styles.rowLabel}>Maximum Take Length</Text>
+                      {/* The honest storage knob. Capture rate looks like one and is not:
+                          halving it halves the live frame rate, which pushes the detector's
+                          40ms confirm and 50ms dip windows below a single frame and degrades
+                          onset timing with nothing on screen connecting the two. Length is
+                          linear in both the audio and the model's output and changes no
+                          timing at all. */}
+                      <Text style={styles.rowDesc}>
+                        How much of a recording is kept in memory for re-transcription. Longer
+                        takes use more memory; recording itself is never cut short.
+                      </Text>
+                      <View style={styles.sliderWrapper}>
+                        <SliderInput
+                          value={maxTakeMinutes}
+                          min={MIN_TAKE_MINUTES}
+                          max={MAX_TAKE_MINUTES}
+                          step={1}
+                          onChange={setMaxTakeMinutes}
+                          formatLabel={(v) => `${v} min`}
+                          accessibilityLabel="Maximum take length in minutes"
+                        />
+                      </View>
+                    </View>
+                  </View>
+
+                  <View style={styles.separator} />
+
+                  <View style={styles.cardRow}>
+                    <Ionicons name="save-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
+                    <View style={styles.rowBody}>
+                      {/* Described as what it does for the user, never as a bit depth. This
+                          is the one control here where the framing is the whole point: it
+                          must not read as a quality setting, because it is not one — the
+                          quantization floor sits far below anything either engine reads. */}
+                      <Text style={styles.rowLabel}>Smaller Recordings In Memory</Text>
+                      <Text style={styles.rowDesc}>
+                        Keeps longer takes without using as much memory. Doesn&apos;t change
+                        how a recording sounds or how it is transcribed.
+                      </Text>
+                    </View>
+                    <Toggle
+                      value={compactTakes}
+                      onChange={setCompactTakes}
+                      accessibilityLabel="Keep recordings in memory more compactly"
+                    />
+                  </View>
+
+                  <View style={styles.separator} />
+
+                  <Pressable
+                    onPress={resetTranscriptionParams}
+                    style={({ pressed, hovered }: any) => [
+                      styles.cardRow,
+                      styles.cardRowCursor,
+                      Platform.OS === 'web' && hovered && styles.cardRowHover,
+                      pressed && { opacity: 0.6 },
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Reset transcription settings to their defaults"
+                  >
+                    <Ionicons name="refresh-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
+                    <View style={styles.rowBody}>
+                      <Text style={styles.rowLabel}>Reset Transcription Settings</Text>
+                      {/* Necessary because the tuning screen saves per engine and those
+                          values persist silently across sessions — without this, someone who
+                          tuned themselves into a corner three takes ago has no way back. */}
+                      <Text style={styles.rowDesc}>
+                        Puts every engine&apos;s tuning back to its defaults.
+                      </Text>
+                    </View>
+                  </Pressable>
+                </View>
+              </View>
+            )}
 
             {/* APPEARANCE */}
             <View style={styles.sectionBlock}>

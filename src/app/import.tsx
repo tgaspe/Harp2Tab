@@ -1,32 +1,53 @@
 /**
- * The screen between picking a file and landing in the editor, for both upload paths.
+ * The screen between having some audio and landing in the editor, for all three paths that
+ * produce it: an uploaded audio file, an uploaded MIDI file, and a recorded take.
  *
  * Audio and MIDI share it deliberately: the two differ only in how a file becomes timed
- * pitches (decode + pitch detection vs. a parse), and are identical either side of that —
+ * pitches (decode + transcription vs. a parse), and are identical either side of that —
  * same session gate, same filename-as-title, same progress reporting, same error handling.
+ * A recording joins at the same seam as an uploaded file, one step further in: it arrives
+ * already decoded, and with its engine already chosen on the recording screen.
  *
- * What differs now is whether there's anything left to ask. Audio has nothing: it hands the
- * transcription to the Studio, where the user reviews the notes and picks a harp at the
- * moment of conversion. MIDI still asks which track to transcribe, because a MIDI file is an
- * arrangement and that answer isn't in it — and from there offers both the Studio and a
- * direct route to tabs.
+ * What each path still has to ask differs, and that is what the phases below are:
+ *
+ *  - **Audio** asks which engine (`choosing`, file uploads only — a take was asked on
+ *    Finish), then offers to tune it (`tune`) before handing the result to the Studio. The
+ *    harp is deliberately not asked here; it is chosen at conversion, where it decides
+ *    something.
+ *  - **MIDI** asks which track (`midiConfirm`), because a MIDI file is an arrangement and
+ *    that answer isn't in it — and from there offers both the Studio and a direct route
+ *    to tabs.
+ *
+ * Tuning sits *before* the project exists, and that placement is the point: re-segmenting
+ * replaces the note set wholesale, so the same sliders offered inside the Studio would
+ * silently destroy edits the user had already made. Here there is nothing yet to destroy,
+ * which is what makes the controls cheap to play with.
  */
 
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { FONT } from '@/constants/keys';
 import { WEB_CONTENT_WIDTH, webMaxWidth } from '@/constants/layout';
 import { useTheme } from '@/hooks/useTheme';
-import { AudioImportError, type ImportErrorCode } from '@/audio/audioImport';
-import { CandidateKeyBadge, CandidateList, CandidateRow } from '@/components/CandidateRow';
+import { AudioImportError, type DecodedAudio, type ImportErrorCode } from '@/audio/audioImport';
+import { ActionSheetModal } from '@/components/ActionSheetModal';
+import { CandidateList, CandidateRow } from '@/components/CandidateRow';
 import { KeyCandidateList, positionLabel, techniqueSuffix } from '@/components/KeyCandidateList';
-import { DEFAULT_ALGORITHM_ID } from '@/audio/algorithms';
-import type { TranscriptionOutput } from '@/audio/algorithms';
+import { PianoRoll } from '@/components/PianoRoll';
+import { TranscriptionEngineModal } from '@/components/TranscriptionEngineModal';
+import { TranscriptionParamsRail } from '@/components/TranscriptionParamsRail';
+import {
+  availableAlgorithms, getAlgorithm, withDefaults,
+  type ParamValues, type Prepared, type TranscriptionAlgorithmId, type TranscriptionOutput,
+} from '@/audio/algorithms';
 import { pushFrames } from '@/audio/frameBuffer';
-import { clearPendingImport, getPendingImport, setPendingImport } from '@/audio/pendingImport';
+import {
+  clearPendingImport, getPendingImport, pendingImportName, setPendingImport,
+  type PendingImport,
+} from '@/audio/pendingImport';
 import { pickAudioFile } from '@/audio/pickAudioFile';
 import { pickMidiFile } from '@/audio/pickMidiFile';
-import { framesToNotes } from '@/audio/framesToNotes';
-import { midiToNoteName, noteNameToMidi } from '@/audio/HarmonicaMapper';
+import { decodeAudioFile } from '@/audio/decodeAudio';
+import { getChromaticRows, midiToNoteName } from '@/audio/HarmonicaMapper';
 import { usePlayback } from '@/hooks/usePlayback';
 import {
   MIN_NOTE_MS,
@@ -45,7 +66,10 @@ import {
   type MidiKeyRanking,
 } from '@/audio/notesToTabs';
 import { octaveShiftForMidiRange } from '@/audio/pitchRange';
-import { runAudioImport, type ImportStage } from '@/audio/runAudioImport';
+import {
+  prepareTranscription, resegmentTranscription,
+  type AudioAnalysisResult, type ImportStage,
+} from '@/audio/transcription';
 import { runMidiImport, type MidiImportResult } from '@/audio/runMidiImport';
 import { projectFromMidiNotes, projectFromSmfBytes } from '@/audio/midiProject';
 import { useMidiProjectsStore } from '@/store/useMidiProjectsStore';
@@ -65,13 +89,19 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 type TrackSelection = number | 'all';
 
 /**
- * Audio has no confirm phase: it transcribes and goes straight to the Studio, because the
- * only question it used to ask here — which harp — is now asked at conversion, where it
- * decides something. MIDI still confirms, since which track to transcribe is a question the
- * file genuinely doesn't answer.
+ * Neither of the two audio phases is a new route: `choosing` renders the shared engine modal
+ * over a quiet backdrop, and `tune` is a phase for the same reason `midiConfirm` is — the
+ * screen already owns the transcription it is about.
+ *
+ * `tune` deliberately carries no data. Its inputs (the prepared matrices, the parameter
+ * values, the current result) live in refs and state beside it, because a phase object
+ * replaced on every slider tick would re-render the piano roll through the phase switch on
+ * each one.
  */
 type Phase =
+  | { kind: 'choosing' }
   | { kind: 'working'; stage: ImportStage; fraction: number }
+  | { kind: 'tune' }
   | { kind: 'midiConfirm'; parsed: MidiImportResult; selection: TrackSelection; chosenKey: HarmonicaKey }
   | { kind: 'error';   code: ImportErrorCode; message: string };
 
@@ -147,6 +177,20 @@ function previewNotes(notes: MidiNote[]): TabNote[] {
  *  enough to read as "started", not enough to imply real progress it can't report. */
 const DECODE_BAR_FRACTION = 0.06;
 
+/**
+ * The tune step's preview is a picture, not an editor: nothing on it may write anywhere.
+ *
+ * Stated rather than left undefined because `PianoRoll` falls back to `useAppStore` for any
+ * bulk handler its host omits — a sensible default for the tab editor that owns that store,
+ * and from here a route into editing whatever the user has open in the editor.
+ */
+const noop    = () => {};
+const noNotes = () => [] as TabNote[];
+
+/** Shorter than the editor's 28px, matching the Studio: the preview draws the full
+ *  chromatic ladder rather than ~40 harmonica rows, where tall rows fit barely two octaves. */
+const PREVIEW_ROW_HEIGHT = 18;
+
 export default function ImportScreen() {
   const router = useRouter();
   const theme  = useTheme();
@@ -162,9 +206,82 @@ export default function ImportScreen() {
   const setBpm               = useAppStore((s) => s.setBpm);
   const incrementRecordingCount = useSettingsStore((s) => s.incrementRecordingCount);
   const saveProject             = useMidiProjectsStore((s) => s.saveProject);
+  const tabNotes                = useAppStore((s) => s.tabNotes);
+  const defaultAlgorithm        = useSettingsStore((s) => s.defaultAlgorithm);
+  const savedParams             = useSettingsStore((s) => s.transcriptionParams);
+  const setDefaultAlgorithm     = useSettingsStore((s) => s.setDefaultAlgorithm);
+  const setTranscriptionParams  = useSettingsStore((s) => s.setTranscriptionParams);
 
   const [phase, setPhase] = useState<Phase>({ kind: 'working', stage: 'decoding', fraction: 0 });
-  const [fileName, setFileName] = useState(getPendingImport()?.name ?? '');
+  const [fileName, setFileName] = useState(() => pendingImportName(getPendingImport()));
+
+  // ── Audio tuning state ──────────────────────────────────────────────────────
+  const [algorithmId, setAlgorithmId] = useState<TranscriptionAlgorithmId>(defaultAlgorithm);
+  /** What the sliders show — staged, not necessarily in the preview. */
+  const [params, setParams]           = useState<ParamValues>({});
+  /**
+   * What the preview was actually built from.
+   *
+   * The pair is what makes "apply" a real state rather than a label: everything the user
+   * can see on the roll is `appliedParams`, everything they've moved since is `params`, and
+   * the difference between the two is exactly what the dots and the Apply button report.
+   */
+  const [appliedParams, setAppliedParams] = useState<ParamValues>({});
+  const [result, setResult]           = useState<AudioAnalysisResult | null>(null);
+  const [recomputing, setRecomputing] = useState(false);
+  /** Whether this arrived from the recording screen. Decides the phrasing throughout, and
+   *  the two things only a take has: a live transcription to fall back to, and a retention
+   *  cap it may have hit. */
+  const [isFromRecording, setIsFromRecording] = useState(false);
+  /**
+   * True when the picker was reached by "Change engine" rather than by arriving here.
+   *
+   * The difference is what backing out costs. On the way in nothing has been spent, so
+   * cancelling is free; from the tune step a decode and a full expensive pass are already
+   * behind the user — and `handleBackToChoosing` has released both — so the same gesture
+   * ends the import for good and is worth asking about.
+   */
+  const [reChoosingEngine, setReChoosingEngine] = useState(false);
+  /** The "are you sure" over the picker. Not a phase: the picker is still the screen, and
+   *  answering no returns to it exactly as it was. */
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [truncated, setTruncated] = useState(false);
+
+  const engines = useMemo(() => availableAlgorithms(), []);
+  const engine  = useMemo(() => getAlgorithm(algorithmId), [algorithmId]);
+  /** Which parameters are ahead of the preview. Derived rather than tracked, so it can't
+   *  drift from the two values it's a statement about — dragging a slider back to where it
+   *  started stops being a pending change, which a flag set on first edit wouldn't. */
+  const pendingIds = useMemo(
+    () => engine.params.filter((p) => params[p.id] !== appliedParams[p.id]).map((p) => p.id),
+    [engine, params, appliedParams],
+  );
+  // All 128 semitones. Built once — it's a fixed ladder, and rebuilding it per re-segment
+  // would re-key every row in the roll on each slider tick.
+  const previewRows = useMemo(() => getChromaticRows(), []);
+
+  /**
+   * The expensive pass's output, in a ref rather than in state.
+   *
+   * Three matrices at ~86 frames a second come to roughly 90MB on a five-minute take, which
+   * dwarfs the audio that produced them — so this is the one value on the screen that has
+   * to be released deliberately rather than left for a re-render to drop.
+   */
+  const preparedRef = useRef<Prepared | null>(null);
+  /** Kept so "Back" can change engine without re-decoding, and re-prepare from the same
+   *  audio. Larger than it looks, but strictly smaller than what `preparedRef` holds. */
+  const audioRef    = useRef<DecodedAudio | null>(null);
+  /** Frozen at the first result so the preview's bar grid doesn't rescale under the user
+   *  every time a slider changes how many onsets there are to read a tempo from. */
+  const previewBpmRef = useRef<number | null>(null);
+  /** Only the newest re-segmentation may write a result. Without this a second Apply
+   *  pressed while the first is still running can land in either order. */
+  const resegmentSeqRef = useRef(0);
+
+  function releasePrepared() {
+    preparedRef.current?.dispose();
+    preparedRef.current = null;
+  }
 
   // Self-contained playback for the track previews — this hook instance takes its notes as
   // an argument, so auditioning a track can't touch the session being imported into.
@@ -185,20 +302,24 @@ export default function ImportScreen() {
     if (!startedRef.current) {
       startedRef.current = true;
 
-      const picked = getPendingImport();
-      if (!picked || !selectedKey) {
+      const entry = getPendingImport();
+      if (!entry || !selectedKey) {
         router.replace('/');
         return;
       }
-      void transcribe();
+      void begin(entry);
     }
 
     // Leaving the screen (browser back, or any other navigation) abandons the import
     // rather than letting it finish and yank the user into the editor — and silences any
-    // track preview still running, which would otherwise outlive the screen.
+    // track preview still running, which would otherwise outlive the screen. The prepared
+    // matrices go with it: navigating away is the commonest way to leave this screen and
+    // would otherwise be the commonest way to strand ~90MB.
     return () => {
       cancelledRef.current = true;
       preview.stop();
+      releasePrepared();
+      audioRef.current = null;
     };
   }, []);
 
@@ -218,16 +339,41 @@ export default function ImportScreen() {
     [phase, harmonicaType],
   );
 
-  async function transcribe() {
+  /**
+   * Entry point for whatever landed in the hand-off slot.
+   *
+   * The two audio variants differ in exactly one thing — whether the engine has already been
+   * chosen. A take was asked on Finish, while it was still the thing in front of the user, so
+   * asking again here would be asking twice; a file has had no earlier moment, so it opens
+   * on the picker.
+   */
+  async function begin(entry: PendingImport) {
     if (isMidi) { await parseMidi(); return; }
-    await transcribeAudio();
+
+    setFileName(pendingImportName(entry));
+
+    if (entry.kind === 'decoded') {
+      audioRef.current = entry.audio;
+      setIsFromRecording(true);
+      setTruncated(entry.truncated);
+      setAlgorithmId(entry.algorithm);
+      setParams(entry.params);
+      await prepare(entry.audio, entry.algorithm, entry.params, entry.title);
+      return;
+    }
+
+    // No compute yet, which is the whole point of asking first: picking the engine late
+    // would mean throwing away a pass that had already run.
+    setAlgorithmId(defaultAlgorithm);
+    setPhase({ kind: 'choosing' });
   }
 
   /** MIDI's whole "working" stage: read the bytes, parse them. Milliseconds, so the
    *  progress screen flashes past rather than reporting a fraction it doesn't have. */
   async function parseMidi() {
-    const picked = getPendingImport();
-    if (!picked || !selectedKey) return;
+    const entry = getPendingImport();
+    if (entry?.kind !== 'file' || !selectedKey) return;
+    const picked = entry.picked;
 
     cancelledRef.current = false;
     setFileName(picked.name);
@@ -255,38 +401,200 @@ export default function ImportScreen() {
     }
   }
 
-  async function transcribeAudio() {
-    const picked = getPendingImport();
-    if (!picked || !selectedKey) return;
+  /**
+   * The engine picker's confirm.
+   *
+   * Serves both ways in: a file still has to be decoded, while a take (or a second pass
+   * after "Back") already has its audio in hand and goes straight to the expensive pass.
+   */
+  async function handleChooseEngine() {
+    if (!selectedKey) return;
+    // Whatever brought the user to the picker, going forward from it spends a fresh pass —
+    // so the next time they back out, there is again something to lose.
+    setReChoosingEngine(false);
+    setDefaultAlgorithm(algorithmId);
+    const initial = withDefaults(engine, savedParams[algorithmId]);
+
+    if (audioRef.current) {
+      await prepare(audioRef.current, algorithmId, initial, title());
+      return;
+    }
+
+    const entry = getPendingImport();
+    if (entry?.kind !== 'file') return;
+    const picked = entry.picked;
 
     cancelledRef.current = false;
-    setFileName(picked.name);
     setPhase({ kind: 'working', stage: 'decoding', fraction: 0 });
 
-    // The filename makes a far better default library title than the timestamp fallback.
-    const title = picked.name.replace(/\.[^.]+$/, '');
     // Deliberately *not* `startImportedSession` here, unlike the MIDI path. That clears
     // `tabNotes`/`history`, which was harmless while an audio import went on to replace them
     // — but this one lands in the Studio and never touches the tab session, so starting one
     // would destroy whatever the user had open in the editor and put nothing in its place.
     // Conversion calls `loadRecording`, which establishes the session properly.
-
     try {
-      const result = await runAudioImport({
-        picked,
-        harmonicaType,
-        algorithm:     DEFAULT_ALGORITHM_ID,
-        onProgress:    (p) => setPhase({ kind: 'working', stage: p.stage as ImportStage, fraction: p.fraction }),
-        shouldCancel:  () => cancelledRef.current,
-      });
-
-      // Straight into the Studio. There is no key step here any more: the key is chosen at
-      // conversion, where it actually decides something, so confirming one before the user
-      // has seen a single note would be asking about a decision that hasn't arrived yet.
-      openStudioFromAudio(result.output, result.detection?.best.key ?? selectedKey, title);
+      const audio = await decodeAudioFile(picked);
+      if (cancelledRef.current) return;
+      audioRef.current = audio;
+      await prepare(audio, algorithmId, initial, title());
     } catch (err) {
       showImportError(err, picked.name, `"${picked.name}" couldn't be transcribed.`);
     }
+  }
+
+  /** The library title for whatever is being transcribed — a take's own name, or the
+   *  filename without its extension, which beats the timestamp fallback. */
+  function title(): string {
+    return fileName.replace(/\.[^.]+$/, '') || 'Untitled';
+  }
+
+  /**
+   * The expensive half, once, followed by one re-segmentation to fill the preview.
+   *
+   * Everything after this point is the cheap half, which is what makes the tune step
+   * affordable: the CNN pass (or the NSDF pass) does not run again however long the user
+   * spends on the sliders.
+   */
+  async function prepare(
+    audio: DecodedAudio,
+    algorithm: TranscriptionAlgorithmId,
+    initialParams: ParamValues,
+    title: string,
+  ) {
+    cancelledRef.current = false;
+    releasePrepared();
+    setPhase({ kind: 'working', stage: 'decoding', fraction: 0 });
+
+    try {
+      const prepared = await prepareTranscription(audio, algorithm, {
+        harmonicaType,
+        harmonicaKey: selectedKey ?? undefined,
+        onProgress:   (p) => setPhase({ kind: 'working', stage: p.stage as ImportStage, fraction: p.fraction }),
+        shouldCancel: () => cancelledRef.current,
+      });
+
+      if (cancelledRef.current) { prepared.dispose(); return; }
+      preparedRef.current = prepared;
+      // Both halves of the pair, because the pass just below builds the first preview from
+      // exactly these — the screen opens with nothing pending.
+      setParams(initialParams);
+      setAppliedParams(initialParams);
+
+      // The first pass keeps the throw: an import that found nothing at all on the engine's
+      // own defaults is a failed import, not a parameter the user has yet to move.
+      const first = await resegmentTranscription({
+        prepared,
+        params: initialParams,
+        harmonicaType,
+        segmentationKey: selectedKey ?? undefined,
+        sourceName: title,
+      });
+      if (cancelledRef.current) { releasePrepared(); return; }
+
+      previewBpmRef.current = detectTempo(first.notes.map((n) => ({ start_time: n.timeMs })))?.bpm ?? null;
+      setResult(first);
+      setPhase({ kind: 'tune' });
+    } catch (err) {
+      releasePrepared();
+      showImportError(err, title, `"${title}" couldn't be transcribed.`);
+    }
+  }
+
+  /**
+   * Re-run the cheap half for the parameters the user has settled on.
+   *
+   * `allowEmpty` is the whole difference from the first pass. Sliding a threshold to the end
+   * of its travel until nothing survives is an ordinary thing to do while tuning, and
+   * throwing there would replace the screen — and the parameters that got the user to it —
+   * with an error page they'd have to start over from.
+   */
+  async function applyParams(next: ParamValues) {
+    const prepared = preparedRef.current;
+    if (!prepared) return;
+
+    setRecomputing(true);
+    const seq = ++resegmentSeqRef.current;
+
+    // The work below is one long synchronous burst on the JS thread — Basic Pitch's
+    // segmentation walks the whole stored inference matrix — so without a macrotask
+    // boundary here the "updating" state above is set and painted in the same frame the
+    // stall begins, i.e. never seen. Yielding once lets the press visibly register.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    try {
+      const updated = await resegmentTranscription({
+        prepared,
+        params: next,
+        harmonicaType,
+        segmentationKey: selectedKey ?? undefined,
+        sourceName: fileName,
+        allowEmpty: true,
+      });
+      // A slower run started earlier must not overwrite a newer one that already landed.
+      if (seq !== resegmentSeqRef.current || cancelledRef.current) return;
+      setResult(updated);
+      // Only now do these describe the picture — and only now are they worth remembering
+      // for the next take, since a value the user staged and abandoned was never a setting.
+      setAppliedParams(next);
+      setTranscriptionParams(algorithmId, next);
+    } catch {
+      // Only a disposed `prepared` can reach here — every ordinary failure mode is now an
+      // empty result. Leaving the previous preview up is the honest response: nothing
+      // about the transcription has changed.
+    } finally {
+      if (seq === resegmentSeqRef.current) setRecomputing(false);
+    }
+  }
+
+  /**
+   * Moving a control changes the control, and nothing else.
+   *
+   * Re-segmenting per tick was affordable in principle — the expensive pass never re-runs —
+   * but "cheap" here still means walking every frame of the take, which on a long file is a
+   * stall the drag itself is fighting. Explicit apply also makes the roll's meaning exact:
+   * it is always the last thing the user asked for, never a half-finished gesture.
+   */
+  function handleParamChange(id: string, value: number | boolean) {
+    setParams((prev) => ({ ...prev, [id]: value }));
+  }
+
+  /** Stages the defaults like any other edit — Reset says what the values should be, Apply
+   *  is still what puts them on screen. */
+  function handleResetParams() {
+    setParams(withDefaults(engine));
+  }
+
+  /** The empty state's escape hatch, which is a recovery rather than an edit: there is
+   *  nothing on screen to compare a staged value against, so it goes the whole way. */
+  function handleResetAndApply() {
+    const next = withDefaults(engine);
+    setParams(next);
+    void applyParams(next);
+  }
+
+  /** Back to the picker. Releases the matrices immediately rather than holding them while
+   *  the user reconsiders — the audio is still here, so changing your mind costs one pass,
+   *  and holding both engines' output at once would be the worst moment to be carrying
+   *  90MB. */
+  function handleBackToChoosing() {
+    releasePrepared();
+    setResult(null);
+    setRecomputing(false);
+    setReChoosingEngine(true);
+    setPhase({ kind: 'choosing' });
+  }
+
+  /**
+   * Backing out of the picker — the button, the backdrop and Escape all land here.
+   *
+   * Free on the way in, and a dead end on the way back: the matrices are gone, so there is
+   * no tune step left to return to and the only thing "no" can mean is the picker itself.
+   * Asked rather than assumed, because the gesture that gets here is the same small one
+   * either way while what it costs is not.
+   */
+  function handlePickerClose() {
+    if (reChoosingEngine) { setConfirmDiscard(true); return; }
+    handleCancel();
   }
 
   /** One place that turns a thrown import failure into either a bounce back to Home (the
@@ -313,36 +621,19 @@ export default function ImportScreen() {
    * it consumes no free-tier session — nothing has been converted yet, and the gate applies
    * at conversion, where a tab is actually produced.
    *
-   * `segmentationKey` matters only to the frame lane. NoteDetector segments on *tab
-   * identity*, so frames cannot become notes without some key; the auto-detected one is used
-   * as a provisional choice and the real decision still happens at conversion. Re-keying
-   * there re-maps pitches but does not re-segment, which is a real if minor cost, and it is
-   * paid on native only — the neural engine is web-only and its lane is already pitched.
+   * The notes come from the analysis result rather than being re-derived here. Only that
+   * result holds both halves of what the frame lane needs to produce them — the detected key
+   * *and* the segmenter settings the user tuned — so segmenting a second time at this point
+   * could quietly disagree with the preview they just approved.
    */
-  function openStudioFromAudio(
-    output: TranscriptionOutput,
-    segmentationKey: HarmonicaKey,
-    title: string,
-  ) {
-    const notes: MidiNote[] = output.kind === 'notes'
-      ? output.notes
-      : framesToNotes(output.frames, segmentationKey, harmonicaType).flatMap((n) => {
-          const midi = noteNameToMidi(n.note);
-          // A pitch that doesn't parse is dropped rather than written as middle C, the same
-          // rule MIDI export applies — silently altering the music is the worse failure.
-          return midi === null ? [] : [{
-            midi,
-            timeMs:     n.start_time,
-            durationMs: n.duration,
-            velocity:   n.velocity,
-          }];
-        });
+  function openStudioFromAudio(analysis: AudioAnalysisResult, name: string) {
+    const { output, notes } = analysis;
 
     if (notes.length === 0) {
       setPhase({
         kind:    'error',
         code:    'noAudio',
-        message: `No notes were found in "${title}". Try a recording with a clearer melody line.`,
+        message: `No notes were found in "${name}". Try a recording with a clearer melody line.`,
       });
       return;
     }
@@ -360,9 +651,13 @@ export default function ImportScreen() {
     // under this project id just below, which the pitch lane and Frame Inspector read at
     // their original times. So the grid gets the right spacing but keeps bar 1 at ms 0.
     const estimate = detectTempo(notes.map((n) => ({ start_time: n.timeMs })));
-    const project = projectFromMidiNotes(notes, title || 'Untitled project', {
+    const project = projectFromMidiNotes(notes, name || 'Untitled project', {
       velocitySource: output.kind === 'frames' ? 'takeRelativeRms' : 'modelActivation',
       bpm: estimate?.bpm,
+      // Where this came from, which Frame Inspector reads to decide what it can show. A take
+      // and an upload reach the Studio by the same road from here on, and this is the last
+      // point at which the difference is still known.
+      origin: isFromRecording ? 'recording' : 'audioUpload',
     });
 
     // Parked under the *project* id, because this session has no recording id yet —
@@ -443,8 +738,21 @@ export default function ImportScreen() {
   function handleCancel() {
     cancelledRef.current = true;
     preview.stop();
+    releasePrepared();
+    audioRef.current = null;
     clearPendingImport();
     router.replace('/');
+  }
+
+  /** The escape that costs nothing, because pMPM ran live throughout the take: the notes are
+   *  already in the session, so this is today's behaviour preserved as a fast path — and the
+   *  fallback when the model can't be fetched at all. */
+  function handleUseLiveTranscription() {
+    cancelledRef.current = true;
+    releasePrepared();
+    audioRef.current = null;
+    clearPendingImport();
+    router.replace('/edit');
   }
 
   async function handleTryAnotherFile() {
@@ -452,8 +760,12 @@ export default function ImportScreen() {
     try {
       const picked = await (isMidi ? pickMidiFile() : pickAudioFile());
       if (!picked) return;
+      releasePrepared();
+      audioRef.current = null;
       setPendingImport(picked);
-      void transcribe();
+      setFileName(picked.name);
+      if (isMidi) { void parseMidi(); return; }
+      setPhase({ kind: 'choosing' });
     } catch (err) {
       const isImportError = err instanceof AudioImportError;
       setPhase({
@@ -719,6 +1031,290 @@ export default function ImportScreen() {
     );
   }
 
+  if (phase.kind === 'choosing') {
+    return (
+      <SafeAreaView style={styles.safe}>
+        {/* A quiet backdrop rather than a blank one: dismissing the modal returns here, and
+            a screen with nothing on it would read as a failure rather than as a question
+            waiting to be answered. */}
+        <View style={styles.container}>
+          <View style={styles.iconCircle}>
+            <Ionicons name="musical-notes-outline" size={30} color={theme.accent} />
+          </View>
+          <Text style={styles.title}>Ready to transcribe</Text>
+          <Text style={styles.fileName} numberOfLines={1}>{fileName}</Text>
+        </View>
+
+        <TranscriptionEngineModal
+          visible
+          algorithms={engines}
+          selectedId={algorithmId}
+          onSelect={setAlgorithmId}
+          onConfirm={() => void handleChooseEngine()}
+          // Backing out of the picker is not a third answer about how to transcribe — it is
+          // leaving, which is exactly what cancelling an import already does.
+          onClose={handlePickerClose}
+          subtitle={fileName}
+          liveNoteCount={isFromRecording ? tabNotes.length : undefined}
+          secondaryLabel={isFromRecording ? 'Use the live version' : undefined}
+          onSecondary={isFromRecording ? handleUseLiveTranscription : undefined}
+          // The backdrop behind this modal is deliberately bare, so without this the only
+          // ways out are Escape and a backdrop tap — neither of them drawn anywhere.
+          cancelLabel="Cancel"
+        />
+
+        {/* Rendered after the picker so it stacks above it, and only ever over it — the
+            question is about the press the user just made there. Says what going ahead
+            costs, since from here the file has to be uploaded and analysed again. */}
+        <ActionSheetModal
+          visible={confirmDiscard}
+          // Short enough to survive the sheet's two-line clamp at this font size.
+          title="Discard this import? You'd have to upload the file again."
+          options={[
+            { label: 'Discard import', style: 'destructive', onPress: handleCancel },
+            // Named rather than left to the sheet's own "Cancel" row, which over a modal
+            // about cancelling could only be read as cancelling that.
+            { label: 'Keep choosing an engine' },
+          ]}
+          onClose={() => setConfirmDiscard(false)}
+        />
+      </SafeAreaView>
+    );
+  }
+
+  if (phase.kind === 'tune' && result) {
+    const noteCount  = result.notes.length;
+    const empty      = noteCount === 0;
+    const hasPending = pendingIds.length > 0;
+
+    /**
+     * What's being transcribed, as the roll's own in-panel header rather than a band of
+     * page chrome above it — the same place the editor puts its chart name, and for the
+     * same reason: a preview this tall wants the row back.
+     *
+     * Reused above the empty state, which has no roll to carry it.
+     */
+    const rollHeader = (
+      <View style={styles.rollHeader}>
+        <Text style={styles.rollTitle} numberOfLines={1}>{title()}</Text>
+        <Text style={styles.rollMeta} numberOfLines={1}>
+          {engine.label} · {noteCount} note{noteCount === 1 ? '' : 's'}
+        </Text>
+        {/* Sits next to the count because the count is what it qualifies. The preview
+            itself never blanks while this is up — see the note on `result` below. */}
+        {recomputing && (
+          <View style={styles.updatingPill}>
+            <Ionicons name="sync-outline" size={12} color={theme.textSub} />
+            <Text style={styles.updatingText}>updating</Text>
+          </View>
+        )}
+      </View>
+    );
+
+    return (
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.tuneScreen}>
+          {/* The one thing the screen can't show by itself. What it *is* is already visible
+              — a preview, a filename, a column of controls — but not that those controls
+              re-detect the notes live, nor that the Studio is where this ends up. A heading
+              here would only name what the workspace already says, at the cost of a row the
+              preview wants. */}
+          <Text style={styles.tuneInstruction}>
+            Tune what counts as a note, then take it into the Studio to edit.
+          </Text>
+
+          {truncated && (
+            <View style={styles.noticeRow}>
+              <Ionicons name="alert-circle-outline" size={14} color={theme.warning} />
+              <Text style={styles.noticeText}>
+                This take reached the length limit, so only the first part of it was kept.
+              </Text>
+            </View>
+          )}
+
+          <View style={styles.tuneBody}>
+            <View style={styles.tunePreview}>
+              {empty ? (
+                // Inline, never the error screen. Params this strict are one drag away from
+                // a good result, and replacing the screen would take the sliders that got
+                // the user here away with it.
+                <>
+                  {rollHeader}
+                  <View style={styles.emptyResult} accessibilityRole="alert">
+                    <Ionicons name="remove-circle-outline" size={22} color={theme.textMuted} />
+                    <Text style={styles.emptyResultTitle}>Nothing survives these settings</Text>
+                    <Text style={styles.emptyResultText}>
+                      Every note was filtered out. Ease the thresholds on the right and apply
+                      them again, or reset them to start over.
+                    </Text>
+                    <Pressable
+                      onPress={handleResetAndApply}
+                      style={({ pressed, hovered }: any) => [
+                        styles.secondaryBtn,
+                        (pressed || hovered) && styles.secondaryBtnPressed,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel="Reset every setting to its default and apply"
+                    >
+                      <Text style={styles.secondaryBtnText}>Reset to defaults</Text>
+                    </Pressable>
+                  </View>
+                </>
+              ) : (
+                <PianoRoll
+                  notes={previewNotes(result.notes)}
+                  headerLeft={rollHeader}
+                  // A picture of the transcription, not an editor for it: no tools, no snap,
+                  // no transpose, no note dragging. Re-segmenting replaces the note set
+                  // wholesale on the next slider tick, so anything drawn here would be
+                  // erased by the very controls beside it — and the project this becomes is
+                  // fully editable one screen later, in the Studio.
+                  viewOnly
+                  // No harmonica at this stage — the key is chosen at conversion — so the
+                  // pitch axis is the full chromatic ladder, as in the Studio. These two
+                  // only exist because the tab editor derives its rows from them.
+                  harmonicaKey="C"
+                  harmonicaType="chromatic"
+                  rows={previewRows}
+                  rowHeight={PREVIEW_ROW_HEIGHT}
+                  bpm={previewBpmRef.current ?? 120}
+                  selectedId={null}
+                  // Every write path is a no-op, and every one has to be stated: the roll
+                  // falls back to writing into the tab session's store for any bulk handler
+                  // left undefined, which from here would edit whatever the user has open in
+                  // the editor.
+                  onSelect={noop}
+                  onCreate={noop}
+                  onCreateMany={noop}
+                  onUpdate={noop}
+                  onUpdateMany={noop}
+                  onDelete={noop}
+                  onDeleteMany={noop}
+                  readNotesAfterWrite={noNotes}
+                  isPlaying={false}
+                  currentTimeMs={0}
+                  onSeek={noop}
+                  loopRegion={null}
+                  onLoopRegionChange={noop}
+                />
+              )}
+            </View>
+
+            <TranscriptionParamsRail
+              params={engine.params}
+              values={params}
+              onChange={handleParamChange}
+              onReset={handleResetParams}
+              recomputing={recomputing}
+              pendingIds={pendingIds}
+              // Nothing the user has moved has touched the preview yet — this is what spends
+              // the compute, so it sits with the controls that stage the work rather than
+              // with the buttons that leave.
+              applyAction={
+                <Pressable
+                  onPress={() => void applyParams(params)}
+                  disabled={!hasPending || recomputing}
+                  style={({ pressed, hovered }: any) => [
+                    styles.applyBtn,
+                    hasPending && !recomputing && styles.applyBtnLive,
+                    (pressed || hovered) && hasPending && !recomputing && styles.applyBtnPressed,
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: !hasPending || recomputing }}
+                  accessibilityLabel={
+                    recomputing
+                      ? 'Applying the changed settings'
+                      : hasPending
+                        ? `Apply ${pendingIds.length} changed setting${pendingIds.length === 1 ? '' : 's'} to the preview`
+                        : 'Apply changes — nothing has changed since the preview was made'
+                  }
+                >
+                  <Ionicons
+                    name={recomputing ? 'sync-outline' : 'flash-outline'}
+                    size={15}
+                    color={hasPending && !recomputing ? theme.accent : theme.textMuted}
+                  />
+                  <Text style={[styles.applyBtnText, hasPending && !recomputing && styles.applyBtnTextLive]}>
+                    {recomputing ? 'Applying…' : 'Apply changes'}
+                  </Text>
+                </Pressable>
+              }
+              footer={
+                <>
+                  {/* Deliberately the largest thing on the screen after the preview itself.
+                      Everything else in this column adjusts what the preview shows; this is
+                      the one control that leaves with it. */}
+                  <Pressable
+                    onPress={() => openStudioFromAudio(result, title())}
+                    disabled={empty}
+                    style={({ pressed, hovered }: any) => [
+                      styles.goBtn,
+                      empty && styles.primaryBtnDisabled,
+                      (pressed || hovered) && !empty && styles.primaryBtnPressed,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: empty }}
+                    accessibilityLabel="Open this transcription in the Studio"
+                  >
+                    <Text style={styles.goBtnText}>Open in Studio</Text>
+                    <Ionicons name="arrow-forward" size={18} color="#fff" />
+                  </Pressable>
+
+                  {/* What "Back" always did — it returns to the engine picker with the audio
+                      still decoded — said as the thing it does rather than as a direction. */}
+                  <Pressable
+                    onPress={handleBackToChoosing}
+                    style={({ pressed, hovered }: any) => [
+                      styles.railSecondaryBtn,
+                      (pressed || hovered) && styles.secondaryBtnPressed,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Go back and choose a different transcription engine"
+                  >
+                    <Ionicons name="swap-horizontal-outline" size={15} color={theme.textSub} />
+                    <Text style={styles.secondaryBtnText}>Change engine</Text>
+                  </Pressable>
+
+                  {isFromRecording && tabNotes.length > 0 && (
+                    <Pressable
+                      onPress={handleUseLiveTranscription}
+                      style={({ pressed, hovered }: any) => [
+                        styles.railSecondaryBtn,
+                        (pressed || hovered) && styles.secondaryBtnPressed,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel="Discard this and use the live transcription instead"
+                    >
+                      {/* Not `flash-outline` — Apply took that glyph, three buttons up in
+                          this same column. */}
+                      <Ionicons name="pulse-outline" size={15} color={theme.textSub} />
+                      <Text style={styles.secondaryBtnText}>Use the live version</Text>
+                    </Pressable>
+                  )}
+
+                  {/* Quietest of the four, and the only one that ends the import: same
+                      handler the progress screen's Cancel uses, so it releases the prepared
+                      matrices rather than leaving ~90MB behind on the way to Home. */}
+                  <Pressable
+                    onPress={handleCancel}
+                    style={({ pressed, hovered }: any) => [
+                      styles.discardBtn,
+                      (pressed || hovered) && styles.discardBtnHovered,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Discard this import and go back to the library"
+                  >
+                    <Text style={styles.discardBtnText}>Discard</Text>
+                  </Pressable>
+                </>
+              }
+            />
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   if (phase.kind === 'error') {
     return (
       <SafeAreaView style={styles.safe}>
@@ -759,6 +1355,10 @@ export default function ImportScreen() {
       </SafeAreaView>
     );
   }
+
+  // `tune` is always accompanied by a result — they are set in the same breath — so this
+  // only exists to narrow the union for the progress screen below.
+  if (phase.kind !== 'working') return null;
 
   const barFraction = phase.stage === 'decoding'
     ? DECODE_BAR_FRACTION
@@ -807,7 +1407,13 @@ export default function ImportScreen() {
             : harmonicaType === 'chromatic'
               // Detection is skipped for chromatic, so the chosen key is what's used.
               ? `Transcribing for a ${selectedKey} 12-hole chromatic harmonica.`
-              : "Pitch detection doesn't need the key — the harmonica key is worked out afterwards."}
+              // Engine-dependent, and it has to be: the neural engine emits pitches and the
+              // harp really is worked out afterwards, but the classic tracker segments on
+              // *tab identity*, so its notes are shaped by the key from the start. Saying
+              // the key doesn't matter would be false for half the engines here.
+              : engine.producesFrames
+                ? `Reading this against a ${selectedKey} harp — the classic tracker needs a key to find note boundaries. You can still change it at conversion.`
+                : "Pitch detection doesn't need the key — the harmonica key is worked out afterwards."}
         </Text>
 
         <Pressable
@@ -850,6 +1456,163 @@ function createStyles(theme: Theme) {
       flexGrow:          1,
       justifyContent:    'center',
       ...webMaxWidth(WEB_CONTENT_WIDTH.narrow),
+    },
+    // ── Tune step ────────────────────────────────────────────────────────────
+    //
+    // Full-bleed, unlike every other phase on this screen: it is a workspace, not a
+    // question. Same reasoning as the recording screen and the editor's roll — a piano
+    // roll wants every pixel a monitor offers, and a centred column throws them away.
+    tuneScreen: {
+      flex: 1,
+      width: '100%',
+      paddingHorizontal: 24,
+      paddingVertical:   20,
+      gap: 12,
+    },
+    tuneInstruction: {
+      fontFamily: Poppins.regular,
+      fontSize:   FONT.sm,
+      color:      theme.textSub,
+    },
+    // The roll's own in-panel header, at the head of its tool row — same treatment as the
+    // editor's (accent name, muted meta), so the two workspaces read as the same object.
+    rollHeader: {
+      flexDirection: 'row',
+      alignItems:    'center',
+      gap:           10,
+      flexShrink:    1,
+      minWidth:      0,
+    },
+    rollTitle: {
+      fontFamily:    SpaceGrotesk.bold,
+      fontSize:      FONT.base,
+      color:         theme.accent,
+      letterSpacing: -0.2,
+      flexShrink:    1,
+      maxWidth:      260,
+    },
+    rollMeta: {
+      fontFamily:  Poppins.medium,
+      fontSize:    FONT.xs,
+      color:       theme.textMuted,
+      flexShrink:  0,
+      fontVariant: ['tabular-nums'],
+    },
+    updatingPill: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      gap:               6,
+      paddingHorizontal: 10,
+      paddingVertical:   5,
+      borderRadius:      14,
+      backgroundColor:   theme.surfaceAlt,
+      borderWidth:       1,
+      borderColor:       theme.border,
+    },
+    updatingText: {
+      fontFamily:    Poppins.medium,
+      fontSize:      FONT.xs,
+      color:         theme.textSub,
+      letterSpacing: 0.6,
+    },
+    // Two columns on web, and the rail keeps its own 320px so this screen and the recording
+    // screen agree on what a side panel weighs. Stacks on narrow viewports.
+    tuneBody: {
+      flex:          1,
+      flexDirection: 'row',
+      gap:           16,
+    },
+    tunePreview: { flex: 1, minWidth: 0, gap: 10 },
+    emptyResult: {
+      flex:            1,
+      alignItems:      'center',
+      justifyContent:  'center',
+      gap:             8,
+      paddingHorizontal: 32,
+      borderRadius:    12,
+      borderWidth:     1,
+      borderStyle:     'dashed',
+      borderColor:     theme.border,
+    },
+    emptyResultTitle: {
+      fontFamily: Poppins.semiBold,
+      fontSize:   FONT.sm,
+      color:      theme.textPrimary,
+    },
+    emptyResultText: {
+      fontFamily: Poppins.regular,
+      fontSize:   FONT.xs,
+      lineHeight: 18,
+      color:      theme.textMuted,
+      textAlign:  'center',
+      maxWidth:   360,
+    },
+    // ── The rail's footer actions ────────────────────────────────────────────
+    //
+    // Apply is grey and inert until something is actually staged — with nothing pending it
+    // is a button that would do nothing, and saying so is better than running a recompute
+    // that produces the picture already on screen.
+    applyBtn: {
+      flexDirection:   'row',
+      alignItems:      'center',
+      justifyContent:  'center',
+      gap:             7,
+      paddingVertical: 12,
+      borderRadius:    10,
+      borderWidth:     1,
+      borderColor:     theme.border,
+    },
+    applyBtnLive: {
+      borderColor:     theme.accent,
+      backgroundColor: theme.accentSoft,
+    },
+    applyBtnPressed: { backgroundColor: theme.surfaceAlt },
+    applyBtnText: {
+      fontFamily: Poppins.semiBold,
+      fontSize:   FONT.sm,
+      color:      theme.textMuted,
+    },
+    applyBtnTextLive: { color: theme.accent },
+    //
+    // Taller and heavier than any other button in the app, because it is the only way
+    // forward on a screen whose every other control is an adjustment.
+    goBtn: {
+      flexDirection:   'row',
+      alignItems:      'center',
+      justifyContent:  'center',
+      gap:             10,
+      paddingVertical: 17,
+      borderRadius:    12,
+      backgroundColor: theme.accent,
+    },
+    goBtnText: {
+      fontFamily: Poppins.semiBold,
+      fontSize:   FONT.md,
+      color:      '#fff',
+    },
+    railSecondaryBtn: {
+      flexDirection:   'row',
+      alignItems:      'center',
+      justifyContent:  'center',
+      gap:             7,
+      paddingVertical: 11,
+      borderRadius:    10,
+      borderWidth:     1,
+      borderColor:     theme.border,
+    },
+    // Bordered like its neighbours would make four buttons of equal weight out of one
+    // decision and three ways to back out of it.
+    discardBtn: {
+      alignItems:      'center',
+      justifyContent:  'center',
+      paddingVertical: 10,
+      borderRadius:    10,
+    },
+    discardBtnHovered: { backgroundColor: theme.surface },
+    discardBtnText: {
+      fontFamily: Poppins.medium,
+      fontSize:   FONT.sm,
+      color:      theme.textMuted,
     },
     sectionLabel: {
       alignSelf:     'flex-start',

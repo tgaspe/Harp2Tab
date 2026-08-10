@@ -17,7 +17,9 @@ import { readSmf, writeSmf, type SmfTrack } from './smf';
 import { compileTempoMap, type TempoEvent, type TimeSignatureEvent } from './tempo';
 import { passesDurationFloor } from './duration';
 import { passesVelocityFloor } from './velocity';
-import type { MidiNote, MidiProject, MidiTrackData, VelocitySource } from '@/types';
+import type {
+  MidiNote, MidiProject, MidiTrackData, RecordingSource, VelocitySource,
+} from '@/types';
 
 /** Lane colours, assigned round-robin so a freshly imported arrangement is legible at
  *  arrange-view scale without anyone picking colours by hand. */
@@ -113,6 +115,7 @@ export function createProject(init: Partial<MidiProject> = {}): MidiProject {
     tempos:         init.tempos         ?? [{ timeMs: 0, bpm: 120 }],
     timeSignatures: init.timeSignatures ?? [{ timeMs: 0, numerator: 4, denominator: 4 }],
     durationMs:     init.durationMs     ?? projectDurationMs(tracks),
+    origin:         init.origin,
   };
 }
 
@@ -160,7 +163,15 @@ export function projectFromSmfBytes(bytes: Uint8Array, title: string): MidiProje
 export function projectFromMidiNotes(
   notes: MidiNote[],
   title: string,
-  options: { bpm?: number; velocitySource: VelocitySource; trackName?: string },
+  options: {
+    bpm?: number;
+    velocitySource: VelocitySource;
+    trackName?: string;
+    /** What produced these notes — a live take or an uploaded file. Travels with the
+     *  project so the tab it eventually becomes reports its real origin rather than the
+     *  route it took to get there. */
+    origin?: RecordingSource;
+  },
 ): MidiProject {
   const track = createTrack(0, {
     // Named for the source rather than "Track 1": this is the only track, and the Studio's
@@ -180,6 +191,7 @@ export function projectFromMidiNotes(
     // absolute ms, so this cannot mistime anything: it decides where the bar lines fall, not
     // where the notes do.
     tempos: options.bpm ? [{ timeMs: 0, bpm: Math.round(options.bpm) }] : undefined,
+    origin: options.origin,
   });
 }
 
@@ -211,6 +223,9 @@ export interface StoredProject {
   /** base64 SMF: notes, velocities, programs, channels, names, tempo and meter maps. */
   smf:        string;
   trackMeta:  StoredTrackMeta[];
+  /** SMF has nowhere to state where a project came from, so it rides alongside. Absent on
+   *  everything saved before this existed. */
+  origin?:    RecordingSource;
 }
 
 /**
@@ -248,6 +263,7 @@ export function serializeProject(project: MidiProject): StoredProject {
       velocityFloor:  t.velocityFloor,
       durationFloorMs: t.durationFloorMs,
     })),
+    origin: project.origin,
   };
 }
 
@@ -282,6 +298,7 @@ export function deserializeProject(stored: StoredProject): MidiProject {
     tempos:         smf.tempos,
     timeSignatures: smf.timeSignatures,
     durationMs:     stored.durationMs || projectDurationMs(tracks),
+    origin:         stored.origin,
   };
 }
 

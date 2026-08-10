@@ -11,7 +11,9 @@
  */
 
 import { analyzeSamples } from '../src/audio/analyzeSamples';
+import { defaultParams, getAlgorithm } from '../src/audio/algorithms';
 import { framesToNotes } from '../src/audio/framesToNotes';
+import { resegmentTranscription } from '../src/audio/transcription';
 import { tabToNote } from '../src/audio/HarmonicaMapper';
 import { detectHarmonicaKey, positionOf } from '../src/audio/keyDetection';
 import { synthesizeWav } from '../src/audio/synthesizeWav';
@@ -239,6 +241,170 @@ async function keyDetectionCases(): Promise<CaseResult[]> {
   return results;
 }
 
+/**
+ * The property the whole tune step rests on: re-segmenting one prepared pass at several
+ * parameter sets must give stable, monotonic results.
+ *
+ * Worth asserting rather than assuming, because the failure mode is silent. Basic Pitch's
+ * segmenter zeroes posteriogram bins **in place**, so a `prepare` handed straight to a
+ * second `resegment` would quietly return fewer notes each time with nothing to indicate
+ * why — the exact shape of bug a slider makes easy to reach and impossible to notice.
+ */
+async function resegmentCases(): Promise<CaseResult[]> {
+  const results: CaseResult[] = [];
+
+  // Deliberately short notes (200ms), so the top of the shortest-note slider's own travel
+  // is enough to reach the empty state below — the case has to be reachable by a real drag,
+  // not only by a value no control can produce.
+  const tabs    = ['4', '-4', '5', '-5', '6', '-6', '5', '4'];
+  const notes   = sequence(tabs, 'C', 200, 150);
+  const decoded = parseWav(synthesizeWav(notes, SAMPLE_RATE), 'resegment.wav');
+
+  const engine   = getAlgorithm('pmpm');
+  const prepared = await engine.prepare(decoded);
+
+  try {
+    // Same parameters twice. Any drift here means the cheap half is consuming or mutating
+    // what the expensive half produced.
+    const a = await resegmentTranscription({
+      prepared, params: defaultParams(engine), harmonicaType: 'diatonic', segmentationKey: 'C', allowEmpty: true,
+    });
+    const b = await resegmentTranscription({
+      prepared, params: defaultParams(engine), harmonicaType: 'diatonic', segmentationKey: 'C', allowEmpty: true,
+    });
+    results.push({
+      name:   'resegment — repeatable at identical params',
+      passed: a.notes.length === b.notes.length && a.notes.length > 0,
+      detail: `${a.notes.length} notes, then ${b.notes.length}`,
+    });
+
+    // Raising the shortest-note floor can only ever remove notes, never add them. A sweep
+    // that isn't monotonic means a parameter is reaching something it shouldn't.
+    const counts: number[] = [];
+    for (const minDurationMs of [20, 110, 250, 400]) {
+      const swept = await resegmentTranscription({
+        prepared,
+        params: { ...defaultParams(engine), minDurationMs },
+        harmonicaType: 'diatonic',
+        segmentationKey: 'C',
+        allowEmpty: true,
+      });
+      counts.push(swept.notes.length);
+    }
+    const monotonic = counts.every((n, i) => i === 0 || n <= counts[i - 1]);
+    results.push({
+      name:   'resegment — note count falls monotonically as the shortest-note floor rises',
+      passed: monotonic,
+      detail: `counts ${counts.join(' → ')}`,
+    });
+
+    // The empty state is an ordinary result while tuning, not a throw. If this ever raises,
+    // the tune screen falls through to its error phase mid-drag and takes the user's
+    // parameters with it.
+    // A floor above every note in the take, so nothing can survive. This is the state the
+    // tune screen renders inline with a reset button beside it, and it only stays reachable
+    // as long as reaching it isn't an exception.
+    let threw   = false;
+    let emptied = -1;
+    try {
+      const extreme = await resegmentTranscription({
+        prepared,
+        // Every note here is 200ms and the slider's own ceiling is 400ms, so the top of
+        // its travel cannot leave one standing.
+        params: { ...defaultParams(engine), minDurationMs: 400 },
+        harmonicaType: 'diatonic',
+        segmentationKey: 'C',
+        allowEmpty: true,
+      });
+      emptied = extreme.notes.length;
+    } catch {
+      threw = true;
+    }
+    results.push({
+      name:   'resegment — params too strict for any note return empty, not an error',
+      passed: !threw && emptied === 0,
+      detail: threw ? 'threw' : `returned ${emptied} notes`,
+    });
+  } finally {
+    prepared.dispose();
+  }
+
+  return results;
+}
+
+/**
+ * Int16 take retention must not move a detected pitch.
+ *
+ * The claim the setting is sold on ("doesn't change how a recording is transcribed") is a
+ * measurable one, so it is measured: the quantization floor sits ~96dB down, far below
+ * anything the NSDF reads. This runs the round trip the capture module performs — clamp,
+ * scale to Int16, widen back — over real synthesized audio and compares what comes out.
+ */
+async function retentionCases(): Promise<CaseResult[]> {
+  const tabs    = ['4', '-4', '5', '-5', '6'];
+  const notes   = sequence(tabs, 'C', 400, 200);
+  const decoded = parseWav(synthesizeWav(notes, SAMPLE_RATE), 'retention.wav');
+
+  const narrowed = new Float32Array(decoded.samples.length);
+  for (let i = 0; i < decoded.samples.length; i++) {
+    const clamped = Math.max(-1, Math.min(1, decoded.samples[i]));
+    narrowed[i] = Math.round(clamped * 32767) / 32767;
+  }
+
+  const reference = await analyzeSamples(decoded);
+  const roundTrip = await analyzeSamples({ ...decoded, samples: narrowed });
+
+  // Compared on voiced frames only — a silent frame's frequency is NaN in both, which no
+  // comparison can say anything useful about.
+  let worstCents = 0;
+  let compared   = 0;
+  for (let i = 0; i < reference.length; i++) {
+    const a = reference[i]?.frequency;
+    const b = roundTrip[i]?.frequency;
+    if (!Number.isFinite(a) || !Number.isFinite(b) || a <= 0 || b <= 0) continue;
+    worstCents = Math.max(worstCents, Math.abs(1200 * Math.log2(b / a)));
+    compared++;
+  }
+
+  const tabsFrom = (frames: typeof reference) => framesToNotes(frames, 'C', 'diatonic').map((n) => n.tab);
+  const before = tabsFrom(reference);
+  const after  = tabsFrom(roundTrip);
+  const sameTabs = before.length === after.length && before.every((t, i) => t === after[i]);
+
+  return [{
+    // A cent is a hundredth of a semitone; 1 cent is an order of magnitude below anything a
+    // player could hear, let alone anything that moves a note onto a different hole.
+    name:   'Int16 take retention — round trip does not move detected pitches',
+    passed: worstCents <= 1 && sameTabs && compared > 0,
+    detail: `worst drift ${worstCents.toFixed(4)} cents over ${compared} voiced frames; `
+      + `tabs ${sameTabs ? 'identical' : `differ ([${before.join(', ')}] vs [${after.join(', ')}])`}`,
+  }];
+}
+
+/**
+ * The pMPM analysis hop is deliberately *not* a tunable parameter — it belongs to the
+ * expensive half, and it is pinned to the live capture's frame size so an uploaded file
+ * segments the way a recording does. This measures what changing it would cost rather than
+ * leaving that as an assertion in a comment.
+ */
+async function hopCases(): Promise<CaseResult[]> {
+  const tabs    = ['4', '-4', '5', '-5', '6'];
+  const notes   = sequence(tabs, 'C', 400, 200);
+  const decoded = parseWav(synthesizeWav(notes, SAMPLE_RATE), 'hop.wav');
+
+  const frames = await analyzeSamples(decoded);
+  const found  = framesToNotes(frames, 'C', 'diatonic');
+  const spacing = frames.length > 1 ? frames[1].t - frames[0].t : 0;
+
+  return [{
+    name:   'analysis hop — frame spacing matches the live capture rate',
+    // 2048 samples at 44.1kHz is ~46ms, which is what every NoteDetector threshold is
+    // calibrated against. A hop that drifted from this would retune all of them at once.
+    passed: Math.abs(spacing - 46) <= 2 && found.length === tabs.length,
+    detail: `${spacing}ms between frames, ${found.length}/${tabs.length} notes segmented`,
+  }];
+}
+
 async function main() {
   const results: CaseResult[] = [];
 
@@ -280,6 +446,9 @@ async function main() {
 
   results.push(...wavFormatCases());
   results.push(...(await keyDetectionCases()));
+  results.push(...(await resegmentCases()));
+  results.push(...(await retentionCases()));
+  results.push(...(await hopCases()));
 
   for (const r of results) {
     console.log(`${r.passed ? 'PASS' : 'FAIL'}  ${r.name} — ${r.detail}`);

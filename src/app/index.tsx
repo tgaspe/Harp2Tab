@@ -6,7 +6,7 @@ import { FONT, HARMONICA_KEYS } from '@/constants/keys';
 import { useTheme } from '@/hooks/useTheme';
 import { usePlayback } from '@/hooks/usePlayback';
 import { selectHarmonicaType, selectKey, useAppStore } from '@/store/useAppStore';
-import { useSettingsStore } from '@/store/useSettingsStore';
+import { FREE_TIER_ENABLED, useSettingsStore } from '@/store/useSettingsStore';
 import { computeEffectiveLimit, resolveSessionGate } from '@/store/sessionGate';
 import { AudioImportError } from '@/audio/audioImport';
 import { pickAudioFile } from '@/audio/pickAudioFile';
@@ -368,7 +368,8 @@ export default function KeySelectionScreen() {
         <Text style={[styles.startBtnText, !selectedKey && styles.startBtnTextDisabled]}>
           Start Recording
         </Text>
-        {!isPurchased && (
+        {/* Nothing counts down while the free tier is off, so nothing advertises a count. */}
+        {FREE_TIER_ENABLED && !isPurchased && (
           <View style={styles.btnCounter}>
             <Text style={[styles.btnCounterText, !selectedKey && styles.btnCounterTextDisabled]}>
               {Math.min(totalRecordingsUsed, effectiveLimit)} / {effectiveLimit} free recordings used
@@ -426,7 +427,7 @@ export default function KeySelectionScreen() {
     </View>
   );
 
-  const freeCounterLabel = !isPurchased
+  const freeCounterLabel = FREE_TIER_ENABLED && !isPurchased
     ? `${Math.min(totalRecordingsUsed, effectiveLimit)} / ${effectiveLimit} free recordings used`
     : null;
 

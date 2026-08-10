@@ -192,4 +192,13 @@ export interface MidiProject {
   tempos:         TempoEvent[];
   timeSignatures: TimeSignatureEvent[];
   durationMs:     number;
+  /**
+   * Where the music came from, carried so the tab conversion produces can say so.
+   *
+   * Every Studio conversion used to report `'midiStudio'`, which is true of the route but
+   * not of the material: a transcribed take and an imported arrangement arrive by the same
+   * road and Frame Inspector needs to tell them apart. Absent on every project saved before
+   * this existed, which still reads as `'midiStudio'`.
+   */
+  origin?:        RecordingSource;
 }

@@ -19,6 +19,19 @@ interface SliderInputProps {
    *  number up with the thumb's resting position in narrow, inline slots. 'center' suits
    *  a slider given a whole row to itself. */
   labelAlign?:  'right' | 'center';
+  /**
+   * What this slider adjusts, spoken. Required for any new caller — without it a screen
+   * reader announces a bare number with no idea what it belongs to. Optional in the type
+   * only so the existing mic-sensitivity slider, whose visible heading already sits
+   * directly above it, isn't broken by the addition.
+   */
+  accessibilityLabel?: string;
+}
+
+/** Ten steps end to end, or one step if that's already coarse — what Page Up/Down and
+ *  Shift+Arrow move by, so crossing a long range doesn't take fifty presses. */
+function coarseStepFor(min: number, max: number, step: number): number {
+  return Math.max(step, Math.round(((max - min) / 10) / step) * step);
 }
 
 function snap(ratio: number, min: number, max: number, step: number): number {
@@ -28,7 +41,9 @@ function snap(ratio: number, min: number, max: number, step: number): number {
   return Math.max(min, Math.min(max, snapped));
 }
 
-export function SliderInput({ value, min, max, step = 1, onChange, formatLabel, labelAlign = 'right' }: SliderInputProps) {
+export function SliderInput({
+  value, min, max, step = 1, onChange, formatLabel, labelAlign = 'right', accessibilityLabel,
+}: SliderInputProps) {
   const theme      = useTheme();
   const trackWidth = useSharedValue(0);
   const startRatio = useSharedValue(0);
@@ -73,10 +88,51 @@ export function SliderInput({ value, min, max, step = 1, onChange, formatLabel, 
     width: thumbRatio.value * trackWidth.value,
   }));
 
+  // Keyboard and assistive-technology adjustment. Until this existed the control was a
+  // pure `Gesture.Pan` — reachable only by dragging it with a pointer, which made every
+  // screen built out of these entirely unusable by keyboard. Clamped and snapped through
+  // the same arithmetic the drag path uses, so no route in can land on an off-step value.
+  const nudge = useCallback((delta: number) => {
+    const raw     = value + delta;
+    const snapped = Math.round(raw / step) * step;
+    const next    = Math.max(min, Math.min(max, snapped));
+    if (next !== value) onChange(next);
+  }, [value, min, max, step, onChange]);
+
+  const coarseStep = coarseStepFor(min, max, step);
+  const valueText  = formatLabel ? formatLabel(value) : String(value);
+
   return (
     <View style={styles.wrapper}>
       <GestureDetector gesture={pan}>
-        <View style={styles.hitArea} onLayout={handleLayout}>
+        <View
+          style={styles.hitArea}
+          onLayout={handleLayout}
+          accessibilityRole="adjustable"
+          accessibilityLabel={accessibilityLabel}
+          // `text` as well as `now`, so the reader says "58 milliseconds" rather than "58"
+          // for a control whose number means nothing without its unit.
+          accessibilityValue={{ min, max, now: value, text: valueText }}
+          accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
+          onAccessibilityAction={(e) => {
+            if (e.nativeEvent.actionName === 'increment') nudge(step);
+            if (e.nativeEvent.actionName === 'decrement') nudge(-step);
+          }}
+          focusable
+          {...(Platform.OS === 'web' ? {
+            onKeyDown: (e: any) => {
+              // Shift for a coarse pass, plain for fine — the same two-speed convention the
+              // piano roll's threshold lines and arrow-key note nudge already use.
+              const delta = e.shiftKey ? coarseStep : step;
+              if (e.key === 'ArrowRight' || e.key === 'ArrowUp')  { e.preventDefault(); nudge(delta); }
+              if (e.key === 'ArrowLeft'  || e.key === 'ArrowDown'){ e.preventDefault(); nudge(-delta); }
+              if (e.key === 'PageUp')   { e.preventDefault(); nudge(coarseStep); }
+              if (e.key === 'PageDown') { e.preventDefault(); nudge(-coarseStep); }
+              if (e.key === 'Home')     { e.preventDefault(); if (value !== min) onChange(min); }
+              if (e.key === 'End')      { e.preventDefault(); if (value !== max) onChange(max); }
+            },
+          } : null)}
+        >
           <View style={[styles.track, { backgroundColor: theme.border }]} />
           <Animated.View style={[styles.fill, { backgroundColor: theme.accent }, fillStyle]} />
           {/* A plain white thumb reads fine on native, where `thumbShadow` gives it an edge,
@@ -86,8 +142,14 @@ export function SliderInput({ value, min, max, step = 1, onChange, formatLabel, 
           <Animated.View style={[styles.thumb, thumbShadow, { borderColor: theme.accent }, thumbStyle]} />
         </View>
       </GestureDetector>
-      <Text style={[styles.label, { color: theme.textSub, textAlign: labelAlign }]}>
-        {formatLabel ? formatLabel(value) : String(value)}
+      {/* Already spoken as the control's own value, so reading it a second time as loose
+          text would announce every number twice. */}
+      <Text
+        style={[styles.label, { color: theme.textSub, textAlign: labelAlign }]}
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+      >
+        {valueText}
       </Text>
     </View>
   );

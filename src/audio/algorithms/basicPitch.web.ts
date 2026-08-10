@@ -21,7 +21,10 @@
 
 import { AudioImportError, type DecodedAudio } from '../audioImport';
 import type { MidiNote } from '../midiToNotes';
-import type { TranscribeOptions, TranscriptionAlgorithm, TranscriptionOutput } from './index';
+import type {
+  ParamValues, Prepared, Segmentation, TranscribeOptions, TranscriptionAlgorithm,
+  TranscriptionParam,
+} from './index';
 
 /** The only rate the model accepts (basic-pitch `inference.ts`: AUDIO_SAMPLE_RATE). */
 const MODEL_SAMPLE_RATE = 22050;
@@ -274,6 +277,97 @@ export async function segment(
     .sort((a, b) => a.timeMs - b.timeMs || a.midi - b.midi);
 }
 
+/**
+ * The knobs offered on the tune screen, in the user's language.
+ *
+ * All four re-run `segment` and nothing else — no inference, no resampling — which is the
+ * rule for what may appear here at all. `minFrequency`/`maxFrequency` are deliberately
+ * absent even though they satisfy that rule: they measurably cost more real notes than they
+ * remove noise, for the reason spelled out on the config interface above, so offering them
+ * would be offering a control whose good positions are all the same position.
+ */
+const BASIC_PITCH_PARAMS: readonly TranscriptionParam[] = [
+  {
+    id:     'onsetThreshold',
+    kind:   'number',
+    label:  'Onset sensitivity',
+    help:   'How clearly a note has to start before it counts. Lower hears more attacks, '
+          + 'including some that were never played.',
+    min:    0.05,
+    max:    0.95,
+    step:   0.05,
+    default: DEFAULT_BASIC_PITCH_CONFIG.onsetThreshold,
+    format: (v) => v.toFixed(2),
+  },
+  {
+    id:     'frameThreshold',
+    kind:   'number',
+    label:  'Note confidence',
+    help:   'How sure the model has to be that a note is still sounding. Lower holds notes '
+          + 'through quiet moments; higher clips their tails.',
+    min:    0.05,
+    max:    0.95,
+    step:   0.05,
+    default: DEFAULT_BASIC_PITCH_CONFIG.frameThreshold,
+    format: (v) => v.toFixed(2),
+  },
+  {
+    id:     'minNoteLengthMs',
+    kind:   'number',
+    label:  'Shortest note',
+    help:   'Anything briefer is discarded. Raise it to clear blips; too high and fast '
+          + 'passages lose their inner notes.',
+    min:    12,
+    max:    300,
+    step:   6,
+    default: DEFAULT_BASIC_PITCH_CONFIG.minNoteLengthMs,
+    format: (v) => `${Math.round(v)} ms`,
+  },
+  {
+    id:     'melodiaTrick',
+    kind:   'boolean',
+    label:  'Follow melodic lines',
+    help:   'Tracks a line through moments where its attack fades, instead of breaking it '
+          + 'into fragments.',
+    default: DEFAULT_BASIC_PITCH_CONFIG.melodiaTrick,
+  },
+  {
+    id:     'inferOnsets',
+    kind:   'boolean',
+    label:  'Infer missed attacks',
+    help:   'Adds a note start wherever the sound jumps sharply but the model heard no '
+          + 'attack. Helps with tongued repeats on one hole.',
+    default: DEFAULT_BASIC_PITCH_CONFIG.inferOnsets,
+    advanced: true,
+  },
+  {
+    id:     'energyTolerance',
+    kind:   'number',
+    label:  'Overtone rejection',
+    help:   'How much energy a note may leave behind before its overtone is counted as a '
+          + 'second note. Lower hears more simultaneous notes, real or not.',
+    min:    0,
+    max:    30,
+    step:   1,
+    default: DEFAULT_BASIC_PITCH_CONFIG.energyTolerance,
+    format: (v) => String(Math.round(v)),
+    advanced: true,
+  },
+];
+
+/** The declared bag → the library's config, with the two frequency bounds pinned off. */
+function configFromParams(params: ParamValues): BasicPitchSegmentationConfig {
+  return {
+    ...DEFAULT_BASIC_PITCH_CONFIG,
+    onsetThreshold:  Number(params.onsetThreshold  ?? DEFAULT_BASIC_PITCH_CONFIG.onsetThreshold),
+    frameThreshold:  Number(params.frameThreshold  ?? DEFAULT_BASIC_PITCH_CONFIG.frameThreshold),
+    minNoteLengthMs: Number(params.minNoteLengthMs ?? DEFAULT_BASIC_PITCH_CONFIG.minNoteLengthMs),
+    energyTolerance: Number(params.energyTolerance ?? DEFAULT_BASIC_PITCH_CONFIG.energyTolerance),
+    melodiaTrick:    Boolean(params.melodiaTrick ?? DEFAULT_BASIC_PITCH_CONFIG.melodiaTrick),
+    inferOnsets:     Boolean(params.inferOnsets  ?? DEFAULT_BASIC_PITCH_CONFIG.inferOnsets),
+  };
+}
+
 export const basicPitchAlgorithm: TranscriptionAlgorithm = {
   id:    'basicPitch',
   label: 'Neural transcription (Basic Pitch)',
@@ -283,9 +377,31 @@ export const basicPitchAlgorithm: TranscriptionAlgorithm = {
   available:      true,
   producesFrames: false,
   polyphonic:     true,
+  params:         BASIC_PITCH_PARAMS,
 
-  async transcribe(audio: DecodedAudio, options: TranscribeOptions = {}): Promise<TranscriptionOutput> {
+  async prepare(audio: DecodedAudio, options: TranscribeOptions = {}): Promise<Prepared> {
     const inference = await runInference(audio, options);
-    return { kind: 'notes', notes: await segment(inference) };
+    // Held in a closure the caller can empty rather than exposed for the caller to null out:
+    // three matrices at ~86 frames a second come to roughly 90MB on a five-minute take, and
+    // "whoever navigated away last should have freed it" is not a memory strategy.
+    let held: BasicPitchInference | null = inference;
+    return {
+      algorithm:  'basicPitch',
+      durationMs: audio.durationMs,
+      get data() { return held; },
+      dispose() { held = null; },
+    };
+  },
+
+  async resegment(prepared: Prepared, params: ParamValues): Promise<Segmentation> {
+    const inference = prepared.data as BasicPitchInference | null;
+    // Disposed while a debounced re-segment was still in flight. Empty rather than a throw:
+    // this only happens on the way off the screen, where an error would be reported to
+    // nobody but could still fire an error phase behind the navigation.
+    if (!inference) return { output: { kind: 'notes', notes: [] }, detectorConfig: null };
+    return {
+      output:         { kind: 'notes', notes: await segment(inference, configFromParams(params)) },
+      detectorConfig: null,
+    };
   },
 };
