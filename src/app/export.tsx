@@ -10,11 +10,11 @@ import { NameRecordingModal } from '@/components/NameRecordingModal';
 import { RatingModal } from '@/components/RatingModal';
 import { ActionSheetModal } from '@/components/ActionSheetModal';
 import { useTheme } from '@/hooks/useTheme';
-import { useAppStore, selectKey, selectExportFmt, selectHarmonicaType } from '@/store/useAppStore';
+import { useAppStore, selectKey, selectExportFmt, selectHarmonicaType, selectRecordingTitle } from '@/store/useAppStore';
 import { useAudibleNotes } from '@/hooks/useAudibleNotes';
 import { saveCurrentSessionToLibrary, getDefaultRecordingTitle, startNewRecordingSession } from '@/store/sessionSnapshot';
 import { generateForFormat, singlePart } from '@/export/generators';
-import { contentToBlob, triggerWebDownload } from '@/export/webDownload';
+import { canShareFiles, contentToBlob, exportFileName, triggerWebDownload } from '@/export/webDownload';
 import { EXPORT_FORMATS, FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_TOP, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
@@ -32,9 +32,14 @@ export default function ExportScreen() {
   const { notes: tabNotes } = useAudibleNotes();
   const harmonicaType   = useAppStore(selectHarmonicaType);
   const exportFormat    = useAppStore(selectExportFmt);
+  const recordingTitle  = useAppStore(selectRecordingTitle);
   const setExportFormat = useAppStore((s) => s.setExportFormat);
   const [isExporting, setIsExporting] = useState(false);
   const [pendingExport, setPendingExport] = useState<{ action: 'share' | 'save'; count: number } | null>(null);
+  // Native always has a share sheet. On web most desktop browsers don't accept files, and
+  // there the button did exactly what Save next to it does — so it isn't offered.
+  // `useMemo` with no deps because the answer can't change within a page load.
+  const canShare = useMemo(() => Platform.OS !== 'web' || canShareFiles(), []);
   const [naming, setNaming] = useState(false);
   const [showRatingModal, setShowRatingModal] = useState(false);
 
@@ -63,11 +68,19 @@ export default function ExportScreen() {
     goToNewRecording();
   }
 
+  /** The name the file goes out under — the tab's own, not a constant. `exportFileName`
+   *  handles the unnamed case and the sanitising. */
+  function fileNameFor(ext: string) {
+    return exportFileName(recordingTitle, ext);
+  }
+
   async function buildFile() {
     const { content, encoding, ext, mimeType } = generateForFormat(
       singlePart(tabNotes, selectedKey!, harmonicaType), exportFormat,
     );
-    const uri = FileSystem.cacheDirectory + `harp2tab_export.${ext}`;
+    // The cache filename is what the share sheet shows and what the receiving app saves as,
+    // so it carries the title too rather than being an internal temp name.
+    const uri = FileSystem.cacheDirectory + fileNameFor(ext);
     await FileSystem.writeAsStringAsync(uri, content, { encoding });
     return { uri, ext, mimeType };
   }
@@ -80,18 +93,18 @@ export default function ExportScreen() {
         const { content, encoding, ext, mimeType } = generateForFormat(
           singlePart(tabNotes, selectedKey, harmonicaType), exportFormat,
         );
-        const filename = `harp2tab_export.${ext}`;
+        const filename = fileNameFor(ext);
         const blob = contentToBlob(content, encoding, mimeType);
-        const canUseWebShare = typeof navigator.share === 'function'
-          && typeof navigator.canShare === 'function';
-        if (canUseWebShare) {
-          const file = new File([blob], filename, { type: mimeType });
-          if (navigator.canShare({ files: [file] })) {
-            await navigator.share({ files: [file], title: filename });
-            return;
-          }
+        // No download fallback here any more: the button is only rendered when this is
+        // true, so reaching it means the share sheet really is available.
+        const file = new File([blob], filename, { type: mimeType });
+        try {
+          await navigator.share({ files: [file], title: filename });
+        } catch (e) {
+          // Dismissing the share sheet rejects with AbortError. That's the user saying no,
+          // not a failure, and there's nothing to report about it.
+          if ((e as Error)?.name !== 'AbortError') throw e;
         }
-        triggerWebDownload(blob, filename);
         return;
       }
       const { uri, mimeType } = await buildFile();
@@ -110,7 +123,7 @@ export default function ExportScreen() {
       );
 
       if (Platform.OS === 'web') {
-        triggerWebDownload(contentToBlob(content, encoding, mimeType), `harp2tab_export.${ext}`);
+        triggerWebDownload(contentToBlob(content, encoding, mimeType), fileNameFor(ext));
         return;
       }
 
@@ -120,13 +133,14 @@ export default function ExportScreen() {
       const permission =
         await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync(DOWNLOADS_URI);
       if (!permission.granted) return;
+      const filename = fileNameFor(ext);
       const fileUri = await FileSystem.StorageAccessFramework.createFileAsync(
         permission.directoryUri,
-        `harp2tab_export.${ext}`,
+        filename,
         mimeType,
       );
       await FileSystem.StorageAccessFramework.writeAsStringAsync(fileUri, content, { encoding });
-      Alert.alert('Saved', `harp2tab_export.${ext} saved to Downloads.`);
+      Alert.alert('Saved', `${filename} saved to Downloads.`);
     } finally {
       setIsExporting(false);
     }
@@ -251,23 +265,25 @@ export default function ExportScreen() {
             </Text>
           </Pressable>
 
-          <Pressable
-            onPress={handleShare}
-            disabled={tabNotes.length === 0 || isExporting}
-            style={({ pressed, hovered }: any) => [
-              styles.shareBtn,
-              (tabNotes.length === 0 || isExporting) && styles.btnDisabled,
-              (pressed || (Platform.OS === 'web' && hovered)) && tabNotes.length > 0 && !isExporting && styles.shareBtnPressed,
-            ]}
-            accessibilityRole="button"
-            accessibilityLabel="Share File"
-            accessibilityState={{ disabled: tabNotes.length === 0 || isExporting }}
-          >
-            <Ionicons name="share-outline" size={18} color="#fff" />
-            <Text style={[styles.shareBtnText, (tabNotes.length === 0 || isExporting) && styles.btnTextDisabled]}>
-              {isExporting ? 'Exporting…' : 'Share'}
-            </Text>
-          </Pressable>
+          {canShare && (
+            <Pressable
+              onPress={handleShare}
+              disabled={tabNotes.length === 0 || isExporting}
+              style={({ pressed, hovered }: any) => [
+                styles.shareBtn,
+                (tabNotes.length === 0 || isExporting) && styles.btnDisabled,
+                (pressed || (Platform.OS === 'web' && hovered)) && tabNotes.length > 0 && !isExporting && styles.shareBtnPressed,
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel="Share File"
+              accessibilityState={{ disabled: tabNotes.length === 0 || isExporting }}
+            >
+              <Ionicons name="share-outline" size={18} color="#fff" />
+              <Text style={[styles.shareBtnText, (tabNotes.length === 0 || isExporting) && styles.btnTextDisabled]}>
+                {isExporting ? 'Exporting…' : 'Share'}
+              </Text>
+            </Pressable>
+          )}
 
         </View>
 

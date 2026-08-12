@@ -36,7 +36,8 @@ import { useUndoRedoShortcuts } from '@/hooks/useEditHistory';
 import { previewNote } from '@/native/Playback';
 import { noteToTab } from '@/audio/HarmonicaMapper';
 import { generateForFormat, singlePart } from '@/export/generators';
-import { contentToBlob, triggerWebDownload } from '@/export/webDownload';
+import { canShareFiles, contentToBlob, exportFileName, triggerWebDownload } from '@/export/webDownload';
+import { DEFAULT_NEW_NOTE_VELOCITY } from '@/audio/velocity';
 import { FONT, EXPORT_FORMATS } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_TOP, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
@@ -219,7 +220,13 @@ export default function EditScreen() {
     const existing = useAppStore.getState().tabNotes;
     const prev     = existing[existing.length - 1];
     const start    = prev ? prev.start_time + prev.duration : 0;
-    addTabNote({ tab: '-1', note: 'D4', start_time: start, duration: 300, confidence: 100 });
+    // Velocity stated rather than left absent, for the reasons in `DEFAULT_NEW_NOTE_VELOCITY`
+    // — and floored at the noise gate so the note can't be added already hidden by it. The
+    // pencil tool's click-to-create does exactly the same against its own filter line.
+    addTabNote({
+      tab: '-1', note: 'D4', start_time: start, duration: 300, confidence: 100,
+      velocity: Math.max(DEFAULT_NEW_NOTE_VELOCITY, noiseGate),
+    });
     const updated = useAppStore.getState().tabNotes;
     const last    = updated[updated.length - 1];
     if (last) setSelectedId(last.id);
@@ -1166,11 +1173,17 @@ function ExportMenu({ tabNotesLength, theme, styles, variant = 'toolbar', collap
   const tabNotes        = useAppStore(selectTabNotes);
   const harmonicaType   = useAppStore(selectHarmonicaType);
   const exportFormat    = useAppStore(selectExportFmt);
+  const recordingTitle  = useAppStore(selectRecordingTitle);
   const setExportFormat = useAppStore((s) => s.setExportFormat);
 
   const [open, setOpen] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [pendingExport, setPendingExport] = useState<{ action: 'share' | 'save'; count: number } | null>(null);
+
+  // Most desktop browsers expose `navigator.share` but refuse files, which made this
+  // dropdown's Share button a second Download button sitting next to the first. Offered
+  // only where it genuinely does something else. Fixed for the page's lifetime.
+  const canShare = useMemo(() => canShareFiles(), []);
 
   const disabled = tabNotesLength === 0;
 
@@ -1179,7 +1192,8 @@ function ExportMenu({ tabNotesLength, theme, styles, variant = 'toolbar', collap
     setIsExporting(true);
     try {
       const { content, encoding, ext, mimeType } = generateForFormat(singlePart(tabNotes, selectedKey, harmonicaType), exportFormat);
-      triggerWebDownload(contentToBlob(content, encoding, mimeType), `harp2tab_export.${ext}`);
+      // Named after the chart, which on web the user typed into the toolbar field.
+      triggerWebDownload(contentToBlob(content, encoding, mimeType), exportFileName(recordingTitle, ext));
     } finally {
       setIsExporting(false);
       setOpen(false);
@@ -1191,17 +1205,17 @@ function ExportMenu({ tabNotesLength, theme, styles, variant = 'toolbar', collap
     setIsExporting(true);
     try {
       const { content, encoding, ext, mimeType } = generateForFormat(singlePart(tabNotes, selectedKey, harmonicaType), exportFormat);
-      const filename = `harp2tab_export.${ext}`;
+      const filename = exportFileName(recordingTitle, ext);
       const blob = contentToBlob(content, encoding, mimeType);
-      const canUseWebShare = typeof navigator.share === 'function' && typeof navigator.canShare === 'function';
-      if (canUseWebShare) {
-        const file = new File([blob], filename, { type: mimeType });
-        if (navigator.canShare({ files: [file] })) {
-          await navigator.share({ files: [file], title: filename });
-          return;
-        }
+      // No download fallback: `canShare` gates the button, so getting here means the sheet
+      // is really available.
+      const file = new File([blob], filename, { type: mimeType });
+      try {
+        await navigator.share({ files: [file], title: filename });
+      } catch (e) {
+        // Dismissing the sheet rejects with AbortError — the user saying no, not a failure.
+        if ((e as Error)?.name !== 'AbortError') throw e;
       }
-      triggerWebDownload(blob, filename);
     } finally {
       setIsExporting(false);
       setOpen(false);
@@ -1254,19 +1268,21 @@ function ExportMenu({ tabNotesLength, theme, styles, variant = 'toolbar', collap
           <Ionicons name="download-outline" size={15} color={theme.accent} />
           <Text style={styles.exportDropdownSaveBtnText}>{isExporting ? '…' : 'Download'}</Text>
         </Pressable>
-        <Pressable
-          onPress={handleShare}
-          disabled={isExporting}
-          style={({ pressed, hovered }: any) => [
-            styles.exportDropdownShareBtn,
-            (pressed || hovered) && !isExporting && styles.webBtnHoverFilled,
-          ]}
-          accessibilityRole="button"
-          accessibilityLabel="Share file"
-        >
-          <Ionicons name="share-outline" size={15} color="#fff" />
-          <Text style={styles.exportDropdownShareBtnText}>{isExporting ? 'Exporting…' : 'Share'}</Text>
-        </Pressable>
+        {canShare && (
+          <Pressable
+            onPress={handleShare}
+            disabled={isExporting}
+            style={({ pressed, hovered }: any) => [
+              styles.exportDropdownShareBtn,
+              (pressed || hovered) && !isExporting && styles.webBtnHoverFilled,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Share file"
+          >
+            <Ionicons name="share-outline" size={15} color="#fff" />
+            <Text style={styles.exportDropdownShareBtnText}>{isExporting ? 'Exporting…' : 'Share'}</Text>
+          </Pressable>
+        )}
       </View>
     </>
   );

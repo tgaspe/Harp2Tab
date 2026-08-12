@@ -11,7 +11,11 @@
 > - [x] Phase 5 — Audio upload (5a decode/pipeline, 5b auto key detection); 5c native
 >       compressed-audio decode deferred
 > - [x] Phase 6 — MIDI upload → tab conversion
-> - [ ] Phase 7 — User accounts (Firebase Auth)
+> - [ ] Phase 7 — User accounts (Firebase Auth) + cloud sync. Detailed plan written
+>       2026-08-12: sign-in is the small half, the sync engine is the phase, and account
+>       deletion + a privacy-policy/Data-safety update are release blockers on an app that
+>       is already live. Carries a scheduling dependency on 12-3's custom domain, and the
+>       entitlement read path that Phase 8 writes to.
 > - [ ] Phase 8 — Better monetization + remaining web billing
 > - [ ] Phase 9 — iOS version
 > - [ ] Phase 10 — Improve web UI polish
@@ -26,6 +30,13 @@
 >       tune its params after Finish, land in the Studio as a draft (added 2026-08-10).
 >       Independent of 7–10. Carries one monetization decision (where the free-tier session
 >       is consumed) — see Decisions under the phase.
+> - [ ] Phase 14 — Spectral polyphonic transcription (FFT): a third engine that hears chords
+>       offline, with no download and no TensorFlow (added 2026-08-10). **Its stated goal is
+>       the lowest octave-error rate of the three**, not maximum polyphony; polyphony is the
+>       capability, octave accuracy is the objective. Pure TypeScript, so it is also the
+>       first polyphonic engine native could run. Independent of every other phase — it adds
+>       files under `src/audio/` and one registry entry, and changes nothing in the pipeline
+>       it plugs into. Starts with a measurement step that can cancel the phase.
 >
 > **Phase 11 — what shipped, against what was planned**
 > - 11-1…11-5, 11-8…11-10 complete. End-to-end: import MIDI → Open in Studio → edit →
@@ -578,6 +589,508 @@ data was lost. The field is also what the library list needs to badge how each t
 ## Phase 7 — User accounts (Firebase Auth)
 - Greenfield sign-in: Google Sign-In + email link first (per the already-locked web version plan), Sign in with Apple once iOS ships.
 - Ties `useRecordingsStore` to cloud sync so the library built in Phase 1 becomes portable across devices/platforms.
+
+---
+
+# Phase 7 — Detailed implementation plan (written 2026-08-12)
+
+Expands the two lines above against the code as it stands after Phases 0–6 and 11. The
+summary describes this phase as sign-in plus sync, which is right, but it hides where the
+work actually is: **sign-in is a week, sync is the phase**, and account deletion is a
+store-policy obligation on an app that is already live rather than a follow-up.
+
+## The organizing idea: identity is additive, and the cloud is a mirror
+
+```
+   signed out — today's app, and still a complete one
+   ┌──────────────────────────────┐
+   │ local stores                 │──────────────────────────►  every screen
+   │ localStorage / AsyncStorage  │
+   └──────────────────────────────┘
+
+   signed in
+   ┌──────────────────────────────┐        ┌───────────────┐        ┌──────────────┐
+   │ local stores                 │◄──────►│  sync engine  │◄──────►│  Firestore   │
+   │ still what every screen reads│ merge  │  (one module) │  net   │ /users/{uid} │
+   └──────────────────────────────┘        └───────────────┘        └──────────────┘
+```
+
+**The rule that keeps this cheap: no screen ever reads Firestore.** Not one component,
+hook or selector gains a network dependency, a loading state or an error state. The sync
+engine writes into the same three zustand stores everything already reads, so `index.tsx`,
+`edit.tsx` and `studio.tsx` are untouched by this phase. If a component ends up needing
+`await`, the boundary has been drawn in the wrong place.
+
+The corollary is that the local store stays the source of truth *for the running app*, and
+the cloud is a mirror that is reconciled at known moments. This is not a hedge — it is the
+only model that keeps the app working offline, which it does today for free and would
+otherwise lose.
+
+## What already exists (and what genuinely doesn't)
+
+- **A Firebase project already exists, and native already points at it.**
+  `@react-native-firebase/app` and `/crashlytics` v24 are in `package.json`,
+  `android/app/google-services.json` is checked in, and `android/app/build.gradle:5`
+  applies the Crashlytics gradle plugin.
+- **Nothing in `src/` imports Firebase.** Zero hits across the tree — Crashlytics runs
+  entirely through the native plugin. So on the JS side this is greenfield, exactly as the
+  summary says.
+- **`app.json` has no `@react-native-firebase/app` config plugin** (plugins are
+  `expo-router`, `expo-splash-screen`, `expo-audio`). Native Firebase is configured through
+  the checked-in `android/` project, so adding a native auth module is native-project work,
+  not a plugin line. iOS has no `GoogleService-Info.plist` at all — Phase 9's problem, but
+  worth knowing it is not half-done.
+- **Three persisted stores to sync**, and one of them already solves the hard half of the
+  wire format: `useMidiProjectsStore` serialises to base64 SMF in `partialize` and decodes
+  in `merge`, dropping unreadable entries individually rather than failing the load
+  (`useMidiProjectsStore.ts:66-83`). That is the shape the sync layer wants too.
+- **`recordingsMigration.ts` is already a pure, harness-driven migration** at version 2,
+  split out of the store precisely so it can be tested with hand-authored old payloads. The
+  `updatedAt` addition below is a v3 that costs almost nothing because of that.
+- **No identity anywhere.** `isPurchased` is a local boolean (`useSettingsStore.ts:35`),
+  `totalRecordingsUsed` a local counter (`:34`), and `resolveSessionGate` reads both from
+  local state (`sessionGate.ts:15-27`).
+
+## Decisions taken
+
+### Two SDKs behind one module, web first
+
+Web uses the `firebase` JS SDK; native uses `@react-native-firebase/auth`. This is not a
+preference, it is what each platform supports properly — RNFirebase is native-only, and the
+JS SDK's React Native persistence story is the worse of the two on device.
+
+The seam is the one this codebase already uses three times: `src/lib/auth.ts` +
+`src/lib/auth.web.ts`, exactly like `storage.ts`/`storage.native.ts`,
+`useIAP.ts`/`useIAP.web.ts` and `AudioCapture`. The interface is small enough to be worth
+writing down before either implementation:
+
+```ts
+signInWithGoogle(): Promise<AuthUser>
+sendSignInLink(email: string): Promise<void>
+completeSignInLink(url: string, email: string): Promise<AuthUser>
+signOut(): Promise<void>
+onAuthChange(cb: (user: AuthUser | null) => void): () => void
+deleteAccount(): Promise<void>
+```
+
+`AuthUser` is ours (`uid`, `email`, `displayName`, `photoURL`, `providerId`), not the
+SDK's — nothing outside `src/lib/` should import a Firebase type, or the platform split
+leaks into every consumer.
+
+**Web ships first and native follows** (`feedback_web_first_no_mobile_hedging`). The native
+half is scoped in 7-11 rather than deferred silently, but nothing in the web work waits on
+it, and the native stub returning "not available on this platform" is a legitimate
+intermediate state.
+
+### No anonymous auth
+
+Firebase anonymous auth would give every visitor a UID and make sync uniform, at the price
+of: an account row for every bounce on the landing page, a permanent link/upgrade step when
+they later sign in for real, and — the actual disqualifier — an entitlement record keyed to
+a UID nobody can ever recover, which is precisely the mess Phase 8's grandfathering is
+already trying to avoid. Signed-out is a real, first-class, fully functional state.
+
+### Sign-in is never a wall
+
+There is no gate, no interstitial and no "sign in to continue". The only entry points are
+the account section in Settings (7-4) and a dismissible one-line prompt after a tab is
+saved. Two reasons, both concrete: 12-5 is in the middle of deleting the app's *existing*
+first-launch interruption for being the wrong first impression, and 12-3's landing page
+cannot be a landing page if its first interaction is an auth prompt.
+
+### Last-write-wins per document, on an explicit `updatedAt`
+
+No field-level merge, no CRDT. A tab or a project is edited as a unit by one person at a
+time; the realistic conflict is "I edited this on my phone this morning and my laptop still
+has last night's copy", which whole-document LWW resolves correctly. Field-level merge
+would let two devices produce a note list neither user ever saw.
+
+The cost is that a genuine simultaneous edit loses one side silently. Mitigation is
+disclosure, not machinery: the sync status line names what was replaced (7-10).
+
+### Documents sync as opaque payloads, not expanded Firestore maps
+
+Measured worst cases for one `TabRecording` as JSON (synthetic, at the persisted frame cap
+of 2000 — `frameBuffer.ts:59`):
+
+| recording | total | without `frames` | `frames` alone |
+|---|---|---|---|
+| 200 notes | 144 KB | 32 KB | 112 KB |
+| 1,000 notes | 271 KB | 159 KB | 112 KB |
+| 3,000 notes | 591 KB | 479 KB | 112 KB |
+
+Against Firestore's 1 MiB document limit that looks survivable — but Firestore does not
+count JSON bytes. It charges every field *name* in every array element. A `tabNotes` array
+of 3,000 maps repeats `velocitySource` (14 B), `start_time` (10 B), `confidence` (10 B) and
+five more names 3,000 times: roughly 50 KB of nothing but keys, plus per-value overhead,
+on every read and every write, forever.
+
+So the payload goes in **one string field**, JSON for tabs and the existing base64 SMF for
+projects, with only the fields the client needs to list or reconcile kept as real columns:
+`id`, `title`, `updatedAt`, `createdAt`, `duration`, `source`, `favorite`. That gives cheap
+listing without downloading bodies, keeps `updatedAt` queryable for incremental pulls, and
+follows the precedent `useMidiProjectsStore` already set for exactly this reason
+(the Phase 11 spike measured 64 KB SMF against 309 KB of expanded JSON).
+
+### `frames` do not sync
+
+They are 112 KB per recording — 78% of a typical document — and they exist for one screen,
+Frame Inspector, as a decimated debug lens over a take. Syncing them would make the
+dominant cost of the entire feature a diagnostic view.
+
+`TabRecording.frames` is already optional and already documented as absent on older
+recordings (`types/index.ts:92-94`), and Frame Inspector already distinguishes "no frames
+retained" from "never had audio" via `source` (`:117-120`). So a recording pulled onto a
+second device shows the same empty state a pre-retention recording does today — a state
+that exists, is handled, and has copy written for it. **The empty state's copy still needs
+a third case** ("this take's frames are on the device it was recorded on"), or the screen
+will tell a lie it currently only tells accidentally.
+
+Reversible later by putting frames in Cloud Storage under `users/{uid}/frames/{id}.json`
+and fetching on demand — the one place in the app where a network read at open time would
+be acceptable, because it is already a secondary inspection screen.
+
+### Deletes need tombstones
+
+Without them, delete-on-A followed by sync-from-B silently resurrects the recording, and
+it looks like a bug in the delete button. `/users/{uid}/deleted/{docId}` holding
+`{ deletedAt }`, checked before applying any remote document.
+
+Tombstones are garbage-collected after 90 days. A device offline longer than that can
+resurrect a deleted item — accepted, because the alternative is a collection that only ever
+grows, and 90 days offline is not a case worth carrying that cost for.
+
+### Entitlement is server state the client can only read
+
+`isPurchased` stops being truth and becomes a cache of `/entitlements/{uid}`, written only
+by the Cloud Function behind the RevenueCat webhook. The local boolean stays as the offline
+fallback and as the only value on a signed-out device, so `resolveSessionGate` keeps working
+unchanged — it reads `isPurchased` either way.
+
+**This is the joint Phase 7/8 deliverable already flagged at Phase 8**: an existing Play
+Store lifetime buyer has no UID until their first sign-in, so the reconciliation hook has to
+exist in the sign-in flow that this phase builds, even though the billing that fills it in
+lands in Phase 8. Build the read path and the entitlement document here; Phase 8 supplies
+the writer.
+
+**`totalRecordingsUsed` deliberately stays local.** Making it server state to stop
+counter-resetting means enforcing the free tier server-side, which means a Cloud Function
+on every session start. The counter is currently trivially resettable anyway (clear
+`localStorage`), and `FREE_TIER_ENABLED` is `false` (`useSettingsStore.ts:24`), so nothing
+is being lost today. Revisit with Phase 8, not here.
+
+### Account deletion ships in this phase, not after it
+
+Google Play requires apps that allow account creation to offer in-app account deletion plus
+a publicly reachable deletion URL declared in the Data safety form. **Harp2Tab is live in
+production.** Shipping sign-up without deletion is a policy violation on a shipped app, not
+a gap in a not-yet-released feature — which is why it is 7-9 and not Phase 10 polish.
+
+The same applies to `PRIVACY_POLICY.md`, which currently states that tab data is "stored
+locally on your device", that audio is "never transmitted to any server", and has a "Data We
+Do NOT Collect" section. Phase 7 makes at least the first of those false. The policy update
+is part of this phase's definition of done.
+
+## 7-1 · Firebase bootstrap, platform-split
+
+`src/lib/firebase.ts` (native, RNFirebase — reads the checked-in `google-services.json`)
+and `src/lib/firebase.web.ts` (JS SDK `initializeApp` with an explicit config object).
+
+- Web config values are public by design, but they should still come from
+  `app.config.ts`/`expo-constants` rather than being inlined, so staging and production can
+  differ. **`app.json` has to become `app.config.ts` for that** — flag it, it is a
+  file-format change that touches the build.
+- **Set `authDomain` to the app's own custom domain, not `harp2tab.firebaseapp.com`.** This
+  matters more than it looks: browsers that partition third-party storage (Safari ITP,
+  Firefox ETP, Chrome's third-party-cookie work) break Firebase's redirect sign-in when the
+  flow round-trips through a `*.firebaseapp.com` origin. Serving the auth helper from the
+  app's own domain via Firebase Hosting's `__/auth` rewrite fixes that class of failure and
+  makes the popup show the app's name instead of a Firebase subdomain. The domain purchase
+  is already planned in `project_web_version_plan` and needed by 12-3 — **that is a
+  scheduling dependency between 12-3 and this phase**, not a nice-to-have.
+- Lazy-load the Firestore chunk: nothing signed-out should pay for it. Whether Metro's
+  static export produces a separate async chunk under Expo 55 needs checking against
+  `https://docs.expo.dev/versions/v55.0.0/` per project convention — if it does not, the
+  fallback is to measure the added bundle weight and decide with a real number.
+
+## 7-2 · `useAuthStore` and the tri-state bootstrap
+
+```ts
+user: AuthUser | null | 'unknown'   // 'unknown' until the first onAuthChange fires
+```
+
+The tri-state is the whole point. Firebase resolves persisted sessions asynchronously, so a
+naive `user === null` renders the signed-out UI for a frame or two and then swaps —
+returning users watch their account flicker into existence on every load.
+
+`_layout.tsx` subscribes once, next to the existing font gate. It already holds render on
+`if (!fontsLoaded) return null` (`_layout.tsx:51`), so the auth bootstrap joins that
+condition rather than adding a second gate — but **only for the initial resolution**, and
+the splash overlay must not be extended to cover a slow network. Signed-out is the correct
+render for a failed resolution, not a spinner.
+
+Persisted alongside: `lastUid`, `adoptedUids: string[]` (both used by 7-7).
+
+## 7-3 · Sign-in methods
+
+**Google (web)** — `signInWithPopup`. Popups are blocked only when not user-gesture-driven,
+which a button click is; redirect carries the storage-partitioning problem described in 7-1
+and is the worse default even with the custom domain in place.
+
+**Email link (passwordless)** — three parts, and the middle one is where these usually
+break:
+1. `sendSignInLink` with a continuation URL pointing at `/auth/continue`.
+2. **Stash the email in `localStorage` before navigating away.** The link can be opened in a
+   different browser (mail app, different device), where that value is absent — the screen
+   must ask for the email rather than dead-ending. This is the case that gets skipped and
+   then reported as "the login link doesn't work".
+3. `/auth/continue` must be a **real exported route**. With `web.output: "static"`
+   (`app.json:28`) there is no server to rewrite unknown paths, so a client-only redirect
+   target does not exist as HTML. Add a Firebase Hosting rewrite as well, or a cold load of
+   the link 404s.
+
+**Apple** — Phase 9, per the summary. Keep the note that offering Google obliges Sign in
+with Apple on iOS; it is an App Store rule, not a preference.
+
+**Native Google (7-11)** — `@react-native-google-signin/google-signin` +
+`@react-native-firebase/auth`, and the SHA-1 fingerprint registered in the Firebase project
+must be **the Play App Signing certificate's, taken from the Play Console — not the local
+upload keystore's** (`project_release_setup` has the keystore). Google sign-in fails only in
+release builds when this is wrong, which is the most expensive time to find out.
+
+## 7-4 · Account UI — and the 12-4 decision this resolves
+
+12-4 asks whether the profile page is a route or a Settings section, and recommends a
+Settings section. Phase 7 should **build the Settings section and not the route**: account
+(email, provider, sign out), sync status (7-10), delete account (7-9). With entitlement
+still a local boolean until Phase 8 and the home-sidebar stats not yet displaced until 12-2,
+a `/profile` route would hold three rows.
+
+Signing in itself is a modal, not a route — the `ConvertTrackModal` precedent from Phase 11
+applies: a bounded decision with two buttons.
+
+```
+  ╔══════════════════════════════════════════════╗
+  ║  Sign in to Harp2Tab                         ║
+  ║  Your tabs, on every device you use.         ║
+  ║                                              ║
+  ║  ┌────────────────────────────────────────┐  ║
+  ║  │  Continue with Google                  │  ║
+  ║  └────────────────────────────────────────┘  ║
+  ║                     or                       ║
+  ║  ┌────────────────────────────────────────┐  ║
+  ║  │  you@example.com                       │  ║
+  ║  └────────────────────────────────────────┘  ║
+  ║  [ Email me a sign-in link ]                 ║
+  ║                                              ║
+  ║  Your 14 saved tabs will move with you.      ║
+  ╚══════════════════════════════════════════════╝
+```
+
+The last line is the adoption promise from 7-7 stated *before* sign-in, with the real local
+count. It is the only honest place to say it, because after sign-in it has already happened.
+
+## 7-5 · Schema: `updatedAt` and `deletedAt`
+
+`TabRecording` has `createdAt` and no `updatedAt` (`types/index.ts:82-94`) — there is no
+field to conflict-resolve on. `MidiProject` already has one, stamped centrally by `touch()`
+(`useMidiProjectsStore.ts:36-42`), which is the pattern to copy rather than asking every
+call site to remember.
+
+- Add `updatedAt: number` to `TabRecording`, stamped inside `saveRecording`,
+  `renameRecording` and `toggleFavorite` in `useRecordingsStore.ts` — all three mutate, all
+  three currently leave the record's timestamps alone.
+- **Schema v3 in `recordingsMigration.ts`**, seeding `updatedAt` from `createdAt`. Cheap,
+  and the harness can drive it because the migration is already a pure function
+  (`recordingsMigration.ts:1-8` says why it was split out).
+- Do *not* add `deletedAt` to the record — deletion removes it locally; the tombstone lives
+  in its own collection.
+- **`favorite` and the two filter lenses (`noiseGate`, `durationFloorMs`) sync with the
+  document.** They are per-user state, not per-device, and the type comments already treat
+  them as part of the record.
+
+## 7-6 · The sync engine
+
+```
+src/sync/
+  types.ts          — wire shape, tombstones, SyncStatus
+  merge.ts          — pure: (local[], remote[], tombstones[]) → { toApply, toPush, toDelete }
+  syncEngine.ts     — orchestration; the only file that awaits the network
+  useSyncStore.ts   — status: 'idle' | 'syncing' | 'offline' | 'error', lastSyncedAt, lastError
+```
+
+**`merge.ts` is pure and is the harness target.** Same reasoning as `recordingsMigration.ts`
+and `convertTrack.ts`: a merge that only runs inside a live store against a real Firestore is
+a merge nobody can test before it ships, and this is the one module in the phase where a
+silent bug destroys user data.
+
+Per document id:
+
+| local | remote | tombstone | result |
+|---|---|---|---|
+| present | absent | none | push |
+| absent | present | none | apply |
+| present | present | none | higher `updatedAt` wins, whole document |
+| present | present | tie | remote wins — deterministic, and in practice a re-push of identical content |
+| present | any | newer than doc | delete locally |
+| absent | present | older than doc | remote was re-created after the delete; apply |
+
+**When it runs:** on sign-in, on app foreground/load, after a local write (debounced ~2s),
+and on an explicit "Sync now". Not a live Firestore listener — a listener means the cloud can
+change the library out from under an open editor, which is exactly the "no screen reads
+Firestore" rule broken by the back door.
+
+**Offline:** local writes always succeed; the push is retried on the next trigger. No queue
+of operations is needed because the unit is the whole document and LWW makes a replayed push
+idempotent — that is a real dividend of the LWW choice, worth stating so nobody builds the
+queue.
+
+**Reading local state:** the engine reads and writes through the stores' own actions
+(`saveRecording`, `deleteRecording`, `saveProject`), never by patching persisted storage
+underneath them. Patching storage directly leaves the in-memory store stale until reload,
+which on web is "my tabs came back after I refreshed".
+
+**Settings are a special case — sync a subset, not the object.** `micSensitivity` and
+`hasCalibratedMic` (12-5) are properties of a *device's microphone*, not of a user; syncing
+them means a laptop inheriting a phone's calibration. Sync `themeOverride`,
+`defaultAlgorithm`, `transcriptionParams`, `maxTakeMinutes`; leave the mic and onboarding
+flags local. `isPurchased` and `totalRecordingsUsed` are governed by the entitlement
+decision above, not by this list.
+
+## 7-7 · First sign-in: adopt, never replace — and the second-account trap
+
+The obvious case is easy: user has a local library, signs in, cloud is empty → upload
+everything. Ids are `rec-${Date.now()}-${random}` (`sessionSnapshot.ts:38`), so cross-device
+collision is not a realistic risk and the union is safe.
+
+**The case that corrupts data is the second account on the same device.** Sign in as A
+(local library adopted into A), sign out, sign in as B — a naive adoption pushes A's entire
+library into B's account. On a shared laptop that is a privacy incident, not a bug.
+
+The rule, using `lastUid` / `adoptedUids` from 7-2:
+
+- Local library has never been adopted by anyone, and `uid === lastUid` or `lastUid` is
+  unset → **adopt** (union into the cloud).
+- `uid !== lastUid` and there are local documents not already adopted into *this* uid →
+  **do not adopt.** Ask, once, with counts: keep this device's N tabs as B's, or clear the
+  device and pull B's library. Default to clearing.
+- Signing out leaves the local library in place — it is the signed-out library, and wiping
+  it on sign-out would delete work from anyone who signed in to look and signed back out.
+
+## 7-8 · Firestore security rules
+
+```
+/users/{uid}/tabs/{id}          read, write: request.auth.uid == uid
+/users/{uid}/projects/{id}      read, write: request.auth.uid == uid
+/users/{uid}/settings/current   read, write: request.auth.uid == uid
+/users/{uid}/deleted/{id}       read, write: request.auth.uid == uid
+/entitlements/{uid}             read: request.auth.uid == uid; write: never (server only)
+```
+
+**Entitlement lives at the top level, deliberately not under `/users/{uid}/`.** Firestore
+rules are permissive-union: if any matching rule allows an operation, it is allowed. A
+`match /users/{uid}/{document=**}` that grants write would grant write to an entitlement
+document nested beneath it *no matter what a more specific rule says* — a
+`allow write: if false` underneath it does nothing. Keeping the paths disjoint is what makes
+the deny real. This is the single most commonly botched rule in this shape, and it is a
+paywall bypass if it is wrong.
+
+Rules get their own test run (`@firebase/rules-unit-testing` against the emulator), because
+"nobody else can read my tabs" is not a property that should be verified by inspection.
+
+## 7-9 · Account deletion and data export
+
+- **In-app:** Settings → Delete account, with a typed confirmation. Deletes the Firestore
+  subtree, the entitlement document, and the Auth user.
+- The client cannot reliably delete a subtree, so a Cloud Function does it — triggered by a
+  callable, or by the Auth `onDelete` trigger with the client calling `deleteUser()`.
+- **Handle `auth/requires-recent-login`.** Firebase refuses deletion on a stale session, so
+  the flow needs a re-authenticate step or it fails for exactly the users most likely to be
+  deleting (long-dormant ones).
+- **Local data is not deleted with the account** — the tabs on the device are the user's
+  work and predate the account. Say so in the confirmation.
+- **A publicly reachable deletion URL** on the marketing site (12-3), declared in the Play
+  Console Data safety form.
+- **Data export** — GDPR-adjacent and nearly free here, since export already exists: a
+  "download all my tabs" action reusing `src/export/generators.ts` over the whole library.
+  Include it; it is a paragraph of code and it closes the request that otherwise arrives by
+  email.
+- **`PRIVACY_POLICY.md` update and the Play Data safety re-declaration**, per the decision
+  above. Both are release blockers for the Android build, not documentation chores.
+
+## 7-10 · Sync status in Settings
+
+One line, not a dashboard: `Synced 2 minutes ago` / `Syncing…` / `Offline — 3 changes
+waiting` / `Sync failed — retry`. Plus "Sync now".
+
+When LWW discards a version, say which one and when: *"Replaced this device's copy of
+'Blues in G' with a newer version from 11:42."* The failure mode of silent LWW is a user who
+believes the app ate their edit; naming it converts a data-loss bug report into an
+understood behaviour.
+
+## 7-11 · Native parity (scoped, follows web)
+
+`@react-native-firebase/auth` + `@react-native-google-signin/google-signin`, the Play App
+Signing SHA-1 from 7-3, and the `@react-native-firebase/app` config plugin question from the
+existing-state section. The sync engine, `merge.ts`, the stores and every screen are shared
+and unchanged — the only native-specific code is `src/lib/auth.ts` and the native project
+config. That is the payoff for the platform-split seam.
+
+## What Phase 7 does not do
+
+Payments and entitlement *writing* (Phase 8) · Sign in with Apple (Phase 9) · sharing,
+public tab links or collaboration (not on the roadmap) · realtime multi-device editing (LWW
+is the decision) · syncing `frames` (decided above) · server-side free-tier enforcement
+(deferred to Phase 8 with the counter).
+
+## Verification
+
+- **`scripts/verify-sync.ts`** — the harness, following `verify-midi-studio.ts` /
+  `verify-audio-import.ts`. Drives `merge.ts` with hand-authored device states: clean push,
+  clean pull, both-edited conflict both directions, tie, delete-then-sync, delete-then-
+  recreate, tombstone expiry, empty cloud, empty local, second-account refusal. No network,
+  no emulator — it is a pure function.
+- **Rules tests** against the emulator: another user's uid cannot read `/users/{uid}/tabs`,
+  and no client can write `/entitlements/{uid}`.
+- **Two-browser manual pass:** sign in on both, edit in one, foreground the other, confirm
+  the merge and the status line. Then the same with one browser offline (DevTools) to
+  confirm local writes survive and push on reconnect.
+- **The flicker check:** hard-reload signed in and confirm the account UI never renders its
+  signed-out state first. This is the bug the tri-state exists to prevent, so it needs an
+  actual look, not a unit test.
+- **Size check:** after syncing a 3,000-note recording, read the document's actual stored
+  size and confirm the opaque-payload decision held.
+
+## Suggested build order
+
+1. **7-5 schema + v3 migration.** Nothing else can be reconciled without `updatedAt`, and it
+   is the only step that touches persisted user data — land it early and let it soak.
+2. **7-6 `merge.ts` + `verify-sync.ts`, with no network at all.** The riskiest logic, built
+   where it is cheapest to get wrong.
+3. **7-1/7-2 bootstrap + `useAuthStore`,** web only. Ends with a UID in the console.
+4. **7-3/7-4 sign-in methods and the Settings section.** Ends with a real sign-in.
+5. **7-8 rules,** before the first real write. Writing data under permissive rules and
+   tightening later means a window where the emulator and production disagree.
+6. **7-6 orchestration + 7-7 adoption.** First actual sync.
+7. **7-9 deletion, privacy policy, Data safety.** Before any of this reaches the Play build.
+8. **7-10 status UI**, then **7-11 native.**
+
+## Open questions
+
+1. **Custom domain timing.** 7-1's `authDomain` recommendation and 12-3's landing page both
+   need the domain, which is not bought yet. Buy it before Phase 7 starts, or ship auth on
+   `harp2tab.firebaseapp.com` and migrate `authDomain` later (a migration that invalidates
+   in-flight email links)?
+2. **Does signing in do anything a user can feel on day one?** Cross-device sync is the
+   honest answer, and it is only compelling to someone with two devices. If the answer needs
+   to be stronger, it is Phase 8's entitlement portability — which would argue for shipping
+   7 and 8 close together rather than with 9 and 10 between them.
+3. **Firestore or Realtime Database.** Firestore is assumed throughout (better rules, better
+   querying). RTDB is a smaller web bundle and the sync model here is a flat key-value
+   mirror that would fit it. Worth a bundle measurement in 7-1 before committing.
+4. **Settings sync subset** — is the device/user split in 7-6 right, specifically
+   `defaultAlgorithm` and `transcriptionParams`? They are arguably tuned against a
+   particular microphone.
 
 ## Phase 8 — Better monetization + remaining web billing
 - RevenueCat + Stripe integration per the already-locked pricing/architecture decisions (see `project_web_version_plan` memory).
@@ -1572,6 +2085,658 @@ One copy item that falls between steps: the progress screen's hint
 harmonica key is worked out afterwards." That stays true for Basic Pitch but not for a
 pMPM tune preview launched from a recording, where the key drives segmentation. The string
 becomes engine-dependent when 13-4 lands.
+
+## Phase 14 — Spectral polyphonic transcription (FFT), a third engine
+
+Basic Pitch is the accurate engine and it is web-only, needs a ~900KB download on first
+use, and drags TensorFlow.js in behind it. pMPM is the offline engine and it is
+monophonic by construction — one NSDF, one winning lag, one frequency
+(`pitchDetector.ts:35`). Nothing in the app hears a double-stop without a network round
+trip, and native hears one at all.
+
+This phase adds a third engine that is **polyphonic, offline, dependency-free and pure
+TypeScript**: an STFT front end, harmonic-sum pitch salience over a fixed MIDI grid, and
+iterative estimation-and-cancellation to resolve simultaneous notes (the Klapuri 2006
+multiple-F0 method, implemented from the published description — no GPL source is copied,
+unlike the aubio segmenter port, which says so at `segmenters/aubioNotesSegmenter.ts:1`).
+
+**It changes nothing outside `src/audio/`.** The note lane in `transcription.ts` already
+takes polyphonic `MidiNote[]`, folds the octave, rejects unplayable pitches and ranks all
+12 keys; the picker, the settings screen and the per-engine param store all read the
+registry rather than a hardcoded list. A new engine is a new file plus one array entry.
+
+### The primary objective: octave-error rate
+
+**Polyphony is the capability; not reporting the wrong octave is the goal.** A blow 7 that
+comes out as blow 4 is worse than a missed note — it is a *plausible-looking* wrong answer
+that a player will copy, and it silently corrupts key detection too, since
+`rankKeysForMidi` scores whatever pitches it is handed. Every design choice below that has
+a cost is paid in the direction of fewer octave errors.
+
+This is stated as a design prior, not a logged bug: nobody has measured how often the
+current engines get an octave wrong. **So 14-7 measures the baseline first** — octave-error
+rate for pMPM and Basic Pitch on the same material, before a line of this engine is tuned.
+If pMPM is already at 1%, the prior is wrong and this phase should be re-argued.
+
+Note that the two directions are different failures with different fixes, and conflating
+them is the usual way this gets mis-engineered:
+
+- **Halving** (C6 played, C5 reported). The C5 hypothesis claims every real partial of C6
+  as its own *even* harmonics. Its *odd* harmonics — 523, 1570, 2617Hz — are empty. A
+  candidate whose odd harmonics carry no energy is a subharmonic ghost, and that is a
+  direct, cheap test.
+- **Doubling** (C5 played, C6 reported). The C6 hypothesis's partials are all genuinely
+  present — they are a subset of C5's. Nothing is missing, so the odd-harmonic test cannot
+  fire. It is rejected instead by preferring the **lowest candidate that explains the
+  spectrum**: C5 and its 3rd partial are present and unexplained by C6.
+
+Neither test is about frequency resolution, which is why the window size below is chosen on
+entirely separate grounds.
+
+### Settled by Theo, 2026-08-10
+
+1. **Simultaneous octaves are penalised, not forbidden.** An octave-apart pair must clear a
+   much higher bar than any other interval, but tongue-blocked octave splits stay possible.
+2. **Candidates are restricted to the harmonica's own range** — `PLAYABLE_MIDI`'s bounds,
+   MIDI 55–103, derived from the layout tables rather than hardcoded. Subharmonic ghosts
+   below the harp are then structurally impossible. Consequences in 14-3.
+3. **Time resolution targets 16ths at ~120bpm** (~125ms notes), which is what N=4096 is
+   sized against.
+
+### Prior art, and what it settles (researched 2026-08-10)
+
+The literature is unusually direct about the objective this phase picked:
+
+- **Octave errors are the dominant error class in multi-F0 estimation**, not one failure
+  among many. The multi-F0 literature repeatedly reports that when octave errors are
+  excluded from scoring, error rates drop drastically across nearly all instruments. Theo's
+  prior is the field's consensus, and step zero's metric is measuring the right thing.
+- **The odd-harmonic argument has a name and a 1994 pedigree: Two-Way Mismatch**
+  (Maher & Beauchamp, JASA 95(4)). Its stated motivation is exactly the halving case —
+  an F0 an octave below the true one explains the measured peaks well, but many of *its*
+  odd harmonics find no peak to explain. TWM is the canonical fix and it subsumes both of
+  the ad-hoc rules this plan had, which is why 14-3 below is now built on it.
+- **The modern version is Duan/Pardo/Zhang 2010**, which models spectral peaks *and*
+  non-peak regions as a complementary pair — peak likelihood finds F0s whose harmonics
+  explain peaks, non-peak likelihood rejects F0s whose harmonics land where no peak is.
+  Same insight, probabilistic. **Not adoptable as-is**: its parameters are learned from
+  labelled monophonic and polyphonic training data, and this project has no training
+  pipeline. Kept as the reference for what "better" would look like.
+- **Klapuri's constants are confirmed from two independent sources** — α=27, β=320 in the
+  harmonic weight `(f+α)/(k·f+β)` are what this plan already had. Two things it did *not*
+  have and now does: **spectral whitening before salience**, and a **principled polyphony
+  stopping rule** (below).
+
+**Calibrate expectations from a practitioner, not from the papers.** The one public
+independent implementation of Klapuri 2006 (`tjrantal/PolyphonicPitchDetection`, Java, GPL)
+reports detecting *two* notes from an electric guitar consistently, and being too slow for
+real time on the hardware of its day. Another implementer reports never reaching the
+paper's stated results, blaming the spectral-estimation-and-cancellation step as vaguely
+described. This is a well-trodden path with a modest ceiling — which is an argument for
+step zero, for the harmonica-range restriction, and against promising parity with a CNN.
+
+### Licensing: papers yes, Essentia no
+
+Essentia has a working `MultiPitchKlapuri` and it is the obvious place to resolve every
+detail the papers leave vague. **It is off limits.** Essentia is AGPLv3 *for
+non-commercial use*, with commercial use requiring a paid licence from UPF — so
+`essentia.js` cannot be bundled into a paid product, and reimplementing from its source is
+a materially worse risk than the existing aubio precedent
+(`segmenters/aubioNotesSegmenter.ts:1`), because UPF actively sells the commercial licence
+that reading-then-reimplementing would be routing around.
+
+The published papers are the specification: Klapuri's ISMIR 2006 for salience, whitening
+and the polyphony criterion; Maher & Beauchamp JASA 1994 for TWM. Algorithms described in
+papers are not the papers' copyright, and every constant this plan uses is stated in them.
+Where a paper is genuinely vague, **the resolution is the harness in 14-7, not someone
+else's source tree** — pick a formulation, measure it, keep what scores.
+
+### Why it fits the seam without bending it
+
+The registry's one rule is that a declared param re-runs only the cheap half
+(`algorithms/index.ts:55-69`). This algorithm splits along that line naturally, and lands
+on the same output shape Basic Pitch already produces:
+
+| | Expensive (once) | Cheap (per param change) |
+|---|---|---|
+| Basic Pitch | `runInference` — CNN | `segment` — pure over 3 matrices |
+| pMPM | `analyzeSamples` — NSDF | `framesToNotes` — no DSP |
+| **Spectral** | **STFT + salience + TWM + cancellation → per-frame pitch candidates** | **threshold/segment those candidates — no DSP** |
+
+The expensive half produces a **per-frame candidate list**: up to six scored pitch
+candidates per frame, cent-accurate, with their salience and their two-way-mismatch
+support. That plays the same role as Basic Pitch's `frames` matrix — a scored intermediate
+that segmentation reads — which is why the two-phase contract, the tune screen, the
+debounced re-segment and `Prepared.dispose()` all apply unchanged.
+
+Three concrete advantages over the neural lane, all of them consequences of that shape:
+
+- **~2MB retained, against ~90MB.** Six candidates × three floats × 25,840 frames at the
+  5-minute cap, versus Basic Pitch's three 88/88/264-bin matrices. `algorithms/index.ts:140`
+  calls that the single biggest memory lever in the flow; this engine all but removes it.
+- **No defensive deep copy per re-segment.** `basicPitch.web.ts:243` must clone ~36MB on
+  every slider tick because `constrainFrequency` zeroes bins in place. Our cheap half reads
+  a `Float32Array` and writes notes; it never mutates its input, so the tune step gets
+  genuinely instant.
+- **It runs on native.** Pure arithmetic on `Float32Array` — no tfjs, no
+  `OfflineAudioContext`, no `.web.ts` split. This is the first polyphonic engine mobile can
+  have, and it costs nothing extra to get there. (Per the web-first rule, that is a free
+  side effect, not a reason to shape any decision below.)
+
+### What it will not be
+
+Not a claim of parity with Basic Pitch on accuracy. A CNN trained on real instruments will
+beat a harmonic model on messy input, and 14-7 exists to measure the gap rather than assume
+it. The value proposition is *instant, offline, no download, hears chords* — and, plausibly,
+better on clean solo harmonica, whose spectrum is close to the model this algorithm assumes.
+If 14-7 says otherwise, the honest outcome is to ship it as the offline polyphonic option
+and leave Basic Pitch as the default.
+
+## 14-1 · FFT core — `src/audio/dsp/fft.ts`
+
+There is no FFT in the codebase and no dependency that provides one (`smf.ts` and
+`basicPitch.web.ts` only mention the letters). Write one; it is ~120 lines of extremely
+well-specified arithmetic and it removes a dependency question entirely.
+
+- Iterative in-place radix-2 Cooley–Tukey, bit-reversal permutation, twiddle tables
+  precomputed once per size and cached by size.
+- **Real-input optimisation**: an N-point real FFT via an N/2-point complex FFT plus an
+  untangle pass. Roughly 2× the throughput, and the front end only ever transforms real
+  audio. This is the one place where the extra ~40 lines pay for themselves on every frame.
+- Preallocated scratch, in the style of `pitchDetector.ts:19-25` — the hot path allocates
+  nothing per call. A `class Fft` holding its own buffers, not module globals, so a future
+  Worker can hold two.
+- Exports: `forwardReal(input, outRe, outIm)` and `magnitudeAndPhase(re, im, mag, phase)`.
+
+## 14-2 · STFT front end — `src/audio/dsp/stft.ts`
+
+Everything here is expressed in Hz and ms and derived from `audio.sampleRate`, so the
+engine is rate-independent and **no resampling happens anywhere**. That is deliberate:
+`basicPitch.web.ts:11-14` resamples only because its model demands 22050, and
+`analyzeSamples.ts:14-21` warns that changing rates silently retunes every calibrated
+threshold. Nothing here needs a fixed rate, so nothing here pays that cost — which is also
+what lets it run on native, where there is no `OfflineAudioContext`.
+
+- **Window**: Hann, `N` = the power of two nearest 93ms → 4096 at both 44.1k and 48k.
+  At 44.1k that is 92.9ms and a 10.77Hz bin spacing.
+
+  Sized against the harp's *lowest* fundamental (MIDI 55, 196Hz) and the target material
+  (16ths at 120bpm = 125ms notes):
+
+  | N @44.1k | window | bin | semitone at 196Hz | verdict |
+  |---|---|---|---|---|
+  | 2048 | 46ms | 21.5Hz | 0.54 bins | too coarse to separate semitones at the bottom |
+  | **4096** | **92.9ms** | **10.8Hz** | **1.08 bins** | fits inside a 125ms note with margin |
+  | 8192 | 186ms | 5.4Hz | 2.2 bins | better resolution, but longer than the note itself |
+
+  4096 is the smallest power of two where a semitone at the bottom of the harp is still
+  about one bin — which is the condition the instantaneous-frequency refinement below needs
+  to work from — and the largest that still fits inside the shortest note we target. It is
+  **not** an octave-robustness choice: as the objective section explains, both octave tests
+  are about which harmonics carry energy, and 98Hz-versus-196Hz is trivially resolvable at
+  any of these sizes. If the target material ever moves to 180bpm the answer is a
+  multi-resolution front end (long windows low, short windows high), not a smaller N.
+- **Hop**: `N/8` = 512 samples. At 44.1kHz that is **11.61ms — exactly Basic Pitch's frame
+  period** (22050/256, `basicPitch.web.ts:32-34`), so the two engines' outputs are directly
+  comparable frame for frame in the harness. 8× overlap is what makes the phase-difference
+  step below well-conditioned.
+- **Instantaneous frequency**, not bin centres. Bin spacing at the bottom of the analysis
+  range (82Hz) is wider than a semitone, so peak frequencies come from the phase difference
+  against the previous frame (`f = (Δφ unwrapped to the bin's expected advance) / (2π·hop/sr)`),
+  with parabolic interpolation as the fallback when the phase estimate lands outside the
+  bin's plausible band. One retained `Float32Array` of previous-frame phase, reused.
+- **Peak list per frame**: local maxima of magnitude, each carrying its IF-refined
+  frequency, capped at ~100 per frame. (Klapuri's own implementations cap at exactly 100,
+  which is a useful sanity check on the number rather than a coincidence.) TWM in 14-3
+  consumes this list directly and never touches raw bins — a harmonic either matches a real
+  peak or it does not, and that binary is what gives the octave test its teeth.
+
+  Peak refinement uses instantaneous frequency plus parabolic interpolation, **not**
+  zero-padding. Klapuri's implementations zero-pad by 4×, which at N=4096 means a
+  16384-point FFT and roughly 4× the cost of the dominant step in the whole pass; the phase
+  method reaches comparable accuracy for the price of one retained phase array. Worth a
+  comment in the file, since it is a deliberate divergence from the reference method.
+- **Spectral whitening before salience** (Klapuri 2006), flattening the spectral envelope
+  so that salience measures harmonic structure rather than timbre. This is the step that
+  addresses case 3 of the harness — a hand-cupped harmonica whose fundamental sits well
+  below its second partial is precisely the spectrum that makes an un-whitened harmonic sum
+  double. It was missing from the first draft of this plan.
+- **Silence gate, reused wholesale from `analyzeSamples.ts:33-36`** — 95th-percentile RMS
+  × 0.06, floored at 1e-4. Gated frames skip the FFT entirely and write a zero activation
+  row. On a real take this is the largest single saving, exactly as it is for pMPM.
+- **Chunked yielding** every 64 frames with `setTimeout(0)`, copying `analyzeSamples.ts:94-100`
+  verbatim in shape, so progress moves and Cancel is delivered. The registry's
+  `onProgress`/`shouldCancel` contract is honoured with no new machinery.
+
+**Why one bin per semitone at the bottom is enough.** Harmonic-sum salience identifies a
+pitch from its *upper* partials, which are spaced proportionally wider: at a 196Hz
+fundamental the 10th partial sits at 1960Hz, where a semitone is 116Hz — nearly 11 bins.
+The fundamental's bin being marginal costs almost nothing, because the fundamental is the
+least informative part of the evidence. This is the property the whole method rests on and
+it is worth a comment in the file.
+
+## 14-3 · Salience and cancellation — `src/audio/dsp/harmonicSalience.ts`
+
+The expensive half's actual work. Per frame:
+
+1. **Candidate grid: the harmonica's range and nothing outside it** — `min(PLAYABLE_MIDI)`
+   to `max(PLAYABLE_MIDI)` (`pitchRange.ts`), currently MIDI 55–103, 49 bins, one per
+   semitone. Read from the layout tables at module load, not hardcoded, so a layout change
+   moves the analysis grid with it.
+
+   **This is the single largest anti-halving measure in the phase and it is free**: a
+   subharmonic ghost an octave below a played note has nowhere to live, because there is no
+   candidate down there to win. It is a hypothesis space, not an observation window — the
+   audio is unchanged.
+
+   What it costs, stated plainly because it is a real trade:
+   - Material recorded an octave *above* the harp finds nothing rather than folding down.
+     Rare in practice (it would be above G7) and the failure is silence, not a wrong answer.
+   - Material an octave *below* — a guitar line, a low whistle — is no longer folded up by
+     `octaveShiftForMidiRange`, because the engine never emits the low pitches the fold
+     reads. In practice it partly self-corrects: a source an octave low has its 2nd partial
+     inside the harp's range, so the engine tends to report the octave-up reading, which is
+     what the fold would have produced anyway. But "tends to" is not a guarantee.
+   - **Therefore this engine is the harmonica-optimised one, not the general-purpose one.**
+     Basic Pitch stays the right default for arbitrary uploads. That is a clean division of
+     labour between three engines and it should be said in the picker copy (14-5).
+2. **Salience** `S(p) = Σ_k g(k)·A(k·f₀(p))`, where `A(f)` is the largest peak magnitude
+   within a quarter-tone of `f` (min one bin), `g(k) = (f₀+α)/(k·f₀+β)` with α=27Hz,
+   β=320Hz — Klapuri's weighting, which keeps low pitches with many partials from
+   automatically outscoring high ones. Normalised by `Σg(k)` over the harmonics actually
+   available, `K = min(20, ⌊0.9·Nyquist/f₀⌋)`, for the same reason. **That normalisation is
+   itself an anti-halving measure**: an unnormalised harmonic sum systematically favours the
+   subharmonic, which is exactly how naive implementations halve.
+3. **Re-rank the top candidates by Two-Way Mismatch** (Maher & Beauchamp 1994). Salience is
+   a good *generator* of candidates and a poor *discriminator* between octaves, because a
+   subharmonic gets to sum the real note's partials as its own evens. TWM is the
+   discriminator, and it is two-way precisely because the two octave errors need opposite
+   tests:
+
+   - `Err_predicted→measured` — for each harmonic the candidate predicts, the frequency
+     distance to the nearest measured peak. **This is the halving test**: a candidate an
+     octave low predicts partials at 1.5×, 2.5×, 3.5× the true f₀, and nothing is there.
+   - `Err_measured→predicted` — for each measured peak, the distance to the nearest harmonic
+     the candidate predicts. **This is the doubling test**: a candidate an octave high
+     leaves the real f₀ and its odd partials measured but unexplained.
+
+   Combined as `Err = Err_p→m/N + ρ·Err_m→p/K`, each term weighted by partial amplitude and
+   by `f^-p` so high, unreliable partials count for less. The commonly cited constants are
+   `p=0.5, q=1.4, r=0.5, ρ=0.33` — **confirm these against the JASA paper before
+   implementing**; they are quoted here from secondary sources and this plan does not treat
+   them as verified.
+
+   This replaces the two separate ad-hoc rules an earlier draft of this section had. One
+   error function, both directions, thirty years of use behind it — and no ordering hazard
+   between two guards that could fight each other.
+4. **Estimate, cancel, repeat**, with a principled stopping rule rather than a fixed voice
+   count:
+   - take the candidate minimising TWM error among the top salience peaks;
+   - record it, then cancel its partials from the **peak list** — reducing matched peak
+     magnitudes rather than rewriting 2048 bins, which is both cheaper and keeps "does a
+     peak exist here" well-defined on the next iteration;
+   - recompute and repeat, and **stop when `S_p / p^γ` stops increasing**, where `S_p` is
+     the summed salience of the `p` sounds detected so far and `γ ≈ 0.7`. This is Klapuri's
+     polyphony criterion, and it is a real improvement on the first draft's "up to five
+     voices, stop below an absolute floor" — it lets a clean single note stop at one, which
+     is itself an anti-ghost measure.
+5. **Simultaneous octaves are penalised, not forbidden** (Theo, settled above). A candidate
+   an octave above an accepted pitch is scored by its *own* TWM error against the residual
+   peak list — after the lower note's partials have been cancelled, what remains must still
+   explain the upper note. It has to clear a bar no other interval clears. Fifths get the
+   same treatment.
+
+   The bar is **not** applied here. Each candidate's TWM support travels into the stored
+   frame so the cheap half applies it — which makes "how much evidence an octave needs" a
+   slider rather than a buried constant, and it is the one threshold nobody can guess in
+   advance.
+6. **Normalisation**: salience is divided by the frame's total in-band magnitude, clipped to
+   0..1 — a loudness-independent quantity so one threshold works across a take with
+   dynamics. This is the one number in the phase that must be *calibrated rather than
+   derived*; 14-7 settles it, and the param defaults fall out of it.
+
+Output, held by `Prepared.data`. **Sparse, not a dense matrix** — a change forced by the
+research: salience wants ~10-cent resolution to place a bent note, and a dense
+`frames × 480 cent-bins` matrix would be over 100MB at the 5-minute cap. Storing only what
+each frame actually found is both smaller than the dense semitone grid an earlier draft
+proposed *and* keeps cent accuracy:
+
+```ts
+/** Candidates retained per frame, stored BEFORE the polyphony criterion is applied, so the
+ *  cheap half can re-decide without re-running any DSP. */
+const MAX_CANDIDATES = 6;
+
+interface SpectralCandidates {
+  sampleRate: number; hop: number; frameCount: number;
+  /** frameCount × MAX_CANDIDATES, row-major. NaN in unused slots. */
+  cents:    Float32Array;  // cent-accurate pitch — survives bends
+  salience: Float32Array;  // whitened harmonic sum, 0..1, normalised per frame
+  support:  Float32Array;  // 1/(1+TWM error), 0..1 — the octave evidence
+  rms:      Float32Array;  // per frame — velocity and the silence gate
+  flux:     Float32Array;  // per frame — half-wave-rectified, for onset timing
+}
+```
+
+25,840 frames × 6 candidates × 3 floats ≈ **1.9MB**, against ~10MB for the dense semitone
+grid and ~90MB for Basic Pitch's matrices. The polyphony criterion runs in the cheap half
+too, since everything it needs is stored — so `γ` *could* become a param later, though this
+plan pins it at 0.7 rather than adding a slider nobody can interpret.
+
+The one thing the sparse form gives up: a threshold can never reveal a seventh candidate
+that was not stored. With `maxVoices` capped at 5 and the polyphony criterion typically
+stopping at 1–2 on harmonica, a sixth slot is already generous headroom.
+
+## 14-4 · Candidates → notes — `src/audio/segmenters/candidatesToNotes.ts`
+
+The cheap half. Pure, no DSP, walks each pitch row once. Everything it needs was computed
+in 14-3, which is what makes every param below legal under the registry's rule.
+
+- **Hysteresis**: a note opens when activation crosses `onsetThreshold` and stays open while
+  it holds above `sustainThreshold` (kept strictly lower — the gap is what stops a wobble
+  becoming two notes, the same argument `pmpm.ts:107-108` already makes for `riseRatio`).
+- **Bridging**: dropouts shorter than `bridgeMs` do not end the note.
+- **Re-attacks**: activation stays high through a re-tongued repeat of the same hole, which
+  is the exact problem `NoteDetector`'s dip/rise detector solves for loudness. Apply the
+  same peak-relative dip/rise test to the per-pitch activation envelope. **Evaluate
+  `createEnvelopeGate` (`segmenters/envelope.ts`) for reuse first** — it is already the
+  shared driver for precisely this decision, and its header says the point is that the
+  boundary logic can never drift between segmenters. Write it inline only if a normalised
+  activation genuinely does not fit its config.
+- **Onset timing**: activation rises when the note fills enough of a 93ms window, so the
+  crossing frame lags the attack. Backtrack to the nearest preceding local maximum of
+  `flux` within one window. Exposed as a boolean param, since flux is precomputed and the
+  backtrack is free.
+- **The octave bar**: when a frame holds two pitches exactly 12 semitones apart, the upper
+  one survives only if its `support` (the stored TWM score) clears `octaveEvidence`. Everything needed was
+  computed in 14-3, so this is a genuine slider — and it is the control that decides whether
+  a take is read as octave splits or as ghosts, which is the one judgement call that
+  actually varies by player and by microphone.
+- **Voice limit**: keep the top `maxVoices` activations per frame. Cheap because all five
+  candidates are already in the matrix — and `maxVoices = 1` gives a monophonic mode for
+  free, which is a real answer for someone transcribing a single-line solo. Note it does
+  *not* substitute for the octave bar: with `maxVoices = 1` a halving ghost that outscored
+  the real note would simply be the one survivor.
+- **Minimum length**, applied last, in ms.
+- **Velocity**: peak activation × frame RMS, normalised against the take's 95th percentile,
+  mapped to 1..127 — the same 1..127 clamp `basicPitch.web.ts:273` uses, so the Studio's
+  velocity lane reads the same scale whichever engine produced the notes.
+- Returns notes **sorted by `timeMs` then `midi`**. `basicPitch.web.ts:277` had to add that
+  sort after the fact; everything downstream assumes onset order.
+
+No pitch bends. The IF estimate could give cents deviation per frame, but `MidiNote`
+(`types/index.ts:128`) has nowhere to put it and the Basic Pitch adapter drops its bends
+too. Consistency now, one shared decision later if the Studio ever grows the lane.
+
+## 14-5 · The registry adapter — `src/audio/algorithms/spectral.ts`
+
+```ts
+id: 'spectral',
+label: 'Spectral transcription',
+description: 'Hears chords and double-stops, runs instantly and offline with nothing to '
+           + 'download, and only ever listens inside the harmonica\'s own range. Best for '
+           + 'harmonica takes; use the neural engine for other instruments.',
+available: true, producesFrames: false, polyphonic: true,
+```
+
+`prepare` runs 14-2 + 14-3 and holds the matrix in a closure with `dispose()` emptying it —
+the same pattern as `basicPitch.web.ts:387-393` and `pmpm.ts:154-163`, for the same reason.
+`resegment` runs 14-4 and returns `{ output: { kind: 'notes', notes }, detectorConfig: null }`.
+
+Declared params, all of them 14-4's and therefore cheap:
+
+| id | label | range | default |
+|---|---|---|---|
+| `onsetThreshold` | Onset sensitivity | 0.05–0.95 | from 14-7 |
+| `sustainThreshold` | Note confidence | 0.02–0.90 | from 14-7 |
+| `octaveEvidence` | Octave splits | 0.0–1.0 | from 14-7 |
+| `minNoteLengthMs` | Shortest note | 12–300ms | 58 |
+| `maxVoices` | Most notes at once | 1–5 | 4 |
+| `snapToAttacks` | Snap starts to attacks | bool | true |
+| `bridgeMs` | Ride over dropouts | 0–200ms | ~46 (advanced) |
+| `dipRatio` / `riseRatio` | Re-attack depth / recovery | as `pmpm.ts` | (advanced) |
+
+`octaveEvidence`'s help text has to earn its place, because the control is meaningless in
+library terms and obvious in playing terms: *"How much proof it takes before two notes an
+octave apart are both written down. Raise it if single notes are coming out doubled."*
+That sentence is the phase's objective, made adjustable.
+
+`minNoteLengthMs` defaults to 58 to match Basic Pitch exactly, so a side-by-side run in the
+harness differs by engine and not by gate.
+
+**Deliberately not params**, and the file should say so the way the other two adapters do:
+window size, hop, whitening, the harmonic weighting `g(k)`, the TWM constants,
+`MAX_CANDIDATES` and the analysis pitch range.
+Every one of them re-runs the whole STFT, which is the line `algorithms/index.ts:66-69`
+draws. `maxVoices` looks like a violation and is not — the expensive half always finds five
+and the cheap half chooses how many to keep.
+
+## 14-6 · Integration — what actually changes outside the engine
+
+Almost nothing, and that is the point.
+
+- `algorithms/index.ts:25` — add `'spectral'` to `TranscriptionAlgorithmId`.
+- `algorithms/index.ts:209` — one entry in `TRANSCRIPTION_ALGORITHMS`. Registration order
+  is display order; put it after Basic Pitch, before pMPM.
+- **No platform split, no native stub.** Unlike `algorithms/basicPitch.ts`, which exists
+  only to report `available: false`, this engine resolves and runs on both bundles.
+- `transcription.ts` — **unchanged**. The note lane already does the octave fold,
+  `isPlayableOnAnyHarmonica` and `rankKeysForMidi`, and already documents that it must not
+  re-filter what the engine's own minimum length already handled.
+- `useSettingsStore.ts:49` — `transcriptionParams` is `Partial<Record<TranscriptionAlgorithmId, …>>`
+  and `withDefaults` (`algorithms/index.ts:121`) already drops unknown keys and fills missing
+  ones. Persistence widens by itself.
+- `import.tsx:250`, `recording.tsx:96`, `settings.tsx:40` — all call `availableAlgorithms()`.
+  The third engine appears with no edits.
+- `TranscriptionEngineModal` — check it at 1280×640 with **three** rows rather than two. The
+  Phase 13 notes flag exactly this failure mode for the convert modal (`maxHeight` + internal
+  scroll so the actions stay reachable).
+- `DEFAULT_ALGORITHM_ID` (`algorithms/index.ts:214`) — untouched until 14-7 produces numbers.
+
+## 14-7 · Calibration and verification — `scripts/verify-spectral-pitch.ts`
+
+The plan's defaults above are stated as "from 14-7" because they genuinely are: the
+normalisation in 14-3 fixes what the thresholds mean, and guessing them would be inventing
+numbers. This step is where they come from, and it is the largest single piece of work in
+the phase.
+
+### Step zero: measure the baseline before building anything
+
+The octave objective is a design prior, not an observation — nobody has counted how often
+the current engines get an octave wrong. Build the metric first and point it at what already
+ships:
+
+- **Octave-error rate**, as its own first-class number, separate from ordinary pitch error:
+  of the notes whose *pitch class* is correct, what fraction land in the wrong octave, split
+  by direction (halved / doubled). A note that is simply wrong is a different failure and is
+  counted separately.
+- Run it over pMPM and Basic Pitch on the same synthesized cases and on Theo's real
+  recordings, and write the numbers into this section.
+
+Two outcomes, both useful. If pMPM is already around 1%, the prior is wrong, this phase's
+headline objective is not worth the constraints it imposes, and the harmonica-range
+restriction in particular should be re-argued. If it is 5–10%, the phase has a target to
+beat and every later decision has a number attached to it.
+
+**Correctness, bottom up:**
+
+- FFT against a naïve DFT for N = 8…1024 on random input, max absolute error < 1e-4, plus
+  a Parseval check. Cheap, and it makes every later failure attributable to the algorithm
+  rather than the transform.
+- A synthesised sine sweep across MIDI 45–103 → detected f₀ within 15 cents at every
+  semitone. This is the IF-refinement test and it will fail loudly if the phase unwrapping
+  is wrong at either end of the range.
+
+**Polyphony, against ground truth.** `synthesizeWav` already mixes overlapping notes
+(`synthesizeWav.ts:97`, `mix[idx] +=`) but renders **pure sine tones**, which is both too
+easy for this algorithm (nothing to sum) and too hard (no partials to cancel with). The
+harness needs a harmonic-rich synth — partials 1..8 at ~1/k with a little inharmonicity and
+vibrato. Add it beside `scripts/make-test-wav.ts` rather than changing `synthesizeWav`,
+which is production playback code.
+
+Cases, scored as precision/recall/F1 on (pitch, onset within ±50ms) **and separately on
+octave-error rate**, which is the number that decides the phase:
+
+*Octave robustness — the primary suite:*
+
+1. **Every hole, every octave, monophonic.** Each playable position on a C harp in turn,
+   held ~400ms. Octave-error rate must be near zero; this is the case the whole design is
+   for, and it is the one to run after every change to 14-3.
+2. **The same pitch class at three registers** — blow 4, blow 7, blow 10 in sequence (C5,
+   C6, C7). Checks the engine tracks the actual octave rather than collapsing onto one
+   register, which is the failure a per-note test can miss entirely.
+3. **Timbre and dynamics stress.** The same notes with a weak fundamental (a bright,
+   cupped-tone spectrum where partial 1 is well below partial 2) and at low amplitude.
+   A weak fundamental is the classic trigger for doubling, and it is exactly what a
+   hand-cupped harmonica produces.
+4. **Bends.** Reed bends move partials non-uniformly, so this is both a pitch-accuracy case
+   and an octave case — a badly-tracked bend can land the salience peak on a subharmonic.
+
+*Polyphony — the secondary suite:*
+
+5. major thirds and fifths (draw 1+2, blow 2+3);
+6. whole-tone double stops (blow 4+5) — tests frequency resolution;
+7. octave splits (blow 1+4), scored **both ways**: recall of the real split, and the
+   false-positive rate of case 1 producing a phantom split. `octaveEvidence` is the knob
+   that trades one against the other, and the deliverable here is that trade curve, not a
+   single score. Theo's call was penalise-not-forbid, so the default sits wherever case 1
+   stays clean.
+8. three-note chords;
+9. a fast passage — onset drift ≤ 30ms, reusing the drift measurement
+   `verify-audio-import.ts` already computes.
+
+**Re-segmentation stability**, the property the tune step rests on: one `prepare`, several
+param sets, note counts monotonic as thresholds rise, and identical output when the same
+params are re-applied. Basic Pitch needed a defensive copy to hold this invariant; ours
+should hold it structurally, and the test is what proves it.
+
+**A/B against Basic Pitch** on the same files, reported as a table — note counts, F1,
+wall-clock. The reference point already exists: Theo's Python `predict()` on
+`Amazing_Grace_C` gives 165 notes, and the current pipeline agrees with it. That file is not
+in the repo and will need to be dropped in.
+
+Then set the defaults from the sweep, and only then revisit `DEFAULT_ALGORITHM_ID`.
+
+## 14-8 · Performance budget
+
+Cost is dominated by the FFT: an N=4096 real transform is ~150 kflop including windowing
+and magnitudes, and a 5-minute take at 44.1kHz is 25,840 frames → ~3.9 Gflop, which at
+realistic JS throughput lands somewhere around **10–20s of continuous sound**, less on real
+takes where the silence gate skips whole passages. That is in the same territory as the CNN
+and acceptable for an offline pass with a progress bar — but it is an estimate, and 14-7
+reports the measured number per audio-second before anything is tuned around it.
+
+Levers, in the order to reach for them:
+
+1. the silence gate (already in 14-2 — free, and biggest on real recordings);
+2. precomputed harmonic bin tables per (sampleRate, N) — the salience loop becomes lookups,
+   49 pitches × ≤20 harmonics × 5 iterations, negligible against the FFT;
+3. hop `N/4` instead of `N/8` — halves the cost, doubles the frame period to 23ms, and
+   costs onset precision. Only if the measurement demands it, and only as a constant, never
+   as a param.
+
+**The Worker question is deliberately out of scope.** Both existing engines run on the main
+thread with `setTimeout` yields, and moving one to a Worker is a cross-engine change with a
+platform split behind it (native has no `Worker`). If the pass is too slow to sit under the
+progress bar, that is an argument for a separate phase covering all three engines, not for
+this one growing a web-only fast path.
+
+Same answer for WebAssembly, and it is worth writing down why, because the number is
+tempting: published comparisons put a Rust-to-WASM pitch-detection FFT at roughly **8×** a
+pure-JS equivalent. That would turn a 15-second pass into two seconds. It also adds a
+toolchain, a build step, a second language and a platform question to a project that
+currently has none of those, for an offline pass that already has a progress bar. Revisit
+only if 14-8's measurement comes back badly enough to make the flow unusable.
+
+## Decisions still needed
+
+1. **Third option, or replacement for pMPM?** pMPM is the only engine that feeds Frame
+   Inspector (`producesFrames: true`), so it cannot simply be dropped — but three engines is
+   a lot of picker for one screen, and Phase 13 already asks whether pMPM should stay
+   user-visible at all. Recommendation: ship as a third option, non-default, and let 14-7's
+   A/B decide whether it retires pMPM as the *offline* choice while pMPM stays the frame
+   source.
+2. **Should the candidate list feed Frame Inspector?** A scored candidate list is strictly richer
+   inspector material than `RawFrame[]` — it shows what the engine considered, not just what
+   it picked. But it means a third `TranscriptionOutput` kind, and `algorithms/index.ts:14-17`
+   argues carefully for keeping the union at two. Recommendation: not this phase; it is the
+   natural successor to `producesFrames` once there is something to look at.
+3. **Live HUD polyphony.** Unlike Basic Pitch, this algorithm is causal with ~93ms of
+   latency and decides each frame locally, so it *could* replace `detectPitch` in the live
+   path and hear double-stops in real time. `NoteDetector` segments on tab identity and is
+   monophonic end to end, so that is a phase of its own — worth recording that the door is
+   open, and not opening it here.
+4. **Whether native gets it on day one.** It costs nothing to enable and would be mobile's
+   first polyphonic engine, but mobile is otherwise frozen. Recommendation: leave
+   `available: true` (there is no code to write either way) and simply not test it on native
+   until mobile is back in scope.
+5. **Whether the engine should be pre-selected for recordings.** The harmonica-range
+   restriction (14-3) makes it the best engine for a take of someone playing harmonica into
+   a microphone and the wrong one for an arbitrary uploaded file. The picker already has two
+   hosts (Phase 13-5), so recording could default to spectral while file import defaults to
+   Basic Pitch. Recommendation: hold until 14-7's baseline exists — a per-host default is
+   easy to add and impossible to justify without the numbers.
+
+## Suggested build order
+
+0. **14-7's step zero** — the harmonic-rich synth, the case-1 material, and the
+   octave-error metric, pointed at pMPM and Basic Pitch. Half a day, no new DSP, and it is
+   the only thing that can tell you whether the rest of this phase is worth building. If the
+   baseline comes back clean, stop here and re-argue the phase.
+1. **14-1** — the FFT, with its DFT cross-check written at the same time. Pure, testable in
+   isolation, and everything else is unverifiable until it is right.
+2. **14-2** — the STFT front end, verified by the sine-sweep case alone (monophonic, no
+   salience involved): peaks land within 15 cents or the phase work is wrong.
+3. **14-3** — salience and cancellation, brought up in three stages, each gated by the
+   metric from step 0: plain harmonic-sum salience first (should roughly match pMPM on case
+   1, and will probably halve on case 3 — that is the point), then spectral whitening and
+   TWM re-ranking, then cancellation and the polyphony criterion.
+4. **14-4 + 14-5** — the cheap half and the adapter, at which point the engine is real and
+   selectable end to end.
+5. **14-7's sweep** — set the defaults. Nothing before this point should hardcode a
+   threshold anywhere but the adapter's `default` fields.
+6. **14-6's UI check** — the three-row modal at 1280×640, and per project convention restart
+   the dev server with `--clear` and confirm the served bundle before browser-testing.
+
+Steps 0–3 are self-contained DSP with no UI and no store involvement; they can be built and
+verified without touching a screen. If the phase has to be cut short, the natural stopping
+point is after step 3 with the harness green — an unused but verified salience module is a
+much better place to pause than a wired-up engine with guessed thresholds. Step 0 stands
+alone regardless: an octave-error metric over the two shipping engines is worth having even
+if this engine is never built.
+
+## Risks specific to this phase
+
+- **Octave errors are the make-or-break**, and cases 1–3 are where that is decided. If TWM
+  re-ranking does not hold up, the fallback is NNLS over a fixed harmonic dictionary (49
+  templates, the Chordino approach) behind the *same* `prepare`/`resegment` seam — more
+  accurate, several times slower, and a drop-in replacement for exactly one module. Worth
+  stating up front so the interface is not shaped around the cheaper method.
+- **The cancellation step is the known-underspecified part of this method**, by the
+  testimony of people who have implemented it: one public implementer reports never reaching
+  the paper's stated results and blames precisely the spectral estimation and cancellation
+  of the detected sound. The mitigations are that cancellation here operates on a ~100-entry
+  peak list rather than a full spectrum (much easier to reason about and to inspect), that
+  TWM does the octave discrimination *before* cancellation rather than depending on it, and
+  that 14-7 measures each variant instead of trusting a formula.
+- **A faithful implementation of this method has a modest ceiling.** The one public
+  independent implementation reliably resolves two simultaneous notes on electric guitar.
+  Aim there — two notes, correct octave, on harmonica — not at Basic Pitch's chord
+  transcription. Anything more is upside, not the plan.
+- **The harmonica-range restriction is a product decision wearing DSP clothes.** It buys
+  most of the anti-halving benefit for free, and it quietly makes this engine wrong for
+  non-harmonica uploads. That is fine while it is one of three engines and the copy says so;
+  it would not be fine if it ever became the default for file import.
+- **Calibrating the normalisation is empirical work, not derivation.** It is the one part of
+  this phase that cannot be reasoned to a number, and it is on the critical path for every
+  default.
+- **Harmonica reeds are not perfectly harmonic**, and bends in particular move partials
+  non-uniformly. The salience search tolerance (a quarter-tone) is the knob that absorbs
+  this, and case 4 is what proves it — a badly-tracked bend does not just misreport a pitch,
+  it can move the salience peak onto a subharmonic and become an octave error.
+- **A third engine is a third thing to explain.** Three rows in the picker, three saved
+  param sets, three descriptions that must each say plainly why someone would choose it.
+  That is a copy problem and it is real; the descriptions in 14-5 are a first draft, not a
+  finished answer.
 
 ## Cross-cutting technical risks (apply across phases, not phase-specific)
 - **`nsdf`/clarity is typed but never populated.** `AudioFrame.nsdf` exists in the type but Android's Kotlin module never sets it and web hardcodes `0`. Frame Inspector (Phase 2) only has real `frequency`/`rms`/post-hoc `confidence` to show — a genuine pitch-clarity track would need new native + JS work, not just wiring up an existing value.

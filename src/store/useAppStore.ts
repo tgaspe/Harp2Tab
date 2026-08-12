@@ -117,8 +117,10 @@ interface AppActions {
   addTabNotes:    (notes: Omit<TabNote, 'id'>[]) => void;
   reorderNotes:   (notes: TabNote[]) => void;
   deleteNote:     (id: string) => void;
-  updateNote:     (id: string, changes: Partial<Pick<TabNote, 'tab' | 'note' | 'start_time' | 'duration'>>) => void;
-  updateNotes:    (updates: { id: string; changes: Partial<Pick<TabNote, 'tab' | 'note' | 'start_time' | 'duration'>> }[]) => void;
+  /** `velocity` is editable (the Velocity chart's draggable bars); `velocitySource` is not,
+   *  since an edit moves a note's value *along* its scale rather than onto a different one. */
+  updateNote:     (id: string, changes: Partial<Pick<TabNote, 'tab' | 'note' | 'start_time' | 'duration' | 'velocity'>>) => void;
+  updateNotes:    (updates: { id: string; changes: Partial<Pick<TabNote, 'tab' | 'note' | 'start_time' | 'duration' | 'velocity'>> }[]) => void;
   undo:           () => void;
   redo:           () => void;
   setExportFormat:(format: ExportFormat) => void;

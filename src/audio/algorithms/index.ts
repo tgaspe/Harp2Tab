@@ -22,7 +22,7 @@ import type { MidiNote } from '../midiToNotes';
 import type { NoteDetectorConfig } from '../NoteDetector';
 import type { HarmonicaKey, HarmonicaType, RawFrame } from '@/types';
 
-export type TranscriptionAlgorithmId = 'basicPitch' | 'pmpm';
+export type TranscriptionAlgorithmId = 'basicPitch' | 'spectral' | 'pmpm';
 
 /** Decoding is one opaque blocking call and reports no fraction. Loading the model is a
  *  network fetch that only Basic Pitch has, and only on its first run per session. */
@@ -204,10 +204,12 @@ export interface TranscriptionAlgorithm {
 
 import { basicPitchAlgorithm } from './basicPitch';
 import { pmpmAlgorithm } from './pmpm';
+import { spectralAlgorithm } from './spectral';
 
 /** Registration order is display order in the picker. */
 export const TRANSCRIPTION_ALGORITHMS: readonly TranscriptionAlgorithm[] = [
   basicPitchAlgorithm,
+  spectralAlgorithm,
   pmpmAlgorithm,
 ];
 

@@ -201,10 +201,13 @@ export interface StoredTrackMeta {
   color:  string;
   muted:  boolean;
   soloed: boolean;
-  /** SMF stores a velocity byte but nothing about where it came from, and a transcribed
+  /** SMF stores a velocity byte but nothing about what scale it's on, and a transcribed
    *  project's velocities are an engine's estimate rather than a composer's intent.
    *  Optional: absent on every project saved before this existed, and on ordinary MIDI
-   *  imports, where `convertTrackToRecording` correctly assumes stated MIDI velocity. */
+   *  imports, where `convertTrackToRecording` correctly assumes stated MIDI velocity.
+   *
+   *  Survives the user editing individual note velocities in the roll — the scale is a
+   *  property of how the track was measured, not of any one note's current value. */
   velocitySource?: VelocitySource;
   /** The track's velocity-floor line, so where the user left it survives a reload. Absent
    *  on every project saved before this existed, which reads as 0 — filter off. */

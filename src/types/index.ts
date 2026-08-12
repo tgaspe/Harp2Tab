@@ -9,12 +9,20 @@ export type HarmonicaKey =
 export type ExportFormat = 'CSV' | 'MIDI' | 'TXT' | 'MusicXML' | 'JSON';
 
 /**
- * Where a note's `velocity` came from.
+ * Which scale a note's `velocity` is measured on.
  *
- * The three producers put genuinely incomparable quantities on the same 0–127 scale, so
+ * The three producers put genuinely incomparable quantities on the same 0–127 range, so
  * anything that shows the number to the user — or lets them filter on it — has to be able
  * to say which one it is holding. A threshold of 60 hides half a tracked take and almost
  * nothing from a neural one.
+ *
+ * A *unit*, not an authorship record. The user can drag a note's velocity in the Velocity
+ * chart, and doing so leaves this untouched: the edit moves the value along the scale, it
+ * does not move the note onto a different scale. So a `takeRelativeRms` note whose velocity
+ * the user set by hand is still an RMS-relative reading — the filter keeps thresholding it
+ * against its neighbours exactly as before, which is the whole reason to know the unit.
+ * This is also why there is no `'manual'` member and why `velocity` is writable while this
+ * is not; see the update types in `useAppStore.ts` and `studioNotes.ts`.
  */
 export type VelocitySource =
   /** Stated outright by a MIDI file, or by a Studio project derived from one. */
@@ -41,13 +49,18 @@ export interface TabNote {
   /** How loud the note is, 0–127 on MIDI's velocity scale. Optional — absent means no
    *  dynamic was stated, which every consumer treats as "unknown" rather than as silence.
    *
-   *  Read `velocitySource` before comparing two of these: the number is produced three
-   *  incompatible ways, and only within one source is it meaningful to say one note is
-   *  louder than another. */
+   *  Read `velocitySource` before comparing two of these: the number is measured three
+   *  incompatible ways, and only within one scale is it meaningful to say one note is
+   *  louder than another.
+   *
+   *  User-editable, by dragging the note's bar in the Velocity chart. */
   velocity?: number;
-  /** Which of the three producers supplied `velocity`. Optional: absent on everything
-   *  saved before this existed, and on audio uploads migrated from the old `breathForce`
-   *  field, where the engine was never recorded and so is unknowable after the fact. */
+  /** Which scale `velocity` is on. Optional: absent on everything saved before this
+   *  existed, on audio uploads migrated from the old `breathForce` field (where the engine
+   *  was never recorded and so is unknowable after the fact), and on hand-drawn notes,
+   *  which were never measured against anything.
+   *
+   *  Never written by an edit — see `VelocitySource`. */
   velocitySource?: VelocitySource;
   /** General MIDI program, as a *playback* hint only — it never affects tabs. Set when the
    *  Studio hands a multi-track project to the scheduler, so a flute and a cello don't

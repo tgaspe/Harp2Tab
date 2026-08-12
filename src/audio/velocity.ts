@@ -33,6 +33,20 @@ export function noteVelocity(note: Pick<TabNote, 'velocity'>): number | undefine
 }
 
 /**
+ * Velocity stamped on a note the user creates by hand — pencil-drawn in the roll, or added
+ * from the toolbar's "Add Note".
+ *
+ * Deliberately the same 80 as `smf.ts`'s `DEFAULT_VELOCITY`, which is what MIDI export has
+ * always substituted for a note that stated none. Matching it means the export byte is
+ * unchanged by this: the number that was being invented at write time is now simply carried
+ * on the note, where the velocity chart and the filter can also see it.
+ *
+ * Not duplicated from `smf.ts` by import: that module pulls in `@tonejs/midi`, and this one
+ * is on the playback path. Keep the two in step by hand — they are the same decision.
+ */
+export const DEFAULT_NEW_NOTE_VELOCITY = 80;
+
+/**
  * Does a note clear a velocity floor?
  *
  * The `?? 127` is the back-compat guarantee that keeps the filter from being a data-loss

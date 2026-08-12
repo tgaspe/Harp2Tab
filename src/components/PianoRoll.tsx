@@ -18,7 +18,7 @@ import { getGridRows, noteNameToMidi, type GridRow } from '@/audio/HarmonicaMapp
 import { getFrames } from '@/audio/frameBuffer';
 import { layoutBackgroundLanes } from '@/audio/studioNotes';
 import { passesDurationFloor } from '@/audio/duration';
-import { noteVelocity, passesVelocityFloor } from '@/audio/velocity';
+import { DEFAULT_NEW_NOTE_VELOCITY, noteVelocity, passesVelocityFloor } from '@/audio/velocity';
 import { selectRecordingId, useAppStore } from '@/store/useAppStore';
 import { selectRecordings, useRecordingsStore } from '@/store/useRecordingsStore';
 import {
@@ -115,6 +115,17 @@ const DURATION_FLOOR_STEP_MS = 10;
 // Emit a live drag-tooltip label every Nth onUpdate call rather than every one — bounds
 // the JS-thread state-update rate without needing a wall-clock read inside a worklet.
 const DRAG_LABEL_THROTTLE = 4;
+
+// Top of the velocity scale — MIDI's, so the chart's axis and the file's byte agree.
+const VELOCITY_MAX = 127;
+// Quiet, not absent. MIDI reserves velocity 0 for note-off, and `smf.ts` clamps to 1 on the
+// way out regardless, so a bar dragged all the way down has to bottom out here or the note
+// would leave the file as a silence the roll still draws.
+const VELOCITY_MIN = 1;
+// A velocity bar is only as wide as its note, and a 32nd note at low zoom is a couple of
+// pixels — unusable as a drag target. The bar keeps its true width; only the invisible
+// grab area widens to this.
+const VELOCITY_BAR_MIN_HIT_WIDTH = 10;
 
 // Grid resolution (quarter/eighth/sixteenth notes) — always a concrete value, no 'off'
 // here (see the snapEnabled/snapSubdivision comment above the state declaration for why
@@ -372,7 +383,11 @@ function isNaturalNote(note: string): boolean {
   return !note.includes('#');
 }
 
-type NoteUpdate = Partial<Pick<TabNote, 'tab' | 'note' | 'start_time' | 'duration'>>;
+// `velocity` but deliberately not `velocitySource`: the source names the *scale* a note's
+// 0–127 sits on, and dragging a bar in the Velocity chart moves the value along that scale
+// rather than off it. Leaving it out of the update type is what guarantees an edit can't
+// silently relabel the unit — see the field's own docs in `types/index.ts`.
+type NoteUpdate = Partial<Pick<TabNote, 'tab' | 'note' | 'start_time' | 'duration' | 'velocity'>>;
 
 // Icon-only toolbar button with a hover tooltip (web). Every glyph-only control in the
 // tool row goes through this — zoom, fit, transpose — because a bare chevron or
@@ -999,7 +1014,21 @@ export function PianoRoll({
     const pos = positions[rowIndex];
     const rawStart = Math.max(0, (x / pxPerSecond) * 1000);
     const start = snapMsToGridInMap(map, Math.round(rawStart), snapDivision);
-    onCreate({ tab: pos.tab, note: pos.note, start_time: start, duration: DEFAULT_NEW_NOTE_DURATION_MS, confidence: 100 });
+    onCreate({
+      tab: pos.tab, note: pos.note, start_time: start,
+      duration: DEFAULT_NEW_NOTE_DURATION_MS, confidence: 100,
+      // Stated, not left absent. An absent velocity reads as "unknown" everywhere
+      // downstream: no bar in the Velocity chart, nothing for the filter to act on, and a
+      // number invented at MIDI-write time instead of carried on the note. No
+      // `velocitySource` though — the three sources all describe a *measurement*, and this
+      // note was never measured.
+      //
+      // Floored at the filter line rather than flatly 80: below it the note would be
+      // created already hidden, so clicking the grid would do nothing visible and the
+      // pencil would look broken. The line is a viewing threshold, and nothing the user
+      // draws should land on the wrong side of it at birth.
+      velocity: Math.max(DEFAULT_NEW_NOTE_VELOCITY, velocityFilter?.value ?? 0),
+    });
     const updated = notesAfterWrite();
     const created = updated[updated.length - 1];
     if (created) onSelect(created.id);
@@ -1260,7 +1289,22 @@ export function PianoRoll({
   // session-scoped editing convenience, not data that needs to persist or undo on its
   // own. Holds each copied note's shape plus its offset from the earliest copied note,
   // so pasting a multi-note copy preserves their relative spacing.
-  const clipboardRef = useRef<{ tab: string; note: string; duration: number; offsetMs: number }[]>([]);
+  const clipboardRef = useRef<{
+    tab: string; note: string; duration: number; offsetMs: number;
+    velocity: number; velocitySource?: VelocitySource;
+  }[]>([]);
+
+  /**
+   * Commit a velocity dragged in the Velocity chart.
+   *
+   * Deliberately single-note: the chart's bars are addressed by their own note, not by the
+   * roll's selection, so dragging one never moves a bar the user can't see themselves
+   * grabbing. Applying a delta across the whole selection is a separate gesture and a
+   * separate decision.
+   */
+  const handleVelocityChange = useCallback((id: string, velocity: number) => {
+    onUpdate(id, { velocity });
+  }, [onUpdate]);
 
   // Both selection models funnel through here — pencil's single `selectedId` or
   // selection-mode's `selectedIds` — so duplicate/copy/paste work the same regardless
@@ -1291,12 +1335,18 @@ export function PianoRoll({
   // back — no clipboard involved, distinct from copy/paste below (which anchors to the
   // playhead instead). Full confidence, matching a fresh pencil-drawn note: this is a
   // deliberate user action, not a re-run of pitch detection.
+  //
+  // Velocity is the exception to that "it's a new note" framing: a copy of a note is the
+  // same note, so it carries the original's dynamic *and* its `velocitySource` rather than
+  // resetting to the hand-drawn default. Dropping them would make a duplicated phrase read
+  // flat next to the phrase it was duplicated from.
   function handleDuplicate() {
     const targets = getSelectionNotes();
     if (targets.length === 0) return;
     createMany(targets.map((n) => ({
       tab: n.tab, note: n.note, confidence: 100,
       start_time: n.start_time + n.duration, duration: n.duration,
+      velocity: noteVelocity(n) ?? DEFAULT_NEW_NOTE_VELOCITY, velocitySource: n.velocitySource,
     })));
     selectNewest(targets.length);
   }
@@ -1307,6 +1357,7 @@ export function PianoRoll({
     const earliestStart = Math.min(...targets.map((n) => n.start_time));
     clipboardRef.current = targets.map((n) => ({
       tab: n.tab, note: n.note, duration: n.duration, offsetMs: n.start_time - earliestStart,
+      velocity: noteVelocity(n) ?? DEFAULT_NEW_NOTE_VELOCITY, velocitySource: n.velocitySource,
     }));
   }
 
@@ -1319,6 +1370,9 @@ export function PianoRoll({
     createMany(clip.map((c) => ({
       tab: c.tab, note: c.note, duration: c.duration, confidence: 100,
       start_time: Math.max(0, anchor + c.offsetMs),
+      // Copied at Copy time, same reasoning as handleDuplicate — a paste is the note again,
+      // not a new note that happens to share its pitch.
+      velocity: c.velocity, velocitySource: c.velocitySource,
     })));
     selectNewest(clip.length);
   }
@@ -2393,6 +2447,9 @@ export function PianoRoll({
                   positions={positions}
                   pxPerSecond={pxPerSecond}
                   theme={theme}
+                  styles={styles}
+                  // Omitted on a read-only roll, which turns the bars back into plain marks.
+                  onVelocityChange={viewOnly ? undefined : handleVelocityChange}
                 />
               </View>
             ) : (
@@ -3025,11 +3082,126 @@ function FloorLine({
 
 // ─── Data panel bars ───────────────────────────────────────────────────────────
 
+/**
+ * One bar in the Velocity chart, dragged up/down to set its note's dynamic.
+ *
+ * The chart used to be the only read-only surface in the editor: every other number on
+ * screen — pitch, start, duration — could be dragged, while velocity could only be
+ * *thresholded* by the filter line. So a note imported flat, or drawn by hand at the
+ * default, was stuck there.
+ *
+ * Commits once, in `onEnd`, with a shared value carrying the live height in between. That's
+ * the same shape as the note blocks' move/resize drags and for the same reason: every
+ * `updateNote` pushes a history entry, so writing per frame would bury the user's previous
+ * edit under a hundred identical undo steps.
+ *
+ * `velocitySource` is deliberately not written here. It names the *scale* the 0–127 sits on
+ * — take-relative RMS, model activation, a MIDI file's own byte — and dragging moves the
+ * value along that scale rather than onto a new one, so the filter goes on thresholding it
+ * against its neighbours exactly as before. See `VelocitySource` in `types/index.ts`.
+ */
+function VelocityBar({
+  note, left, width, filtered, theme, styles, onVelocityChange,
+}: {
+  note:   TabNote;
+  left:   number;
+  width:  number;
+  filtered: boolean;
+  theme:  Theme;
+  styles: ReturnType<typeof createStyles>;
+  onVelocityChange: (id: string, velocity: number) => void;
+}) {
+  const stated = noteVelocity(note);
+  /**
+   * Where the drag starts from.
+   *
+   * A note with no stated dynamic has no bar and no number, but it still gets a grab area
+   * anchored at the hand-drawn default — dragging is how a legacy recording's notes, or a
+   * MIDI import that left the byte off, acquire a velocity at all. Without this they would
+   * be the one thing in the chart that can never be edited.
+   */
+  const startVelocity = stated ?? DEFAULT_NEW_NOTE_VELOCITY;
+
+  const dragDy = useSharedValue(0);
+  const [dragLabel, setDragLabel] = useState<string | null>(null);
+  const dragUpdateCounter = useSharedValue(0);
+
+  const commit = useCallback((translationY: number) => {
+    const raw = startVelocity - (translationY / DATA_BAR_HEIGHT) * VELOCITY_MAX;
+    const next = Math.max(VELOCITY_MIN, Math.min(VELOCITY_MAX, Math.round(raw)));
+    // Guarded so a stray click — a Pan that recognized but never really moved — doesn't
+    // push a history entry that undoes to an identical state.
+    if (next !== stated) onVelocityChange(note.id, next);
+  }, [onVelocityChange, note.id, stated, startVelocity]);
+
+  const gesture = useMemo(() => Gesture.Pan()
+    .onUpdate((e) => {
+      dragDy.value = e.translationY;
+      dragUpdateCounter.value += 1;
+      if (dragUpdateCounter.value % DRAG_LABEL_THROTTLE === 0) {
+        // Arithmetic inline rather than through a helper: this body is a worklet, and the
+        // readout has to be computed on the UI thread before crossing over.
+        const raw = startVelocity - (e.translationY / DATA_BAR_HEIGHT) * VELOCITY_MAX;
+        const shown = Math.max(VELOCITY_MIN, Math.min(VELOCITY_MAX, Math.round(raw)));
+        runOnJS(setDragLabel)(String(shown));
+      }
+    })
+    .onEnd((e) => { runOnJS(commit)(e.translationY); })
+    .onFinalize(() => { dragDy.value = 0; runOnJS(setDragLabel)(null); }),
+  [commit, startVelocity, dragDy, dragUpdateCounter]);
+
+  // Height follows the pointer on the UI thread; the committed value takes over once the
+  // store write lands and `note` comes back down with the new number.
+  const barStyle = useAnimatedStyle(() => {
+    const raw = startVelocity - (dragDy.value / DATA_BAR_HEIGHT) * VELOCITY_MAX;
+    const v = Math.max(VELOCITY_MIN, Math.min(VELOCITY_MAX, Math.round(raw)));
+    return {
+      height: Math.max(2, (v / VELOCITY_MAX) * DATA_BAR_HEIGHT),
+      // An unmeasured note draws nothing until it's actually being dragged — a zero-height
+      // bar would read as "played silently" instead of "not measured" (the same distinction
+      // the non-interactive branch below makes by rendering nothing at all).
+      opacity: stated === undefined && dragDy.value === 0 ? 0 : (filtered ? 0.35 : 0.85),
+    };
+  }, [startVelocity, stated, filtered]);
+
+  return (
+    <GestureDetector gesture={gesture}>
+      <View
+        style={[
+          styles.velocityBarHit,
+          { left, width: Math.max(width, VELOCITY_BAR_MIN_HIT_WIDTH) },
+        ]}
+        accessibilityLabel={
+          `${noteBlockLabel(note)} velocity ${stated ?? 'not set'}. Drag up or down to change.`
+        }
+      >
+        <Animated.View
+          style={[
+            styles.velocityBarFill,
+            { width, backgroundColor: filtered ? theme.textMuted : theme.accent },
+            barStyle,
+          ]}
+        />
+        {dragLabel !== null && (
+          <View pointerEvents="none" style={styles.velocityBarTooltip}>
+            <Text style={styles.dragTooltipText} numberOfLines={1}>{dragLabel}</Text>
+          </View>
+        )}
+      </View>
+    </GestureDetector>
+  );
+}
+
 function DataPanelBars({
   metric, notes, velocityFloor, durationFloorMs, durationMax, frames, positions, pxPerSecond, theme,
+  styles, onVelocityChange,
 }: {
   metric: DataMetric;
   notes: TabNote[];
+  styles: ReturnType<typeof createStyles>;
+  /** Makes the Velocity chart's bars draggable. Absent on a read-only roll (the import
+   *  preview, `viewOnly`), where the chart stays a chart. */
+  onVelocityChange?: (id: string, velocity: number) => void;
   /**
    * Both threshold lines, on every chart — not just the one this chart carries.
    *
@@ -3065,19 +3237,15 @@ function DataPanelBars({
   if (metric === 'duration' || metric === 'confidence' || metric === 'velocity') {
     const maxVal = metric === 'duration'
       ? durationMax
-      : metric === 'confidence' ? 100 : 127;
+      : metric === 'confidence' ? 100 : VELOCITY_MAX;
     return (
       <>
         {notes.map((n) => {
           const value = metric === 'duration'
             ? n.duration
             : metric === 'confidence' ? n.confidence : noteVelocity(n);
-          // A note with no stated dynamic gets no bar rather than a zero-height one, which
-          // would read as "played silently" instead of "not measured".
-          if (value === undefined) return null;
           const left = (n.start_time / 1000) * pxPerSecond;
           const width = Math.max(2, (n.duration / 1000) * pxPerSecond - 2);
-          const height = Math.max(2, (value / maxVal) * DATA_BAR_HEIGHT);
           // Below a line: drawn, but drained of colour and pushed back, so the shape of what's
           // being cut stays readable while no longer competing with what's kept. These are
           // exactly the notes the roll above has hidden — this chart is the only place
@@ -3087,6 +3255,30 @@ function DataPanelBars({
           // `value` is a length, and the gate has nothing to say about it.
           const filtered = !passesVelocityFloor(noteVelocity(n), velocityFloor)
             || !passesDurationFloor(n.duration, durationFloorMs);
+
+          // Velocity's bars are handles, not just marks, whenever the roll is editable —
+          // including for a note that has no dynamic yet, which is why this comes before the
+          // `value === undefined` bail below. `VelocityBar` draws nothing for those until
+          // they're actually grabbed.
+          if (metric === 'velocity' && onVelocityChange) {
+            return (
+              <VelocityBar
+                key={n.id}
+                note={n}
+                left={left}
+                width={width}
+                filtered={filtered}
+                theme={theme}
+                styles={styles}
+                onVelocityChange={onVelocityChange}
+              />
+            );
+          }
+
+          // A note with no stated dynamic gets no bar rather than a zero-height one, which
+          // would read as "played silently" instead of "not measured".
+          if (value === undefined) return null;
+          const height = Math.max(2, (value / maxVal) * DATA_BAR_HEIGHT);
           return (
             <View
               key={n.id}
@@ -4238,6 +4430,31 @@ function createStyles(t: Theme) {
       ...(Platform.OS === 'web' ? { boxShadow: '0 2px 6px rgba(0,0,0,0.25)' } : null),
     } as any,
     dragTooltipText: { fontSize: 10, fontFamily: Poppins.bold, color: t.bg },
+    // Full-height grab area for one velocity bar. Spans the chart top to bottom rather than
+    // hugging the bar, so a note at velocity 5 — a 5px sliver — is as easy to grab as one at
+    // 120, and so a bar can be dragged *up* from nothing.
+    velocityBarHit: {
+      position: 'absolute',
+      top: 0,
+      bottom: 0,
+      justifyContent: 'flex-end',
+      ...(Platform.OS === 'web' ? { cursor: 'ns-resize' } : null),
+    } as any,
+    // The visible ink, bottom-aligned inside the grab area. Width is the note's real width;
+    // the parent may be wider (see VELOCITY_BAR_MIN_HIT_WIDTH), which must not show.
+    velocityBarFill: { borderRadius: 2 },
+    // Pinned to the top of the grab area rather than to the bar's moving edge: a readout
+    // that rides the drag is a readout the pointer sits on top of.
+    velocityBarTooltip: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      paddingHorizontal: 5,
+      paddingVertical: 2,
+      borderRadius: 5,
+      backgroundColor: t.textPrimary,
+      zIndex: 10,
+    },
     resizeHandle: {
       position: 'absolute',
       right: 0,

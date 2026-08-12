@@ -66,3 +66,22 @@ const PLAYABLE_MIDI: ReadonlySet<number> = (() => {
 export function isPlayableOnAnyHarmonica(midi: number): boolean {
   return PLAYABLE_MIDI.has(Math.round(midi));
 }
+
+/**
+ * The outer bounds of the set above.
+ *
+ * The spectral engine searches only inside this range, which is what makes a subharmonic
+ * ghost below the harmonica structurally impossible rather than merely unlikely — there is
+ * no candidate down there to win. Derived here, from the same layout tables, so that
+ * widening a layout widens the search with it rather than silently leaving notes
+ * unreachable.
+ */
+export const PLAYABLE_MIDI_RANGE: { min: number; max: number } = (() => {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const midi of PLAYABLE_MIDI) {
+    if (midi < min) min = midi;
+    if (midi > max) max = midi;
+  }
+  return { min, max };
+})();

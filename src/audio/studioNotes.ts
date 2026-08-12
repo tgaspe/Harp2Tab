@@ -166,7 +166,7 @@ export function layoutBackgroundLanes(
 export function applyTabNoteChange(
   track: MidiTrackData,
   noteId: string,
-  changes: Partial<Pick<TabNote, 'note' | 'start_time' | 'duration'>>,
+  changes: Partial<Pick<TabNote, 'note' | 'start_time' | 'duration' | 'velocity'>>,
 ): MidiNote[] {
   const parsed = parseStudioNoteId(noteId);
   if (!parsed || parsed.trackId !== track.id) return track.notes;
@@ -182,11 +182,16 @@ export function applyTabNoteChange(
     midi:       midi ?? existing.midi,
     timeMs:     changes.start_time ?? existing.timeMs,
     durationMs: changes.duration ?? existing.durationMs,
+    // The track's `velocitySource` is untouched by this on purpose: dragging the Velocity
+    // chart's bar moves the note along the scale that source names, it doesn't move it onto
+    // a different scale.
+    velocity:   changes.velocity ?? existing.velocity,
   };
 
   if (next.midi === existing.midi
     && next.timeMs === existing.timeMs
-    && next.durationMs === existing.durationMs) {
+    && next.durationMs === existing.durationMs
+    && next.velocity === existing.velocity) {
     return track.notes;
   }
 
