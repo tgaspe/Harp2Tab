@@ -21,6 +21,7 @@ import { ExportOption } from '@/components/ExportOption';
 import { TEMPO_CONFIDENCE_GOOD, detectTempo } from '@/audio/detectTempo';
 import { useAudibleNotes } from '@/hooks/useAudibleNotes';
 import { useTheme } from '@/hooks/useTheme';
+import { getPremium } from '@/hooks/usePremium';
 import { useAppStore, selectTabNotes, selectKey, selectHarmonicaType, selectCanUndo, selectCanRedo, selectBpm, selectMetronomeEnabled, selectExportFmt, selectRecordingTitle, selectViewMode } from '@/store/useAppStore';
 import { saveCurrentSessionToLibrary, getDefaultRecordingTitle, startNewRecordingSession } from '@/store/sessionSnapshot';
 import { resolveSessionGate } from '@/store/sessionGate';
@@ -285,8 +286,8 @@ export default function EditScreen() {
    * dialog then costs nothing — nothing has been saved, gated or navigated.
    */
   async function handleUploadFromEditor(kind: 'audio' | 'midi') {
-    const { isPurchased, totalRecordingsUsed, ratingStatus } = useSettingsStore.getState();
-    const gate = resolveSessionGate({ isPurchased, totalRecordingsUsed, ratingStatus });
+    const { totalRecordingsUsed, ratingStatus } = useSettingsStore.getState();
+    const gate = resolveSessionGate({ isPurchased: getPremium().premium, totalRecordingsUsed, ratingStatus });
     if (gate === 'showRating')  { setShowRatingModal(true); return; }
     if (gate === 'showPaywall') { router.push('/paywall'); return; }
 

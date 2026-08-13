@@ -1,6 +1,7 @@
 import { useAppStore } from './useAppStore';
 import { useRecordingsStore } from './useRecordingsStore';
 import { useSettingsStore } from './useSettingsStore';
+import { getPremium } from '@/hooks/usePremium';
 import { resolveSessionGate, type SessionGateResult } from './sessionGate';
 import { decimateFrames, getFrames } from '@/audio/frameBuffer';
 import type { TabRecording } from '@/types';
@@ -109,8 +110,8 @@ export function preserveSessionForPaywall(): boolean {
 }
 
 export function startNewRecordingSession(): SessionGateResult {
-  const { isPurchased, totalRecordingsUsed, ratingStatus } = useSettingsStore.getState();
-  const gate = resolveSessionGate({ isPurchased, totalRecordingsUsed, ratingStatus });
+  const { totalRecordingsUsed, ratingStatus } = useSettingsStore.getState();
+  const gate = resolveSessionGate({ isPurchased: getPremium().premium, totalRecordingsUsed, ratingStatus });
   if (gate === 'allow') useAppStore.getState().startRecording();
   return gate;
 }

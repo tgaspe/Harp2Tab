@@ -6,6 +6,7 @@ import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { FONT, HARMONICA_KEYS } from '@/constants/keys';
 import { useTheme } from '@/hooks/useTheme';
 import { usePlayback } from '@/hooks/usePlayback';
+import { usePremium } from '@/hooks/usePremium';
 import { selectHarmonicaType, selectKey, useAppStore } from '@/store/useAppStore';
 import { FREE_TIER_ENABLED, useSettingsStore } from '@/store/useSettingsStore';
 import { computeEffectiveLimit, resolveSessionGate } from '@/store/sessionGate';
@@ -139,8 +140,10 @@ export default function KeySelectionScreen() {
   const startRecording       = useAppStore((s) => s.startRecording);
   const loadRecording        = useAppStore((s) => s.loadRecording);
   const totalRecordingsUsed  = useSettingsStore((s) => s.totalRecordingsUsed);
-  const isPurchased          = useSettingsStore((s) => s.isPurchased);
   const ratingStatus         = useSettingsStore((s) => s.ratingStatus);
+  // Not `isPurchased` (8-3): a subscription can lapse, so paid access is resolved from the
+  // account entitlement and the device unlock together rather than read off a latch.
+  const { premium }          = usePremium();
   const recordings           = useRecordingsStore(selectRecordings);
   const midiProjects         = useMidiProjectsStore(selectMidiProjects);
   const saveProject          = useMidiProjectsStore((s) => s.saveProject);
@@ -177,7 +180,7 @@ export default function KeySelectionScreen() {
 
   function handleStart() {
     if (!selectedKey) return;
-    const gate = resolveSessionGate({ isPurchased, totalRecordingsUsed, ratingStatus });
+    const gate = resolveSessionGate({ isPurchased: premium, totalRecordingsUsed, ratingStatus });
     if (gate === 'showRating') { setShowRatingModal(true); return; }
     if (gate === 'showPaywall') { router.push('/paywall'); return; }
     startRecording();
@@ -190,7 +193,7 @@ export default function KeySelectionScreen() {
   // during a real user gesture.
   async function handleUploadAudio() {
     if (!selectedKey) return;
-    const gate = resolveSessionGate({ isPurchased, totalRecordingsUsed, ratingStatus });
+    const gate = resolveSessionGate({ isPurchased: premium, totalRecordingsUsed, ratingStatus });
     if (gate === 'showRating') { setShowRatingModal(true); return; }
     if (gate === 'showPaywall') { router.push('/paywall'); return; }
 
@@ -224,7 +227,7 @@ export default function KeySelectionScreen() {
   // parse rather than transcribe — everything either side of that step is shared.
   async function handleUploadMidi() {
     if (!selectedKey) return;
-    const gate = resolveSessionGate({ isPurchased, totalRecordingsUsed, ratingStatus });
+    const gate = resolveSessionGate({ isPurchased: premium, totalRecordingsUsed, ratingStatus });
     if (gate === 'showRating') { setShowRatingModal(true); return; }
     if (gate === 'showPaywall') { router.push('/paywall'); return; }
 
@@ -328,7 +331,7 @@ export default function KeySelectionScreen() {
           Start Recording
         </Text>
         {/* Nothing counts down while the free tier is off, so nothing advertises a count. */}
-        {FREE_TIER_ENABLED && !isPurchased && (
+        {FREE_TIER_ENABLED && !premium && (
           <View style={styles.btnCounter}>
             <Text style={[styles.btnCounterText, !selectedKey && styles.btnCounterTextDisabled]}>
               {Math.min(totalRecordingsUsed, effectiveLimit)} / {effectiveLimit} free recordings used
@@ -386,7 +389,7 @@ export default function KeySelectionScreen() {
     </View>
   );
 
-  const freeCounterLabel = FREE_TIER_ENABLED && !isPurchased
+  const freeCounterLabel = FREE_TIER_ENABLED && !premium
     ? `${Math.min(totalRecordingsUsed, effectiveLimit)} / ${effectiveLimit} free recordings used`
     : null;
 

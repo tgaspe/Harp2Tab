@@ -6,19 +6,26 @@ import { useRouter } from 'expo-router';
 import { useTheme } from '@/hooks/useTheme';
 import { useIAP } from '@/hooks/useIAP';
 import { AuthModal } from '@/components/AuthModal';
+import { VerifyBanner } from '@/components/VerifyBanner';
 import { useAuth } from '@/auth/useAuth';
 import { FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { RATING_BONUS, RECORDING_LIMIT, useSettingsStore } from '@/store/useSettingsStore';
+import { PlanPicker } from '@/components/PlanPicker';
+import { DEFAULT_PLAN_ID, MOCK_WEB_PLANS, PLAN_PERKS, type WebPlanId } from '@/billing/plans';
 import { preserveSessionForPaywall } from '@/store/sessionSnapshot';
 import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
 import type { Theme } from '@/theme';
 
-const PERKS = [
-  'Unlimited recordings',
-  'Export to TXT, CSV, MIDI, MusicXML & JSON',
-  'All future updates included',
-];
+/**
+ * `VerifyBanner` awaits its callbacks and has no error surface of its own — an auth call that
+ * rejects (rate limit, offline) would otherwise leave its spinner running forever. Swallowing
+ * is right here: both actions are idempotent and re-pressable, and the banner already tells
+ * the user what to do next.
+ */
+function safely(action: () => Promise<void>) {
+  return async () => { try { await action(); } catch { /* re-pressable */ } };
+}
 
 export default function PaywallScreen() {
   const router       = useRouter();
@@ -34,6 +41,27 @@ export default function PaywallScreen() {
   const signedIn = auth.status === 'signedIn' && !!auth.user;
   const [authOpen, setAuthOpen] = useState(false);
   const [tookPreserved, setTookPreserved] = useState(false);
+
+  /**
+   * The selected plan (8-5). Web only — `PlanPicker.tsx` on native ignores it and renders the
+   * single Play Billing price, because Android still sells one product.
+   *
+   * Defaults to annual, which is a revenue decision rather than a layout one: see
+   * `DEFAULT_PLAN_ID`.
+   */
+  const [planId, setPlanId] = useState<WebPlanId>(DEFAULT_PLAN_ID);
+
+  /**
+   * **Verified email is required before purchase (7-4, landed here).** An entitlement attached
+   * to an unverified address is attached to nobody — the address cannot be recovered, cannot
+   * be contacted, and cannot prove ownership when the same person signs in on another device.
+   *
+   * So the account step has three states, not two: signed out, signed in but unconfirmed, and
+   * ready. The middle one is the one that gets forgotten, and it is the one that produces a
+   * paid customer with no way to reach their purchase.
+   */
+  const unverified  = signedIn && !auth.user!.emailVerified;
+  const canPurchase = signedIn && !unverified;
 
   /**
    * Commit the in-progress take the moment this screen opens (7-6).
@@ -53,6 +81,19 @@ export default function PaywallScreen() {
 
   const priceLabel = product?.displayPrice ?? '...';
   const busy       = purchasing || restoring;
+  /**
+   * Is there something to buy?
+   *
+   * **Native asks Play Billing; web asks the plan picker.** `product` is the one-time SKU
+   * fetched by `react-native-iap` and web will never have one — gating the web button on it
+   * left a permanently dead "Unlock Full App" with nothing saying why. Web's equivalent is a
+   * selected plan, which 8-4 turns into a RevenueCat package.
+   */
+  const purchasable = Platform.OS === 'web' ? !!planId : !!product;
+
+  /** Named once: it drives the press handler, the fill and the label colour, which drifted
+   *  apart while it was three copies of the same expression. */
+  const purchaseDisabled = unverified || (canPurchase && (busy || !purchasable));
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -73,15 +114,18 @@ export default function PaywallScreen() {
           </Text>
         </View>
 
-        {/* Price */}
-        <View style={styles.priceBadge}>
-          <Text style={styles.price}>{priceLabel}</Text>
-          <Text style={styles.priceLabel}>one-time purchase · no subscription</Text>
-        </View>
+        {/* Plans (web) / the one-time price badge (native) — see PlanPicker's two files. */}
+        <PlanPicker
+          plans={MOCK_WEB_PLANS}
+          selectedId={planId}
+          onSelect={setPlanId}
+          disabled={busy}
+          nativePrice={priceLabel}
+        />
 
         {/* Perks */}
         <View style={styles.perks}>
-          {PERKS.map((perk) => (
+          {PLAN_PERKS.map((perk) => (
             <View key={perk} style={styles.perkRow}>
               <Ionicons name="checkmark-circle" size={18} color={theme.accent} />
               <Text style={styles.perkText}>{perk}</Text>
@@ -110,14 +154,7 @@ export default function PaywallScreen() {
             arrives before the identity it belongs to is precisely the reconciliation problem
             Phase 8 exists to avoid, recreated on purpose. This is also the only place in the
             app where an account is required — everything else stays free and signed out. */}
-        {signedIn ? (
-          <View style={styles.accountStep}>
-            <Ionicons name="checkmark-circle" size={16} color={theme.success} />
-            <Text style={styles.accountStepText} numberOfLines={1}>
-              Purchasing as {auth.user!.email}
-            </Text>
-          </View>
-        ) : (
+        {!signedIn && (
           <View style={styles.accountStep}>
             <Ionicons name="person-circle-outline" size={16} color={theme.textSub} />
             <Text style={styles.accountStepText}>
@@ -126,30 +163,68 @@ export default function PaywallScreen() {
           </View>
         )}
 
+        {/* The banner, not just a message about one: "confirm your email" with no way to
+            resend or re-check from this screen would send the user hunting for /profile at the
+            exact moment they were trying to pay. Same component /profile uses, so the resend
+            cooldown and the "I've confirmed" reload behave identically in both places. */}
+        {unverified && (
+          <View style={styles.verifyBlock}>
+            <VerifyBanner
+              email={auth.user!.email ?? ''}
+              onResend={safely(auth.resendVerification)}
+              onIVerified={safely(auth.reloadUser)}
+              title="Confirm your email before paying"
+              body={'We send your receipt and your access there, and an unconfirmed address '
+                  + "can't be recovered."}
+            />
+          </View>
+        )}
+
+        {canPurchase && (
+          <View style={styles.accountStep}>
+            <Ionicons name="checkmark-circle" size={16} color={theme.success} />
+            <Text style={styles.accountStepText} numberOfLines={1}>
+              Purchasing as {auth.user!.email}
+            </Text>
+          </View>
+        )}
+
         {/* Purchase button */}
         <View style={styles.buttons}>
           <Pressable
-            onPress={signedIn ? buy : () => setAuthOpen(true)}
-            disabled={signedIn && (busy || !product)}
+            onPress={canPurchase ? buy : () => setAuthOpen(true)}
+            disabled={purchaseDisabled}
             style={({ pressed, hovered }: any) => [
               styles.buyBtn,
-              signedIn && (busy || !product) && styles.buyBtnDisabled,
-              (pressed || (Platform.OS === 'web' && hovered)) && !busy && (!signedIn || !!product) && styles.buyBtnPressed,
+              purchaseDisabled && styles.buyBtnDisabled,
+              (pressed || (Platform.OS === 'web' && hovered))
+                && !purchaseDisabled && styles.buyBtnPressed,
             ]}
             accessibilityRole="button"
-            accessibilityLabel={signedIn ? 'Unlock Full App' : 'Continue to create your account'}
+            accessibilityState={{ disabled: purchaseDisabled }}
+            accessibilityLabel={
+              unverified   ? 'Confirm your email address before purchasing'
+              : canPurchase ? 'Unlock Full App'
+              : 'Continue to create your account'
+            }
           >
             {purchasing ? (
               <ActivityIndicator color="#fff" />
             ) : (
               <>
                 <Ionicons
-                  name={signedIn ? 'lock-open-outline' : 'arrow-forward-outline'}
+                  name={
+                    unverified   ? 'mail-outline'
+                    : canPurchase ? 'lock-open-outline'
+                    : 'arrow-forward-outline'
+                  }
                   size={20}
-                  color="#fff"
+                  color={purchaseDisabled ? theme.textMuted : '#fff'}
                 />
-                <Text style={styles.buyBtnText}>
-                  {signedIn ? 'Unlock Full App' : 'Continue'}
+                <Text style={[styles.buyBtnText, purchaseDisabled && styles.buyBtnTextDisabled]}>
+                  {unverified   ? 'Confirm your email first'
+                  : canPurchase ? 'Unlock Full App'
+                  : 'Continue'}
                 </Text>
               </>
             )}
@@ -246,29 +321,6 @@ function createStyles(t: Theme) {
       lineHeight: 20,
     },
 
-    priceBadge: {
-      alignItems:        'center',
-      backgroundColor:   t.accentSoft,
-      borderRadius:      14,
-      borderWidth:       1,
-      borderColor:       t.accent,
-      paddingVertical:   12,
-      paddingHorizontal: 24,
-      alignSelf:         'stretch',
-      marginBottom:      28,
-      gap:               4,
-    },
-    price: {
-      fontSize:   FONT['2xl'],
-      fontFamily: Poppins.black,
-      color:      t.accent,
-    },
-    priceLabel: {
-      fontSize:   FONT.xs,
-      fontFamily: Poppins.regular,
-      color:      t.textSub,
-    },
-
     perks: {
       alignSelf:    'stretch',
       gap:          12,
@@ -293,6 +345,8 @@ function createStyles(t: Theme) {
       marginBottom: 8,
     },
 
+    verifyBlock: { alignSelf: 'stretch', gap: 10, marginBottom: 4 },
+
     buttons: {
       alignSelf: 'stretch',
       gap:       12,
@@ -307,13 +361,16 @@ function createStyles(t: Theme) {
       paddingVertical: 18,
       ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
     } as ViewStyle,
-    buyBtnDisabled: { backgroundColor: t.surface },
+    buyBtnDisabled: { backgroundColor: t.surface, borderWidth: 1, borderColor: t.border },
     buyBtnPressed:  { opacity: 0.85 },
     buyBtnText: {
       fontSize:   FONT.md,
       fontFamily: Poppins.bold,
       color:      '#fff',
     },
+    /* White on `surface` is invisible. Harmless while it only flashed during product load;
+       "Confirm your email first" is a state the user sits in and reads. */
+    buyBtnTextDisabled: { color: t.textMuted },
 
     restoreBtn: {
       marginTop:      16,

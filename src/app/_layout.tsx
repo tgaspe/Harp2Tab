@@ -25,6 +25,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { TopBar } from '@/components/TopBar';
 import { startAuthListener } from '@/auth/useAuthStore';
+import { startEntitlementListener } from '@/store/useEntitlementStore';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -62,6 +63,16 @@ export default function RootLayout() {
    * extend the splash. Same outcome, without the risk of a blank app if auth never answers.
    */
   useEffect(() => startAuthListener(), []);
+
+  /**
+   * Entitlement refreshes (8-3), for the same reason and with the same shape: one subscription,
+   * writing a store that every screen reads synchronously.
+   *
+   * Started unconditionally rather than only when signed in — it watches the auth store for
+   * that itself, and a signed-out app still needs it to have dropped the previous account's
+   * cached entitlement.
+   */
+  useEffect(() => startEntitlementListener(), []);
 
   if (!fontsLoaded) return null;
 

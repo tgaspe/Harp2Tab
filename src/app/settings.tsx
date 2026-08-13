@@ -7,6 +7,7 @@ import { SliderInput } from '@/components/SliderInput';
 import { Toggle } from '@/components/Toggle';
 import { useAuth } from '@/auth/useAuth';
 import { useTheme } from '@/hooks/useTheme';
+import { usePremium } from '@/hooks/usePremium';
 import { availableAlgorithms } from '@/audio/algorithms';
 import {
   FREE_TIER_ENABLED, MAX_TAKE_MINUTES, MIN_TAKE_MINUTES, useSettingsStore, type ThemeOverride,
@@ -27,7 +28,8 @@ export default function SettingsScreen() {
   const styles             = useMemo(() => createStyles(theme), [theme]);
   const micSensitivity     = useSettingsStore((s) => s.micSensitivity);
   const themeOverride      = useSettingsStore((s) => s.themeOverride);
-  const isPurchased        = useSettingsStore((s) => s.isPurchased);
+  // Paid access, not the `isPurchased` latch (8-3) — a subscription can lapse.
+  const { premium }         = usePremium();
   const setMicSensitivity  = useSettingsStore((s) => s.setMicSensitivity);
   const setThemeOverride   = useSettingsStore((s) => s.setThemeOverride);
   const defaultAlgorithm   = useSettingsStore((s) => s.defaultAlgorithm);
@@ -76,7 +78,7 @@ export default function SettingsScreen() {
         >
 
           {/* No limit is being enforced, so there is nothing to upgrade past. */}
-          {FREE_TIER_ENABLED && !isPurchased && (
+          {FREE_TIER_ENABLED && !premium && (
             <Pressable
               onPress={() => router.push('/paywall')}
               style={({ pressed, hovered }: any) => [

@@ -38,6 +38,8 @@ import {
 } from '@/components/SettingsSurface';
 import { initialsFor, joinedOn, memberSince, useAuth } from '@/auth/useAuth';
 import { useTheme } from '@/hooks/useTheme';
+import { usePremium } from '@/hooks/usePremium';
+import type { PremiumState } from '@/store/entitlementState';
 import { useHeaderActionStore } from '@/store/useHeaderActionStore';
 import { useRecordingsStore } from '@/store/useRecordingsStore';
 import { useMidiProjectsStore } from '@/store/useMidiProjectsStore';
@@ -73,6 +75,26 @@ interface Notice {
   tone:   'ok' | 'warn';
   text:   string;
   anchor: NoticeAnchor;
+}
+
+/**
+ * The plan, in one word (8-3).
+ *
+ * A subscription inside its grace window still reads as `Premium`, not as a warning: the
+ * person is paid up as far as they know, and a card that a bank retried successfully must
+ * never have shown them a scare on this page in between. The grace state is disclosed in the
+ * Plan section's note instead, where there is room to say what it actually means.
+ */
+function planLabel(state: PremiumState): string {
+  if (!state.premium) return 'Free';
+  return state.plan === 'lifetime' ? 'Lifetime' : 'Premium';
+}
+
+/** "12 September 2026" — a date someone can check against their bank statement. */
+function renewalDate(at: number): string {
+  return new Date(at).toLocaleDateString(undefined, {
+    year: 'numeric', month: 'long', day: 'numeric',
+  });
 }
 
 /** Total playing time across the library, as "3h 12m" / "12m". */
@@ -144,7 +166,10 @@ export default function ProfileScreen() {
   // Real local data, not mocked — see the note at the top of the file.
   const recordings          = useRecordingsStore((s) => s.recordings);
   const projects            = useMidiProjectsStore((s) => s.projects);
-  const isPurchased         = useSettingsStore((s) => s.isPurchased);
+  // 8-3: paid access, resolved from the account entitlement and the device unlock. The
+  // full plan block (renewal date, manage billing, cancel) is 8-6; this is the honest
+  // rendering of what the resolver already knows.
+  const premiumState        = usePremium();
   const totalRecordingsUsed = useSettingsStore((s) => s.totalRecordingsUsed);
 
   /**
@@ -366,7 +391,7 @@ export default function ProfileScreen() {
             <View style={styles.statRule} />
             <Stat theme={theme} value={playingTime} label="of playing" />
             <View style={styles.statRule} />
-            <Stat theme={theme} value={isPurchased ? 'Lifetime' : 'Free'} label="plan" />
+            <Stat theme={theme} value={planLabel(premiumState)} label="plan" />
           </View>
 
           <Section
@@ -407,22 +432,33 @@ export default function ProfileScreen() {
             title="Plan"
             description="Recording, editing and exporting are free. Paying lifts the session limit."
           >
-            <FieldRow first label="Plan" value={isPurchased ? 'Lifetime' : 'Free'} />
+            <FieldRow first label="Plan" value={planLabel(premiumState)} />
+            {/* Only for a plan that actually has a date. A lifetime row saying "Renews —"
+                invites the question of whether it might stop. */}
+            {premiumState.expiresAt !== undefined && premiumState.plan === 'subscription' && (
+              <FieldRow
+                label={premiumState.inGrace ? 'Payment due' : 'Renews'}
+                value={renewalDate(premiumState.expiresAt)}
+              />
+            )}
             <FieldRow
               label="Sessions"
               value={
-                isPurchased ? 'Unlimited'
+                premiumState.premium ? 'Unlimited'
                 : FREE_TIER_ENABLED ? `${Math.min(totalRecordingsUsed, RECORDING_LIMIT)} of ${RECORDING_LIMIT} used`
                 : 'Unlimited while in development'
               }
             />
             <FieldRow label="Billing">
               <Text style={styles.note}>
-                Subscriptions and web billing arrive with the next release. Existing Google
-                Play purchases carry over.
+                {premiumState.inGrace
+                  ? 'We could not take your last payment. Your access continues for a few days '
+                    + 'while your bank retries — update your card to avoid losing it.'
+                  : 'Subscriptions and web billing arrive with the next release. Existing Google '
+                    + 'Play purchases carry over.'}
               </Text>
             </FieldRow>
-            {!isPurchased && (
+            {!premiumState.premium && (
               <View style={styles.sectionAction}>
                 <Button label="See upgrade options" onPress={() => router.push('/paywall')} variant="primary" />
               </View>
@@ -598,6 +634,13 @@ function MockNotice({ theme }: { theme: Theme }) {
       <Text style={styles.mockCode}>?mock=offline</Text>,{' '}
       <Text style={styles.mockCode}>?mock=syncDiscard</Text>,{' '}
       <Text style={styles.mockCode}>?mock=resolving</Text>.
+      {'\n'}Plan states (8a):{' '}
+      <Text style={styles.mockCode}>?plan=yearly</Text>,{' '}
+      <Text style={styles.mockCode}>?plan=lifetime</Text>,{' '}
+      <Text style={styles.mockCode}>?plan=grace</Text>,{' '}
+      <Text style={styles.mockCode}>?plan=lapsed</Text>,{' '}
+      <Text style={styles.mockCode}>?plan=device</Text>. Combine with{' '}
+      <Text style={styles.mockCode}>&amp;</Text>.
     </Text>
   );
 }

@@ -30,6 +30,7 @@ import { createProject } from '@/audio/midiProject';
 import { Poppins } from '@/constants/fonts';
 import { FONT } from '@/constants/keys';
 import { useTheme } from '@/hooks/useTheme';
+import { usePremium } from '@/hooks/usePremium';
 import { selectHarmonicaType, selectKey, useAppStore } from '@/store/useAppStore';
 import { useMidiProjectsStore } from '@/store/useMidiProjectsStore';
 import { computeEffectiveLimit, resolveSessionGate } from '@/store/sessionGate';
@@ -50,7 +51,8 @@ export function AppSidebar() {
   const saveProject      = useMidiProjectsStore((s) => s.saveProject);
 
   const totalRecordingsUsed = useSettingsStore((s) => s.totalRecordingsUsed);
-  const isPurchased         = useSettingsStore((s) => s.isPurchased);
+  // Paid access, not the `isPurchased` latch (8-3) — a subscription can lapse.
+  const { premium }         = usePremium();
   const ratingStatus        = useSettingsStore((s) => s.ratingStatus);
 
   const [showRatingModal, setShowRatingModal] = useState(false);
@@ -62,7 +64,7 @@ export function AppSidebar() {
 
   function handleStart() {
     if (!selectedKey) return;
-    const gate = resolveSessionGate({ isPurchased, totalRecordingsUsed, ratingStatus });
+    const gate = resolveSessionGate({ isPurchased: premium, totalRecordingsUsed, ratingStatus });
     if (gate === 'showRating') { setShowRatingModal(true); return; }
     if (gate === 'showPaywall') { router.push('/paywall'); return; }
     startRecording();
@@ -75,7 +77,7 @@ export function AppSidebar() {
   // during a real user gesture.
   async function handleUploadAudio() {
     if (!selectedKey) return;
-    const gate = resolveSessionGate({ isPurchased, totalRecordingsUsed, ratingStatus });
+    const gate = resolveSessionGate({ isPurchased: premium, totalRecordingsUsed, ratingStatus });
     if (gate === 'showRating') { setShowRatingModal(true); return; }
     if (gate === 'showPaywall') { router.push('/paywall'); return; }
 
@@ -96,7 +98,7 @@ export function AppSidebar() {
   // parse rather than transcribe — everything either side of that step is shared.
   async function handleUploadMidi() {
     if (!selectedKey) return;
-    const gate = resolveSessionGate({ isPurchased, totalRecordingsUsed, ratingStatus });
+    const gate = resolveSessionGate({ isPurchased: premium, totalRecordingsUsed, ratingStatus });
     if (gate === 'showRating') { setShowRatingModal(true); return; }
     if (gate === 'showPaywall') { router.push('/paywall'); return; }
 
@@ -124,7 +126,7 @@ export function AppSidebar() {
     router.push({ pathname: '/studio', params: { projectId: project.id } });
   }
 
-  const freeCounterLabel = FREE_TIER_ENABLED && !isPurchased
+  const freeCounterLabel = FREE_TIER_ENABLED && !premium
     ? `${Math.min(totalRecordingsUsed, effectiveLimit)} / ${effectiveLimit} free recordings used`
     : null;
 

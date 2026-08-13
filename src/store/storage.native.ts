@@ -6,3 +6,4 @@ export const settingsStorage = createJSONStorage(() => AsyncStorage);
 export const recordingsStorage = createJSONStorage(() => AsyncStorage);
 export const midiProjectsStorage = createJSONStorage(() => AsyncStorage);
 export const authStorage = createJSONStorage(() => AsyncStorage);
+export const entitlementStorage = createJSONStorage(() => AsyncStorage);

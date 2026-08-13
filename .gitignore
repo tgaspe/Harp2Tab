@@ -58,3 +58,8 @@ app-example
 # generated native folders
 /ios
 # /android — bare workflow with custom native code, must be tracked
+
+# Local emulator secrets — never committed (8-2)
+functions/.secret.local
+functions/lib/
+functions/node_modules/

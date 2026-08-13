@@ -38,6 +38,7 @@ import { useRollTransport, formatElapsed } from '@/hooks/useRollTransport';
 import { useEditHistory, useUndoRedoShortcuts } from '@/hooks/useEditHistory';
 import { useHeaderActionStore } from '@/store/useHeaderActionStore';
 import { useTheme } from '@/hooks/useTheme';
+import { getPremium } from '@/hooks/usePremium';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import type { Theme } from '@/theme';
 import type { HarmonicaKey, HarmonicaType, MidiProject, MidiTrackData, TabNote } from '@/types';
@@ -374,8 +375,8 @@ export default function StudioScreen() {
     const track = project.tracks.find((t) => t.id === trackId);
     if (!track) return;
 
-    const { isPurchased, totalRecordingsUsed, ratingStatus } = useSettingsStore.getState();
-    const gate = resolveSessionGate({ isPurchased, totalRecordingsUsed, ratingStatus });
+    const { totalRecordingsUsed, ratingStatus } = useSettingsStore.getState();
+    const gate = resolveSessionGate({ isPurchased: getPremium().premium, totalRecordingsUsed, ratingStatus });
     if (gate === 'showRating')  { setShowRatingModal(true); return; }
     if (gate === 'showPaywall') { router.push('/paywall'); return; }
 

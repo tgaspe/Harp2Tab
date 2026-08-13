@@ -34,9 +34,18 @@ interface Props {
   email:      string;
   onResend:   () => Promise<void>;
   onIVerified: () => Promise<void>;
+  /**
+   * Why confirming matters *here*. Defaults to the sync reason, which is what `/profile` says.
+   *
+   * The paywall overrides it (8-5): on that screen the reason is payment, and telling someone
+   * mid-purchase that confirmation turns on sync explains a feature they did not ask about
+   * instead of the one blocking the button under it.
+   */
+  title?:     string;
+  body?:      React.ReactNode;
 }
 
-export function VerifyBanner({ email, onResend, onIVerified }: Props) {
+export function VerifyBanner({ email, onResend, onIVerified, title, body }: Props) {
   const theme  = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
 
@@ -69,10 +78,10 @@ export function VerifyBanner({ email, onResend, onIVerified }: Props) {
       <Ionicons name="mail-unread-outline" size={22} color={theme.warningDim} style={styles.icon} />
 
       <View style={styles.body}>
-        <Text style={styles.title}>Confirm your email to turn on sync</Text>
+        <Text style={styles.title}>{title ?? 'Confirm your email to turn on sync'}</Text>
         <Text style={styles.desc}>
-          We sent a link to <Text style={styles.email}>{email}</Text>. Everything else works in
-          the meantime — your tabs are saved on this device.
+          We sent a link to <Text style={styles.email}>{email}</Text>.{' '}
+          {body ?? 'Everything else works in the meantime — your tabs are saved on this device.'}
         </Text>
 
         <View style={styles.actions}>

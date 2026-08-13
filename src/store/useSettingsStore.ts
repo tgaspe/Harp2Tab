@@ -80,6 +80,14 @@ export const useSettingsStore = create<SettingsState>()(
       setThemeOverride:         (v) => set({ themeOverride: v }),
       incrementRecordingCount:  () =>
         set((s) => ({ totalRecordingsUsed: s.totalRecordingsUsed + 1 })),
+      /**
+       * The Play Store one-time unlock. **Native's purchase path only, as of 8-3.**
+       *
+       * This is a one-way latch — there is no setter back to `false` — which is correct for a
+       * lifetime purchase and is exactly why web purchases do not come through here. Paid
+       * access on web is a revocable entitlement (`entitlementState.ts`); read it through
+       * `usePremium()` / `getPremium()`, never by reading `isPurchased` directly.
+       */
       setPurchased:             () => set({ isPurchased: true }),
       setRatingStatus:          (s) => set({ ratingStatus: s }),
       setHasCompletedOnboarding: (v) => set({ hasCompletedOnboarding: v }),
