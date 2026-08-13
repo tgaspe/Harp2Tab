@@ -131,6 +131,10 @@ export function convertTrackToRecording(
   }));
 
   const duration = notes.reduce((max, n) => Math.max(max, n.start_time + n.duration), 0);
+  // One clock read for both stamps. A tab that has never been edited was last updated when it
+  // was made, and two `Date.now()` calls would leave them a millisecond apart for no reason —
+  // which is enough to make "has this ever been edited?" untestable by comparison.
+  const now = Date.now();
 
   return {
     recording: {
@@ -139,7 +143,8 @@ export function convertTrackToRecording(
       key,
       harmonicaType,
       tabNotes:      notes,
-      createdAt:     Date.now(),
+      createdAt:     now,
+      updatedAt:     now,
       duration,
       // MIDI carries a real tempo map, but a tab session holds a single BPM, so the
       // opening tempo is what transfers. The map stays with the project.

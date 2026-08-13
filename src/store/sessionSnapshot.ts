@@ -48,6 +48,10 @@ export function saveCurrentSessionToLibrary(title?: string, options?: { asNew?: 
     // library.
     tabNotes,
     createdAt,
+    // Not `createdAt` here, unlike a freshly converted tab: `createdAt` is when the *session
+    // started*, and this snapshot runs when it is saved — after however long the take and the
+    // edits took. Restamped by the store's `touch()` on the way in either way.
+    updatedAt:     Date.now(),
     // Measured across all notes for the same reason: the take is as long as it is,
     // regardless of how much of it is currently hidden. A filtered duration would make the
     // library's listed length change every time either line moved.

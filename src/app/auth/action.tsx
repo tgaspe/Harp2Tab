@@ -17,6 +17,12 @@
  * rewrites unknown paths, so a client-only redirect target does not exist as HTML and a cold
  * load 404s. A Firebase Hosting rewrite is needed alongside it.
  *
+ * TODO(domain): this route's origin moves when the custom domain lands. Firebase mints
+ * action links against `authDomain`, so while that is `harp2tab.firebaseapp.com` every link
+ * points there — and switching invalidates any link already sitting in someone's inbox. The
+ * Hosting rewrite above has to be configured for whichever origin is live. See the block in
+ * `src/auth/useAuth.ts` for the full deferral.
+ *
  * UI-only pass: nothing is verified and no code is consumed. `?mode=` drives the branch and
  * `?state=` forces the outcome so every screen can be reviewed.
  */

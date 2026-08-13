@@ -11,6 +11,12 @@
  * 2. **A visible resend cooldown.** Firebase rate-limits verification mail, so an
  *    unthrottled button eventually starts failing silently. A countdown that says "wait 47s"
  *    is honest; a button that quietly stops working is not.
+ *
+ * TODO(domain): resend is the button users press when the mail did not arrive, so it is the
+ * one most affected by the deferred sender domain — the unbranded default sender is filtered
+ * more aggressively. Expect this to be pressed more than it should be until SPF/DKIM are in
+ * place, and do not tune the cooldown against pre-domain behaviour. See
+ * `src/auth/useAuth.ts`.
  */
 
 import React, { useEffect, useMemo, useState } from 'react';

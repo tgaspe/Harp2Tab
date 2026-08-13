@@ -33,6 +33,18 @@ import type { Theme } from '@/theme';
 
 type Mode = 'signUp' | 'signIn' | 'forgot' | 'sent';
 
+/**
+ * Everything thrown across the `useAuth` seam already carries user-facing copy — that is the
+ * seam's job, and it is why no Firebase error code appears in this file. The fallback exists
+ * only for a genuine programming error reaching here, which should read as a bug report
+ * rather than as advice the user can act on.
+ */
+function messageFor(error: unknown): string {
+  return error instanceof Error && error.message
+    ? error.message
+    : 'Something went wrong. Please try again.';
+}
+
 interface Props {
   visible:      boolean;
   initialMode?: 'signUp' | 'signIn';
@@ -115,6 +127,8 @@ export function AuthModal({ visible, initialMode = 'signUp', onClose, reason }: 
         await auth.sendPasswordReset(email);
         setSentKind('reset');
         setMode('sent');
+      } catch (error) {
+        setFormError(messageFor(error));
       } finally { setBusy(false); }
       return;
     }
@@ -130,14 +144,20 @@ export function AuthModal({ visible, initialMode = 'signUp', onClose, reason }: 
         await auth.signInWithEmail(email, password);
         onClose();
       }
+    } catch (error) {
+      setFormError(messageFor(error));
     } finally { setBusy(false); }
   }
 
   async function handleGoogle() {
+    setFormError(null);
     setBusy(true);
     try {
-      await auth.signInWithGoogle();
-      onClose();
+      // Only dismiss on an actual sign-in. `false` means they closed the Google popup, and
+      // closing this modal too would silently discard whatever they were part-way through.
+      if (await auth.signInWithGoogle()) onClose();
+    } catch (error) {
+      setFormError(messageFor(error));
     } finally { setBusy(false); }
   }
 
@@ -345,7 +365,14 @@ function SwitchLink({
 }
 
 /** The panel after submitting. Deliberately not a spinner: the next step happens in another
- *  app, so the modal has to say what to go and do. */
+ *  app, so the modal has to say what to go and do.
+ *
+ *  TODO(domain): the mail this panel promises currently arrives from
+ *  `noreply@<project>.firebaseapp.com` in Firebase's default wording — a poor first
+ *  impression for a paid product and a real spam-folder risk. Customize the templates and
+ *  verify a sender domain (SPF/DKIM) once the domain is bought. If this copy ever gains a
+ *  "check your spam folder" line, that is a workaround for the missing sender domain, not a
+ *  fix. See `src/auth/useAuth.ts`. */
 function SentPanel({
   theme, email, kind, onBack,
 }: { theme: Theme; email: string; kind: 'verify' | 'reset'; onBack: () => void }) {

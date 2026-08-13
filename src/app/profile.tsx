@@ -33,7 +33,7 @@ import { VerifyBanner } from '@/components/VerifyBanner';
 import {
   Button, DangerHeading, DangerZone, FieldRow, Section,
 } from '@/components/SettingsSurface';
-import { initialsFor, memberSince, useAuth } from '@/auth/useAuth';
+import { initialsFor, joinedOn, memberSince, useAuth } from '@/auth/useAuth';
 import { useTheme } from '@/hooks/useTheme';
 import { useHeaderActionStore } from '@/store/useHeaderActionStore';
 import { useRecordingsStore } from '@/store/useRecordingsStore';
@@ -67,6 +67,30 @@ export default function ProfileScreen() {
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<'signUp' | 'signIn'>('signUp');
   const [deleteOpen, setDeleteOpen]       = useState(false);
+  const [notice, setNotice]               = useState<string | null>(null);
+
+  /**
+   * Wraps an auth action so a failure lands on screen instead of in an unhandled rejection.
+   *
+   * Needed from 7-3 onward: these actions used to `console.warn` and resolve, so every call
+   * site here could ignore the result. They now throw — the ones that are genuinely unbuilt
+   * (7-4's email surface, 7-13's deletion) say so, and the real ones carry copy already
+   * written for a user. Either way the page has to be able to show it, and a button that
+   * silently does nothing is exactly the failure this slice's own rules forbid.
+   */
+  const run = useCallback(
+    (action: () => Promise<unknown>) => async () => {
+      setNotice(null);
+      try {
+        await action();
+      } catch (error) {
+        setNotice(error instanceof Error && error.message
+          ? error.message
+          : 'Something went wrong. Please try again.');
+      }
+    },
+    [],
+  );
 
   // Real local data, not mocked — see the note at the top of the file.
   const recordings          = useRecordingsStore((s) => s.recordings);
@@ -105,10 +129,10 @@ export default function ProfileScreen() {
     useCallback(() => {
       if (!signedIn) return;
       setHeaderActions('/profile', [
-        { key: 'sign-out', icon: 'log-out-outline', label: 'Sign out', onPress: signOut },
+        { key: 'sign-out', icon: 'log-out-outline', label: 'Sign out', onPress: run(signOut) },
       ]);
       return () => clearHeaderActions('/profile');
-    }, [signedIn, signOut, setHeaderActions, clearHeaderActions]),
+    }, [signedIn, signOut, run, setHeaderActions, clearHeaderActions]),
   );
 
   /* ── Resolving ──────────────────────────────────────────────────────────────────────
@@ -207,12 +231,20 @@ export default function ProfileScreen() {
             </View>
           </View>
 
+          {/* Whatever the last action reported. Placed under the identity header rather than
+              beside each control: several of these actions are triggered from the global
+              header or from inside a modal that closes, so a message anchored to the button
+              would appear somewhere the user is no longer looking. */}
+          {!!notice && (
+            <Text style={styles.notice} accessibilityRole="alert">{notice}</Text>
+          )}
+
           {!verified && (
             <View style={styles.bannerWrap}>
               <VerifyBanner
                 email={user.email}
-                onResend={auth.resendVerification}
-                onIVerified={auth.reloadUser}
+                onResend={run(auth.resendVerification)}
+                onIVerified={run(auth.reloadUser)}
               />
             </View>
           )}
@@ -238,13 +270,13 @@ export default function ProfileScreen() {
               first
               label="Name"
               value={user.displayName ?? 'Not set'}
-              action={{ label: 'Edit', onPress: () => auth.updateDisplayName(name) }}
+              action={{ label: 'Edit', onPress: run(() => auth.updateDisplayName(name)) }}
             />
             <FieldRow label="Email" value={user.email} />
-            <FieldRow label="Joined" value={memberSince(user)} />
+            <FieldRow label="Joined" value={joinedOn(user)} />
             <FieldRow
               label="Status"
-              action={verified ? undefined : { label: 'Resend', onPress: auth.resendVerification }}
+              action={verified ? undefined : { label: 'Resend', onPress: run(auth.resendVerification) }}
             >
               <View style={styles.inlineStatus}>
                 <Ionicons
@@ -299,7 +331,7 @@ export default function ProfileScreen() {
             ))}
             <View style={styles.sectionAction}>
               {user.providers.includes('password')
-                ? <Button label="Change password" onPress={() => auth.sendPasswordReset(user.email)} />
+                ? <Button label="Change password" onPress={run(() => auth.sendPasswordReset(user.email))} />
                 : <Button label="Add email and password" onPress={() => openAuth('signUp')} />}
             </View>
           </Section>
@@ -338,7 +370,7 @@ export default function ProfileScreen() {
         visible={deleteOpen}
         tabCount={recordings.length}
         projectCount={projects.length}
-        onConfirm={async () => { await auth.deleteAccount(); setDeleteOpen(false); }}
+        onConfirm={run(async () => { await auth.deleteAccount(); setDeleteOpen(false); })}
         onCancel={() => setDeleteOpen(false)}
       />
 
@@ -448,6 +480,19 @@ function createStyles(t: Theme) {
     },
 
     bannerWrap: { paddingTop: 20 },
+    notice: {
+      marginTop:       16,
+      paddingVertical: 10,
+      paddingHorizontal: 14,
+      borderRadius:    10,
+      backgroundColor: `${t.warning}1A`,
+      borderWidth:     1,
+      borderColor:     `${t.warning}44`,
+      color:           t.textPrimary,
+      fontFamily:      Poppins.regular,
+      fontSize:        FONT.sm,
+      lineHeight:      20,
+    },
 
     // Answers "what do I have here?" before any settings row does, and gives the top of the
     // page density that a run of label/value rows cannot.

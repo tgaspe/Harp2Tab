@@ -1725,11 +1725,20 @@ is no account until payment).
 
 ## Open questions
 
-1. **Custom domain timing — the phase's biggest scheduling risk.** Three things need it:
-   7-1's `authDomain`, 7-4's email sender domain, and 12-3's landing page. Shipping auth on
-   `harp2tab.firebaseapp.com` and migrating later invalidates in-flight links and re-verifies
-   the sender. **Recommendation: buy the domain before Phase 7 starts** — it is a €10
-   purchase gating three separate pieces of work.
+1. ~~**Custom domain timing — the phase's biggest scheduling risk.**~~ **Closed by user
+   decision, 2026-08-13: the domain is deferred, and everything else gets built first.**
+   This reverses the recommendation that stood here (buy before the phase starts). Three
+   things still need it — 7-1's `authDomain`, 7-4's email sender domain, and 12-3's landing
+   page — but they become a single fix-up pass after the purchase rather than a gate on
+   starting. The tree is marked for that pass: **`grep -rn "TODO(domain)" src/`**, with the
+   canonical explanation in `src/auth/useAuth.ts`.
+
+   What the deferral costs, accepted knowingly: sign-in must stay on `signInWithPopup` (7-3's
+   choice anyway — redirect through `*.firebaseapp.com` is the combination that storage
+   partitioning actually breaks); the eventual switch invalidates in-flight links and may
+   force re-verification, **so real signups stay off this build until the domain lands** —
+   dev and internal testing only; and deliverability measured against the default sender says
+   nothing about the branded one.
 2. **Firestore or Realtime Database.** Firestore is assumed throughout (better rules, better
    querying). RTDB is a smaller web bundle and this sync model is a flat key-value mirror
    that would fit it. Worth a bundle measurement in 7-1 before committing — and 7b's deferral

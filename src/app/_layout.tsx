@@ -24,6 +24,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { TopBar } from '@/components/TopBar';
+import { startAuthListener } from '@/auth/useAuthStore';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -48,6 +49,19 @@ export default function RootLayout() {
   useEffect(() => {
     if (fontsLoaded) SplashScreen.hideAsync();
   }, [fontsLoaded]);
+
+  /**
+   * The app's one auth subscription (7-2). Everything else reads the store it writes.
+   *
+   * **Deliberately not joined to the font gate below**, which is what the plan sketched. The
+   * gate exists to stop the signed-out UI rendering for a frame before a persisted session
+   * resolves — but `'resolving'` already handles that at each consumer: `TopBar` renders
+   * neither the avatar nor "Sign in", and `/profile` renders its skeleton. Holding the whole
+   * app instead would put Firebase's resolution on the critical path to first paint, and the
+   * plan is explicit that a slow or failed resolution must render signed-out rather than
+   * extend the splash. Same outcome, without the risk of a blank app if auth never answers.
+   */
+  useEffect(() => startAuthListener(), []);
 
   if (!fontsLoaded) return null;
 

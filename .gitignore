@@ -25,6 +25,13 @@ android/keystore.properties
 # Credentials / secrets
 credentials.json
 
+# Environment — `.env.example` is committed as the list of required keys; the filled-in
+# copies are not. The Firebase web values in them are public by design, but keeping them out
+# of the tree is what lets staging and production differ per machine.
+.env
+.env.local
+.env.*.local
+
 # Claude Code local settings
 .claude/settings.local.json
 

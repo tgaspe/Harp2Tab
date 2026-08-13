@@ -87,6 +87,17 @@ export interface TabRecording {
   tabNotes: TabNote[];
   /** Epoch ms when the session started */
   createdAt: number;
+  /** Epoch ms of the last mutation — title, favourite, notes, either filter lens.
+   *
+   *  Stamped centrally by `touch()` in `useRecordingsStore`, never by callers, for the same
+   *  reason `MidiProject.updatedAt` is: a timestamp that every mutator has to remember to set
+   *  is a timestamp that is eventually wrong.
+   *
+   *  Added ahead of the thing that consumes it. Phase 7b reconciles a local library against a
+   *  cloud one by comparing this field, and there is no way to recover a value for edits that
+   *  happened before it existed — so it ships a phase early, seeded from `createdAt`, and
+   *  accumulates real history in the meantime. */
+  updatedAt: number;
   /** Total length in ms, derived from the last note's start_time + duration */
   duration: number;
   /** Raw frames for Frame Inspector — optional since recordings saved before this
