@@ -87,6 +87,10 @@ export async function reauthenticate(_password?: string): Promise<void> {
   throw new Error(NOT_ON_NATIVE);
 }
 
+export async function deleteAccount(): Promise<void> {
+  throw new Error(NOT_ON_NATIVE);
+}
+
 export async function applyVerificationCode(_oobCode: string): Promise<void> {
   throw new Error(NOT_ON_NATIVE);
 }

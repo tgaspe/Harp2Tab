@@ -17,6 +17,7 @@ import {
   applyActionCode,
   confirmPasswordReset as fbConfirmPasswordReset,
   createUserWithEmailAndPassword,
+  deleteUser as fbDeleteUser,
   linkWithCredential,
   onAuthStateChanged,
   reauthenticateWithCredential,
@@ -384,6 +385,32 @@ export async function reauthenticate(password?: string): Promise<void> {
       await reauthenticateWithPopup(current, new GoogleAuthProvider());
     }
   });
+}
+
+/* ── Deletion (7-13) ──────────────────────────────────────────────────────────────────── */
+
+/**
+ * Deletes the Auth user.
+ *
+ * **Deliberately does not touch local data.** The tabs on this device are the user's own work
+ * and predate the account — most of them were made before they ever signed in. Deleting them
+ * alongside the account would destroy work the account never owned, and the confirmation
+ * dialog promises the opposite in as many words.
+ *
+ * **Scope today is the Auth user only.** There is no Firestore yet (7-12 / 7b), so there is
+ * no subtree and no entitlement document to remove. When those exist this needs the Cloud
+ * Function the plan describes — a client cannot reliably delete a subtree, and a half-deleted
+ * account is worse than an undeleted one. Until then this is complete rather than partial,
+ * because there is genuinely nothing else stored server-side.
+ *
+ * Throws `ReauthRequired` on a stale session, via `mapErrors`. That is not an edge case: the
+ * users most likely to be deleting are the long-dormant ones, who are exactly the users whose
+ * sign-in is old enough for Firebase to refuse.
+ */
+export async function deleteAccount(): Promise<void> {
+  const current = firebaseAuth().currentUser;
+  if (!current) throw new Error('You are not signed in.');
+  await mapErrors('Account deletion', () => fbDeleteUser(current));
 }
 
 /* ── The action-handler codes (7-4's `/auth/action`) ──────────────────────────────────── */

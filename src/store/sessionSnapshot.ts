@@ -81,6 +81,33 @@ export function saveCurrentSessionToLibrary(title?: string, options?: { asNew?: 
  * Recording" from the editor should drop you straight into recording again with whatever
  * key/harmonica you were already using, not send you back to key selection.
  */
+/**
+ * Commits whatever take is in progress before the paywall's sign-in step can lose it (7-6).
+ *
+ * **This is the hard requirement of 7-6, and the one most likely to be skipped.** Creating an
+ * account can end in a confirmation link that opens in a different browser entirely, and a
+ * user who loses the take they were working on while going to pay for the app does not come
+ * back. Everything else in the subscribe gate is ordering; this is the part that protects
+ * work.
+ *
+ * Called from the paywall screen itself rather than from the ten places that route to it.
+ * That is deliberate: a rule enforced at one door cannot be forgotten by the eleventh caller,
+ * and there is no version of "we reached the paywall" where preserving the take is wrong.
+ *
+ * Not `asNew` — if this session came from reopening a library entry, the user's edits belong
+ * back on that entry, not in a duplicate.
+ *
+ * Returns whether anything was actually saved, so the caller can say so. A save the user
+ * cannot see is a save they will not trust.
+ */
+export function preserveSessionForPaywall(): boolean {
+  const { tabNotes, selectedKey, recordingId } = useAppStore.getState();
+  if (!selectedKey || !recordingId || tabNotes.length === 0) return false;
+
+  saveCurrentSessionToLibrary(getDefaultRecordingTitle());
+  return true;
+}
+
 export function startNewRecordingSession(): SessionGateResult {
   const { isPurchased, totalRecordingsUsed, ratingStatus } = useSettingsStore.getState();
   const gate = resolveSessionGate({ isPurchased, totalRecordingsUsed, ratingStatus });

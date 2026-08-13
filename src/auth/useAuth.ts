@@ -5,11 +5,11 @@
  * platform-split `./auth` calls, and the signature did not change. No consumer was touched:
  * that was the point of building the UI against this seam first.
  *
- * What is real and what is not, as of 7-3:
- * - **Real:** the auth state itself, Google sign-in, sign-out, and `reloadUser`.
- * - **Not built yet:** everything email/password, which is 7-4. Those actions still report
- *   themselves as unbuilt rather than failing obscurely or, worse, appearing to work.
- * - **Never real in 7a:** `sync`, which is fixed at `'unavailable'` in the store.
+ * As of 7-13, **every action here is real** — Google, email and password, verification,
+ * reset, linking, re-authentication and deletion. The one exception is `sync`, which is
+ * pinned to `'unavailable'` in the store for the whole of 7a because there is no engine
+ * behind it until 7b, and a green tick with nothing behind it is the one piece of fakery
+ * this phase forbids.
  */
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -49,7 +49,9 @@ import { useCallback } from 'react';
 import { useLocalSearchParams } from 'expo-router';
 import {
   SignInCancelled,
+  deleteAccount,
   linkEmailPassword,
+  reauthenticate,
   resendVerification,
   sendPasswordReset,
   signInWithEmail,
@@ -78,6 +80,9 @@ export interface AuthActions {
   reloadUser:         () => Promise<void>;
   signOut:            () => Promise<void>;
   deleteAccount:      () => Promise<void>;
+  /** Re-signs-in before a sensitive change. `password` is omitted for a Google-only account,
+   *  which has none to re-enter and goes back through the provider popup instead. */
+  reauthenticate:     (password?: string) => Promise<void>;
   updateDisplayName:  (name: string) => Promise<void>;
   linkEmailPassword:  (email: string, password: string) => Promise<void>;
 }
@@ -88,18 +93,6 @@ export interface UseAuthResult extends AuthState, AuthActions {
    *  layout or behaviour. Goes away with the harness at 7-7. */
   isMock: boolean;
 }
-
-/**
- * For the email/password half, which is 7-4.
- *
- * Throws rather than warning now that the rest is real. During the UI-only pass a
- * `console.warn` was right — nothing worked, and the screens said so. Now that Google
- * genuinely signs you in, a silent no-op on the button next to it would be indistinguishable
- * from a bug, and the callers already render thrown messages as form errors.
- */
-const notBuilt = (what: string) => async () => {
-  throw new Error(`${what} is not built yet — email and password sign-in lands in 7-4.`);
-};
 
 /**
  * The active mock, latched for the page session.
@@ -227,9 +220,8 @@ export function useAuth(): UseAuthResult {
     resendVerification,
     linkEmailPassword:  doLinkEmailPassword,
     updateDisplayName:  doUpdateDisplayName,
-    // 7-13, the last of 7a's actions still unbuilt. Deletion is not just a `delete()` call —
-    // it carries the re-auth step, the Firestore subtree and the store-policy obligations.
-    deleteAccount:      notBuilt('Account deletion'),
+    deleteAccount,
+    reauthenticate,
   };
 }
 

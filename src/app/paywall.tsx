@@ -10,6 +10,7 @@ import { useAuth } from '@/auth/useAuth';
 import { FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { RATING_BONUS, RECORDING_LIMIT, useSettingsStore } from '@/store/useSettingsStore';
+import { preserveSessionForPaywall } from '@/store/sessionSnapshot';
 import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
 import type { Theme } from '@/theme';
 
@@ -32,6 +33,17 @@ export default function PaywallScreen() {
   const auth     = useAuth();
   const signedIn = auth.status === 'signedIn' && !!auth.user;
   const [authOpen, setAuthOpen] = useState(false);
+  const [tookPreserved, setTookPreserved] = useState(false);
+
+  /**
+   * Commit the in-progress take the moment this screen opens (7-6).
+   *
+   * Creating an account can finish in a different browser — an email confirmation link is not
+   * guaranteed to open where it was requested — so anything unsaved has to be on disk before
+   * the sign-in step starts, not after it succeeds. Runs once, before the user can press
+   * anything, and does nothing when there is no take in progress.
+   */
+  useEffect(() => { setTookPreserved(preserveSessionForPaywall()); }, []);
 
   useEffect(() => {
     if (!purchased) return;
@@ -80,6 +92,17 @@ export default function PaywallScreen() {
         {/* Error */}
         {error && (
           <Text style={styles.errorText}>{error}</Text>
+        )}
+
+        {/* Saving is invisible otherwise, and an invisible save is one the user cannot rely
+            on — which is the whole reason it happens here. */}
+        {tookPreserved && (
+          <View style={styles.accountStep}>
+            <Ionicons name="save-outline" size={16} color={theme.success} />
+            <Text style={styles.accountStepText}>
+              Your current take is saved to your library — it will be here when you get back.
+            </Text>
+          </View>
         )}
 
         {/* Account step (7-6).

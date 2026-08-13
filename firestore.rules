@@ -1,0 +1,99 @@
+rules_version = '2';
+
+// Harp2Tab Firestore security rules (7-12).
+//
+// Nothing writes to Firestore yet — the sync engine is 7b and the entitlement writer is
+// Phase 8. These land first on purpose: writing under permissive rules and tightening later
+// leaves a window where the emulator and production disagree, and where real user data is
+// protected by nothing.
+//
+// Tested by `scripts/verify-firestore-rules.ts` against the emulator. "Nobody else can read
+// my tabs" is not a property that should be verified by reading this file.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    /**
+     * Whether the address on this account is confirmed.
+     *
+     * **The `google.com` clause is load-bearing, not defensive.** Firebase clears
+     * `email_verified` when an email/password credential is linked to an account — including
+     * one created through Google, where the address was already verified — and sends no
+     * confirmation email when it does. The app therefore treats a Google identity as a
+     * confirmed address (`auth.web.ts`'s `toAuthUser`), and if these rules did not, the two
+     * would disagree: the UI would say confirmed while every sync request was denied. That
+     * failure is invisible from the client and miserable to trace.
+     *
+     * Discovered 2026-08-13 by hitting it. See 7-12 in IMPLEMENTATION_PLAN.md.
+     */
+    function confirmed() {
+      return request.auth.token.email_verified == true
+          || 'google.com' in request.auth.token.firebase.identities;
+    }
+
+    /**
+     * A user's own synced library.
+     *
+     * Confirmation is required, which is 7-4's decision expressed where it can actually be
+     * enforced: an unverified account is fully usable, and sync is the one thing it waits for.
+     */
+    match /users/{uid}/tabs/{tabId} {
+      allow read, write: if isOwner(uid) && confirmed();
+    }
+
+    match /users/{uid}/projects/{projectId} {
+      allow read, write: if isOwner(uid) && confirmed();
+    }
+
+    match /users/{uid}/settings/{docId} {
+      allow read, write: if isOwner(uid) && confirmed();
+    }
+
+    /** Tombstones for deletions, so another device learns a tab was removed rather than
+     *  treating its absence as "not yet uploaded" and pushing it back. */
+    match /users/{uid}/deleted/{tabId} {
+      allow read, write: if isOwner(uid) && confirmed();
+    }
+
+    /**
+     * Entitlement — what the user has paid for. Written only by trusted server code
+     * (Phase 8's RevenueCat webhook or a Cloud Function); the client may only read its own.
+     *
+     * **Top level, deliberately not under `/users/{uid}/`.** Firestore rules are a permissive
+     * union: if any matching rule allows an operation, it is allowed. A
+     * `match /users/{uid}/{document=**}` that granted write would grant write to an
+     * entitlement document nested beneath it *no matter what a more specific rule said* — an
+     * `allow write: if false` underneath would do nothing at all. Disjoint paths are what make
+     * the deny real. This is the single most commonly botched rule in this shape, and getting
+     * it wrong is a paywall bypass.
+     *
+     * **Read does not require `confirmed()`, unlike everything above.** Entitlement gates
+     * paid access, so a rule that could deny it would take a paying customer's purchase away
+     * from them over an email-verification state. Sync is the thing worth withholding; what
+     * someone already bought is not.
+     */
+    match /entitlements/{uid} {
+      allow read:  if isOwner(uid);
+      allow write: if false;
+    }
+
+    /**
+     * Everything else is denied.
+     *
+     * Explicit rather than implicit. Firestore already denies unmatched paths, but writing it
+     * down means a future `match` added above this line is an obvious change to the deny
+     * surface rather than a silent one.
+     */
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

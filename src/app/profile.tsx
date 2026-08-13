@@ -29,6 +29,7 @@ import { AuthModal } from '@/components/AuthModal';
 import { AvatarCircle } from '@/components/AvatarCircle';
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal';
 import { EditNameModal } from '@/components/EditNameModal';
+import { ReauthModal } from '@/components/ReauthModal';
 import { SetPasswordModal } from '@/components/SetPasswordModal';
 import { SyncStatusRow } from '@/components/SyncStatusRow';
 import { VerifyBanner } from '@/components/VerifyBanner';
@@ -44,6 +45,9 @@ import { FREE_TIER_ENABLED, RECORDING_LIMIT, useSettingsStore } from '@/store/us
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { FONT } from '@/constants/keys';
 import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_BOTTOM, WEB_SCREEN_PADDING_TOP } from '@/constants/layout';
+import { ReauthRequired } from '@/auth/auth';
+import { contentToBlob, exportFileName, triggerWebDownload } from '@/export/webDownload';
+import { generateForFormat } from '@/export/generators';
 import type { AuthProviderId } from '@/auth/types';
 import type { Theme } from '@/theme';
 
@@ -63,7 +67,7 @@ const PROVIDER_LABEL: Record<AuthProviderId, string> = {
  * So each result renders beside the control that caused it. `'top'` is still right for the
  * verification banner, which is itself at the top.
  */
-type NoticeAnchor = 'top' | 'profile' | 'signin';
+type NoticeAnchor = 'top' | 'profile' | 'signin' | 'danger';
 
 interface Notice {
   tone:   'ok' | 'warn';
@@ -91,6 +95,7 @@ export default function ProfileScreen() {
   const [notice, setNotice]               = useState<Notice | null>(null);
   const [nameOpen, setNameOpen]           = useState(false);
   const [linkOpen, setLinkOpen]           = useState(false);
+  const [reauthOpen, setReauthOpen]       = useState(false);
 
   /**
    * Wraps an auth action so its outcome lands on screen — both outcomes.
@@ -141,6 +146,67 @@ export default function ProfileScreen() {
   const projects            = useMidiProjectsStore((s) => s.projects);
   const isPurchased         = useSettingsStore((s) => s.isPurchased);
   const totalRecordingsUsed = useSettingsStore((s) => s.totalRecordingsUsed);
+
+  /**
+   * "Export all my tabs" — the data-portability half of 7-13.
+   *
+   * JSON over the whole library, because this is the "give me my data" action rather than a
+   * "give me sheet music" one: it is the only format that survives a round trip with every
+   * note, velocity and filter intact. Per-tab exports in the other formats already exist on
+   * the export screen and are not what this button is for.
+   *
+   * Reuses `generators.ts` exactly as the plan says, so there is no second definition of what
+   * a tab is on disk.
+   *
+   * Web-only, and that is not a gap: native has no auth at all until 7-14, so no signed-in
+   * `/profile` exists there to press this from.
+   */
+  const exportLibrary = useCallback(async () => {
+    if (recordings.length === 0) throw new Error('There is nothing to export yet.');
+    if (Platform.OS !== 'web') throw new Error('Exporting the whole library is web-only for now.');
+
+    const file = generateForFormat(
+      recordings.map((r) => ({
+        name:          r.title,
+        key:           r.key,
+        harmonicaType: r.harmonicaType,
+        notes:         r.tabNotes,
+      })),
+      'JSON',
+    );
+    const stamp = new Date().toISOString().slice(0, 10);
+    triggerWebDownload(
+      contentToBlob(file.content, file.encoding, file.mimeType),
+      exportFileName(`harp2tab_library_${stamp}`, file.ext),
+    );
+  }, [recordings]);
+
+  /**
+   * Deletion, with the re-authentication step it needs.
+   *
+   * `auth/requires-recent-login` is not an edge case here: Firebase refuses to delete on a
+   * stale sign-in, and the people most likely to be deleting are long-dormant ones whose
+   * session is exactly that old. So `ReauthRequired` is caught rather than shown — it is a
+   * step in the flow, not a failure — and the delete is retried once the modal confirms.
+   */
+  const [pendingDelete, setPendingDelete] = useState(false);
+
+  const attemptDelete = useCallback(async () => {
+    try {
+      await auth.deleteAccount();
+      setDeleteOpen(false);
+      setPendingDelete(false);
+    } catch (error) {
+      if (error instanceof ReauthRequired) {
+        setDeleteOpen(false);
+        setPendingDelete(true);
+        setReauthOpen(true);
+        return;
+      }
+      throw error;
+    }
+  }, [auth]);
+
 
   const playingTime = useMemo(
     () => formatPlayingTime(recordings.reduce((sum, r) => sum + (r.duration ?? 0), 0)),
@@ -402,8 +468,13 @@ export default function ProfileScreen() {
           >
             <Button
               label="Export all my tabs"
-              onPress={() => { /* 7-13: whole library through generators.ts */ }}
+              onPress={run(
+                exportLibrary,
+                `Downloaded ${recordings.length} ${recordings.length === 1 ? 'tab' : 'tabs'} as JSON.`,
+                'danger',
+              )}
             />
+            {noticeAt('danger')}
           </Section>
 
           <DangerHeading>Danger zone</DangerHeading>
@@ -421,7 +492,7 @@ export default function ProfileScreen() {
         visible={deleteOpen}
         tabCount={recordings.length}
         projectCount={projects.length}
-        onConfirm={run(async () => { await auth.deleteAccount(); setDeleteOpen(false); })}
+        onConfirm={run(attemptDelete, undefined, 'danger')}
         onCancel={() => setDeleteOpen(false)}
       />
 
@@ -453,6 +524,25 @@ export default function ProfileScreen() {
           setLinkOpen(false);
         }}
         onCancel={() => setLinkOpen(false)}
+      />
+
+      {/* Only ever opened by `attemptDelete` catching `ReauthRequired` — never offered on its
+          own, because re-authenticating is a step inside another action, not something a user
+          would set out to do. `reason` names that action, since a bare "confirm your password"
+          prompt appearing unbidden is indistinguishable from a phishing attempt. */}
+      <ReauthModal
+        visible={reauthOpen}
+        email={user.email}
+        providers={user.providers}
+        reason="to delete your account"
+        onConfirm={async (password) => {
+          await auth.reauthenticate(password);
+          setReauthOpen(false);
+          // Straight back into the delete the user already confirmed. Sending them to type
+          // DELETE a second time would read as the first attempt having failed.
+          if (pendingDelete) await run(attemptDelete, undefined, 'danger')();
+        }}
+        onCancel={() => { setReauthOpen(false); setPendingDelete(false); }}
       />
     </Shell>
   );

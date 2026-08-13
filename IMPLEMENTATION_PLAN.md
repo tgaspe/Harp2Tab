@@ -25,7 +25,10 @@
 >       accounts exist. Three separate pieces of work block on buying the custom domain.
 > - [ ] Phase 8 — Better monetization + remaining web billing
 > - [ ] Phase 9 — iOS version
-> - [ ] Phase 10 — Improve web UI polish
+> - [ ] Phase 10 — Improve web UI polish. Now also holds two items found during Phase 7:
+>       **10-1** two modals that are still phone sheets on a desktop viewport, and **10-2**
+>       modal Escape/focus-trap/focus-restore, which 7a-UI committed to and which is unmet
+>       almost everywhere in the app.
 > - [x] Phase 11 — MIDI Studio (multi-track DAW), except the SoundFont sound module
 >       (11-6), which is blocked on a product decision — see below.
 >       Harnesses: `verify-midi-studio.ts` (65 cases), `verify-export.ts` (16),
@@ -1637,14 +1640,20 @@ over.
   deleting (long-dormant ones).
 - **Local data is not deleted with the account** — the tabs on the device are the user's
   work and predate the account. Say so in the confirmation.
-- **A publicly reachable deletion URL** on the marketing site (12-3), declared in the Play
-  Console Data safety form.
+- ~~**A publicly reachable deletion URL** on the marketing site (12-3), declared in the Play
+  Console Data safety form.~~ **Deferred to Phase 15 (15-A) by the user, 2026-08-13** — it is
+  a Play requirement, and Play has no accounts until native does.
 - **Data export** — GDPR-adjacent and nearly free here, since export already exists: a
   "download all my tabs" action reusing `src/export/generators.ts` over the whole library.
   Include it; it is a paragraph of code and it closes the request that otherwise arrives by
   email.
-- **`PRIVACY_POLICY.md` update and the Play Data safety re-declaration**, per the decision
-  above. Both are release blockers for the Android build, not documentation chores.
+- **`PRIVACY_POLICY.md` update** — **done 2026-08-13.** Accounts, Firebase Authentication as
+  a processor, self-service deletion and export under GDPR, and an explicit statement that the
+  Android app has no accounts.
+- ~~**The Play Data safety re-declaration**~~ — **deferred to Phase 15 (15-A).** It describes
+  the Android app, which collects no account data (`isFirebaseConfigured()` is `false` on
+  native), so there is nothing yet to declare. It becomes a blocker the moment 7-14 ships, and
+  15-A says so.
 
 ## 7-14 · Native parity — **deferred to Phase 15**
 
@@ -1785,6 +1794,48 @@ the wall applies to native (there is no wall).
 ## Phase 10 — Improve web UI polish
 - Lowest risk, can slot in anywhere; sequenced last as cleanup. Deferred hover states on `TabCard` fields, `KeyGrid` cells, `ExportOption` rows, segmented toggles.
 - Optional tech-debt note to address here or separately: the web capture module uses `ScriptProcessorNode`, while the README's own "Web Version Plan" describes an `AudioWorklet` approach — the shipped code and the documented plan disagree; worth reconciling or updating the doc.
+
+### 10-1 · Modals that are phone sheets on a desktop viewport
+*Added 2026-08-13, found while wiring 7-7's name editor.*
+
+`NameRecordingModal` and `RatingModal` / `RatingModal.web` have **no `maxWidth` on the card**,
+which is `width: '100%'`. On a wide window they stretch to within a screen-edge padding of
+both sides. They also carry the rest of the phone-sheet language: centred titles, `flex: 1`
+full-width buttons sized for a thumb, and 24px radii against the 16px the web surfaces use.
+
+Those are the right choices where they came from and the wrong ones on a 1440px page. Every
+other modal already caps its width, so this is two files, not a sweep.
+
+- `NameRecordingModal` — reached on web from `export.tsx`, `edit.tsx` and `RecordingCard.tsx`.
+- `RatingModal.web` — reached from `index.tsx`, `export.tsx`, `studio.tsx`, `edit.tsx`,
+  `AppSidebar.tsx`.
+
+`EditNameModal` is the worked example of the target shape (built for `/profile` at 7-7,
+alongside `SetPasswordModal`): capped card, left-aligned heading, content-sized actions on the
+right, hover states, `cursor: pointer`.
+
+**Do not simply widen `NameRecordingModal` in place** — it has native callers whose current
+shape is correct. Either split by platform extension or gate the sizing on `Platform.OS`.
+
+### 10-2 · Modal accessibility: Escape, focus trap, focus restore
+*Added 2026-08-13, same discovery.*
+
+7a-UI committed to "every modal traps focus, closes on Escape, and returns focus to whatever
+opened it" (see that section's accessibility list, and `project_app_architecture`). Against
+the code as it stands that is **unmet almost everywhere**:
+
+- **Escape closes**: only `EditNameModal`. React Native's `Modal` maps `onRequestClose` to the
+  Android back button and to nothing at all on web, so every other dialog can only be left via
+  its Cancel button — including `AuthModal`, `SetPasswordModal`, `ConfirmDeleteModal`,
+  `ConvertTrackModal`, `ActionSheetModal` and `NameRecordingModal`.
+- **Focus trapping**: nowhere. `accessibilityViewIsModal` is set on several cards, which
+  addresses screen readers but does not stop Tab escaping to the page behind on web.
+- **Focus restoration** on close: nowhere.
+
+Worth doing as **one shared helper applied across every modal** rather than per-dialog — the
+Escape listener is ~6 lines and identical each time, and doing it piecemeal is how three of
+them end up subtly different. Sequenced here rather than in Phase 7 because it is a
+pre-existing gap across the whole app, not something the auth work introduced.
 
 ## Phase 11 — MIDI Studio (multi-track DAW)
 Port Signal's editor surface into the app as a second editing stage, so a user can open a MIDI file in a real multi-track editor, work on it, and convert any track (or tracks) into harmonica tabs. Decided with the user 2026-08-01 after establishing that the existing piano roll is already explicitly modelled on Signal (`PianoRoll.tsx:419` "matches Signal's mouseMode split", `:562`, `:395`) and already carries most of a MIDI editor's interaction surface.
@@ -3444,6 +3495,32 @@ inventory and the suggestions are raw material for that decision.
 **Do not let this phase become a reason to hedge web work.** The rule stands: build the web
 product properly, decide the native subset afterwards. A feature being hard to port is not
 an argument against building it on web.
+
+## 15-A · The two Play Store obligations that accounts create — deferred here
+*Added 2026-08-13, by the user's decision, while finishing 7-13.*
+
+Both were originally scoped as Phase 7 release blockers. **Neither is due until native gets
+accounts**, because both describe the *Android app*, and the Android app collects no account
+data: `isFirebaseConfigured()` returns `false` in `src/auth/firebase.ts`, so the auth listener
+never starts on native and every auth function throws. Accounts are web-only until 7-14, which
+is this phase's decision to make.
+
+They are recorded here so that deciding "native gets accounts" cannot happen without them
+coming with it. **Shipping native auth without both is a policy violation on a live app.**
+
+1. **Play Console Data safety re-declaration.** The form must then declare collection of email
+   addresses and user IDs, linked to identity. Today declaring them would be *inaccurate in
+   the other direction* — the app would be claiming to collect what it does not, which is its
+   own kind of wrong answer on a compliance form.
+2. **A publicly reachable account-deletion URL**, required by Play's data-deletion policy for
+   any app offering accounts. Needs a stable public origin, so it is also gated on the domain
+   purchase (`TODO(domain)`) — the two deferrals overlap and should be resolved together.
+
+**Already done and not deferred:** `PRIVACY_POLICY.md` was updated on 2026-08-13 for web
+accounts (account information collected, Firebase Authentication as a processor, self-service
+deletion and export under GDPR, and an explicit statement that the Android app has no
+accounts). The policy covering more than the Android app does is normal and needs no Play
+change by itself.
 
 ## The state of native today — measured, not assumed
 
