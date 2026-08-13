@@ -1,3 +1,4 @@
+import { AppSidebar } from '@/components/AppSidebar';
 import { KeyGrid } from '@/components/KeyGrid';
 import { RatingModal } from '@/components/RatingModal';
 import { RecordingCard } from '@/components/RecordingCard';
@@ -286,48 +287,6 @@ export default function KeySelectionScreen() {
       <KeyGrid
         selected={selectedKey}
         onSelect={(k: HarmonicaKey) => selectKey_(k)}
-      />
-    </View>
-  );
-
-  // Sidebar-only — plain selectable rows instead of the pill-shaped segmented control
-  // `harmonicaTypeSection` uses elsewhere (hero, native). Same underlying state/handler.
-  const sidebarTypeSection = (
-    <View style={styles.section}>
-      <Text style={styles.sidebarSectionLabel}>HARMONICA TYPE</Text>
-      {(['diatonic', 'chromatic'] as HarmonicaType[]).map((type) => {
-        const active = harmonicaType === type;
-        return (
-          <Pressable
-            key={type}
-            onPress={() => setHarmonicaType(type)}
-            style={({ hovered }: any) => [
-              styles.sidebarTypeRow,
-              active && styles.sidebarTypeRowActive,
-              hovered && !active && styles.sidebarTypeRowHovered,
-            ]}
-            accessibilityRole="radio"
-            accessibilityState={{ checked: active }}
-          >
-            <Text style={[styles.sidebarTypeRowText, active && styles.sidebarTypeRowTextActive]}>
-              {type === 'chromatic' ? '12-Chromatic' : 'Diatonic'}
-            </Text>
-            {active && <Ionicons name="checkmark" size={14} color="#fff" />}
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-
-  // Sidebar-only key grid — same onAccent treatment as the type rows above, sitting
-  // straight on the blue panel instead of in a white card.
-  const sidebarKeySection = (
-    <View style={[styles.section, { marginTop: 12 }]}>
-      <Text style={styles.sidebarSectionLabel}>HARMONICA KEY</Text>
-      <KeyGrid
-        selected={selectedKey}
-        onSelect={(k: HarmonicaKey) => selectKey_(k)}
-        onAccent
       />
     </View>
   );
@@ -693,114 +652,7 @@ export default function KeySelectionScreen() {
             // happens to sit next to the library — sits outside the ScrollView entirely;
             // only the library side scrolls, same app-shell pattern as GitHub/Linear/etc.
             <View style={styles.dashboardShell}>
-              {/* The panel is the chrome and stays put; its *contents* scroll. Unscrollable,
-                  the rail's content (label + 4 actions + key/type picker + free-tier
-                  counter) overflows a short viewport with no way to reach the overflow, so
-                  whatever sits last is simply unreachable. */}
-              <View style={styles.fullSidebar}>
-                <ScrollView
-                  style={styles.sidebarScroll}
-                  contentContainerStyle={styles.sidebarScrollContent}
-                  showsVerticalScrollIndicator={false}
-                >
-                  <View style={styles.sidebarSection}>
-                    <Text style={styles.sidebarSectionLabel}>QUICK ACTIONS</Text>
-
-                    <Pressable
-                      onPress={handleUploadAudio}
-                      disabled={!selectedKey}
-                      style={({ pressed, hovered }: any) => [
-                        styles.sidebarRow,
-                        !selectedKey && styles.sidebarRowDisabled,
-                        (pressed || hovered) && !!selectedKey && styles.sidebarRowPressed,
-                      ]}
-                      accessibilityRole="button"
-                      accessibilityLabel="Upload audio file"
-                      accessibilityState={{ disabled: !selectedKey }}
-                    >
-                      <View style={styles.sidebarRowIconWrap}>
-                        <Ionicons name="cloud-upload-outline" size={16} color="rgba(255,255,255,0.85)" />
-                      </View>
-                      <Text style={styles.sidebarRowText}>Upload Audio</Text>
-                    </Pressable>
-
-                    <Pressable
-                      onPress={handleUploadMidi}
-                      disabled={!selectedKey}
-                      style={({ pressed, hovered }: any) => [
-                        styles.sidebarRow,
-                        !selectedKey && styles.sidebarRowDisabled,
-                        (pressed || hovered) && !!selectedKey && styles.sidebarRowPressed,
-                      ]}
-                      accessibilityRole="button"
-                      accessibilityLabel="Upload MIDI file"
-                      accessibilityState={{ disabled: !selectedKey }}
-                    >
-                      <View style={styles.sidebarRowIconWrap}>
-                        <Ionicons name="musical-note-outline" size={16} color="rgba(255,255,255,0.85)" />
-                      </View>
-                      <Text style={styles.sidebarRowText}>Upload MIDI</Text>
-                    </Pressable>
-
-                    {/* Not gated on a harmonica key, unlike the three above it: a blank
-                        Studio project has no harmonica yet — the key is chosen at
-                        conversion, which is where a tab actually gets produced. */}
-                    <Pressable
-                      onPress={handleNewProject}
-                      style={({ pressed, hovered }: any) => [
-                        styles.sidebarRow,
-                        (pressed || hovered) && styles.sidebarRowPressed,
-                      ]}
-                      accessibilityRole="button"
-                      accessibilityLabel="New MIDI Studio project"
-                    >
-                      {/* `add-circle-outline`, matching the empty-state hero's version of this
-                          same button. `options-outline` — a sliders glyph — read as
-                          "preferences" here; it stays the Studio's *identity* mark on the
-                          project card and on "Open in Studio", where it isn't a create action. */}
-                      <View style={styles.sidebarRowIconWrap}>
-                        <Ionicons name="add-circle-outline" size={16} color="rgba(255,255,255,0.85)" />
-                      </View>
-                      <Text style={styles.sidebarRowText}>New MIDI Project</Text>
-                    </Pressable>
-
-                    {uploadErrorBanner}
-
-                    <Pressable
-                      onPress={handleStart}
-                      disabled={!selectedKey}
-                      style={({ pressed, hovered }: any) => [
-                        styles.sidebarRow,
-                        styles.sidebarRowPrimary,
-                        !selectedKey && styles.sidebarRowDisabled,
-                        (pressed || hovered) && !!selectedKey && styles.sidebarRowPrimaryPressed,
-                      ]}
-                      accessibilityRole="button"
-                      accessibilityLabel="Start Recording"
-                      accessibilityState={{ disabled: !selectedKey }}
-                    >
-                      <View style={styles.sidebarRowIconWrap}>
-                        <View style={styles.recordDot} />
-                      </View>
-                      <Text style={[styles.sidebarRowText, styles.sidebarRowTextPrimary]}>Start Recording</Text>
-                    </Pressable>
-
-                    {/* Permanent, not behind a chevron — the key/type picker is part of the
-                        panel's normal flow so it's always visible, not a toggle to discover.
-                        No card wrapper — sits straight on the panel so the sidebar reads as
-                        one homogeneous blue surface, not a blue frame around a white box. */}
-                    <View style={styles.sidebarInlineDropdown}>
-                      {sidebarTypeSection}
-                      {sidebarKeySection}
-                    </View>
-
-                    {freeCounterLabel && (
-                      <Text style={styles.dashboardCounter}>{freeCounterLabel}</Text>
-                    )}
-                  </View>
-                </ScrollView>
-              </View>
-
+              <AppSidebar />
               <ScrollView
                 style={styles.dashboardMainScroll}
                 contentContainerStyle={styles.dashboardMainScrollContent}
@@ -1350,38 +1202,12 @@ function createStyles(t: Theme) {
       zIndex:          20,
       ...(Platform.OS === 'web' ? { boxShadow: '0 12px 28px rgba(0,0,0,0.18)' } as any : null),
     } as any,
-    // No card here — sits straight on the accent panel (rows use their own onAccent
-    // colors) so the whole sidebar reads as one homogeneous surface, not a blue frame
-    // wrapped around a white box.
-    sidebarInlineDropdown: { marginTop: 10, gap: 16 },
-
-    // Dashboard shell — sidebar and main content as direct flex-row siblings, neither one
-    // wrapped in the page ScrollView. That's what makes the sidebar genuinely full page
-    // height (it stretches to match dashboardShell's own height, which is the full
-    // viewport height via the flex:1 chain from `safe`/`container`) instead of just being
-    // as tall as its own content — only dashboardMainScroll scrolls internally.
+    // Dashboard shell — sidebar (`AppSidebar`) and main content as direct flex-row
+    // siblings, neither one wrapped in the page ScrollView. That's what makes the sidebar
+    // genuinely full page height (it stretches to match dashboardShell's own height, which
+    // is the full viewport height via the flex:1 chain from `safe`/`container`) instead of
+    // just being as tall as its own content — only dashboardMainScroll scrolls internally.
     dashboardShell: { flexDirection: 'row', flex: 1 },
-    // Accent-filled, flush to the true viewport edges (no radius, no margin) — clearly its
-    // own persistent region, not a card floating in the page. The white/near-black widget
-    // cards inside (Reddit-sidebar-style: distinct titled blocks, no border, just a soft
-    // shadow lifting them off the colored background) are what read as "division" from the
-    // rest of the page, not a hairline.
-    fullSidebar: {
-      width:              300,
-      flexShrink:         0,
-      backgroundColor:    t.sidebarBg,
-      // The literal top-to-bottom division line the color contrast alone wasn't enough of.
-      // Dark mode inverts it: the rail is darker than the page there, so a black hairline
-      // would blend into both sides instead of dividing them.
-      borderRightWidth:   1,
-      borderRightColor:   t.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.18)',
-    },
-    // The padding moved off `fullSidebar` and onto the scroll content so the panel's
-    // background and its right-edge hairline still run the full height while only the
-    // contents scroll. Still needed with the stats gone: the label, four action rows, the
-    // key/type picker and the free-tier counter overflow a short viewport on their own.
-    sidebarScroll:        { flex: 1 },
-    sidebarScrollContent: { paddingHorizontal: 20, paddingVertical: 28 },
     dashboardMainScroll: { flex: 1 },
     dashboardMainScrollContent: {
       paddingHorizontal: 40,
@@ -1397,45 +1223,6 @@ function createStyles(t: Theme) {
       letterSpacing: -0.3,
     },
     dashboardSubtitle: { fontSize: FONT.sm, fontFamily: Poppins.regular, color: t.textMuted },
-
-    // Plain row content directly on the accent panel — no card, no pill, no shadow.
-    sidebarSection: { gap: 8 },
-    sidebarSectionLabel: {
-      fontSize:      FONT.xs,
-      fontFamily:    Poppins.bold,
-      color:         '#fff',
-      letterSpacing: 1,
-      marginBottom:  6,
-    },
-    dashboardCounter: { fontSize: 10, fontFamily: Poppins.regular, color: 'rgba(255,255,255,0.65)', marginTop: 4 },
-
-    sidebarRow: {
-      flexDirection:     'row',
-      alignItems:        'center',
-      gap:               10,
-      paddingVertical:   10,
-      paddingHorizontal: 12,
-      borderRadius:      10,
-      backgroundColor:   'rgba(255,255,255,0.14)',
-      borderWidth:       1,
-      borderColor:       'rgba(255,255,255,0.22)',
-      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
-    } as ViewStyle,
-    // Start Recording — the primary action, so it gets a solid white pill that pops off
-    // the accent panel instead of the translucent chrome every other row uses.
-    sidebarRowPrimary: {
-      backgroundColor: '#fff',
-      borderColor:     '#fff',
-    },
-    sidebarRowPrimaryPressed: { backgroundColor: t.accentSoft },
-    sidebarRowPressed:  { backgroundColor: 'rgba(255,255,255,0.22)' },
-    sidebarRowDisabled: { opacity: 0.55 },
-    sidebarRowIconWrap: { width: 22, alignItems: 'center', justifyContent: 'center' },
-    // Row-level opacity (sidebarRowDisabled) handles the disabled dimming — no separate
-    // text-color override needed on top of it.
-    sidebarRowText: { flex: 1, fontSize: FONT.sm, fontFamily: Poppins.semiBold, color: '#fff' },
-    // On the solid white pill (sidebarRowPrimary) — needs accentDeep, see editStyles.
-    sidebarRowTextPrimary: { color: t.accentDeep },
 
     // The header's stat strip. `flexWrap` rather than a fixed row: three pills fit any
     // desktop width the dashboard layout appears at, but the strip shouldn't be the thing
@@ -1512,26 +1299,6 @@ function createStyles(t: Theme) {
       color:      t.textSub,
     },
     segmentTextActive: { color: '#fff' },
-
-    // Sidebar-only alternative to the segmented pill above — plain selectable rows on the
-    // inline dropdown's white card background.
-    sidebarTypeRow: {
-      flexDirection:     'row',
-      alignItems:        'center',
-      justifyContent:    'space-between',
-      paddingVertical:   10,
-      paddingHorizontal: 10,
-      borderRadius:      8,
-      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
-    } as ViewStyle,
-    sidebarTypeRowActive:  { backgroundColor: 'rgba(255,255,255,0.18)' },
-    sidebarTypeRowHovered: { backgroundColor: 'rgba(255,255,255,0.08)' },
-    sidebarTypeRowText: {
-      fontSize:   FONT.sm,
-      fontFamily: Poppins.semiBold,
-      color:      'rgba(255,255,255,0.85)',
-    },
-    sidebarTypeRowTextActive: { color: '#fff' },
 
     sectionLabel: {
       fontSize:      FONT.xs,

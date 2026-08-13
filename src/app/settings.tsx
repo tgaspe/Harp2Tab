@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { SliderInput } from '@/components/SliderInput';
 import { Toggle } from '@/components/Toggle';
+import { useAuth } from '@/auth/useAuth';
 import { useTheme } from '@/hooks/useTheme';
 import { availableAlgorithms } from '@/audio/algorithms';
 import {
@@ -36,6 +37,7 @@ export default function SettingsScreen() {
   const setCompactTakes     = useSettingsStore((s) => s.setCompactTakes);
   const setMaxTakeMinutes   = useSettingsStore((s) => s.setMaxTakeMinutes);
   const resetTranscriptionParams = useSettingsStore((s) => s.resetTranscriptionParams);
+  const auth               = useAuth();
 
   const engines = useMemo(() => availableAlgorithms(), []);
 
@@ -94,6 +96,44 @@ export default function SettingsScreen() {
           )}
 
           <View style={styles.sectionsGrid}>
+
+            {/* ACCOUNT — the entry point to /profile.
+                Required, not a convenience: TopBar returns null on native (TopBar.tsx), so
+                without this row /profile is unreachable there. The split is deliberate —
+                /profile holds what belongs to the user, this screen holds what belongs to
+                the device. */}
+            <View style={styles.sectionBlock}>
+              <Text style={styles.sectionLabel}>ACCOUNT</Text>
+              <View style={styles.card}>
+                <Pressable
+                  onPress={() => router.push('/profile')}
+                  style={({ pressed, hovered }: any) => [
+                    styles.cardRow,
+                    styles.cardRowCursor,
+                    Platform.OS === 'web' && hovered && styles.cardRowHover,
+                    pressed && { opacity: 0.6 },
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel={auth.user ? 'Open your profile' : 'Sign in or create an account'}
+                >
+                  <Ionicons
+                    name={auth.user ? 'person-circle-outline' : 'log-in-outline'}
+                    size={20}
+                    color={theme.textSub}
+                    style={styles.rowIcon}
+                  />
+                  <View style={styles.rowBody}>
+                    <Text style={styles.rowLabel}>{auth.user ? 'Profile' : 'Sign in'}</Text>
+                    <Text style={styles.rowDesc}>
+                      {auth.user
+                        ? auth.user.email
+                        : 'Keep your tabs and open them on any device you play on.'}
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color={theme.textMuted} />
+                </Pressable>
+              </View>
+            </View>
 
             {/* AUDIO */}
             <View style={styles.sectionBlock}>

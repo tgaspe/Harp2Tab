@@ -1,10 +1,12 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Image, Platform, Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/hooks/useTheme';
 import { useIAP } from '@/hooks/useIAP';
+import { AuthModal } from '@/components/AuthModal';
+import { useAuth } from '@/auth/useAuth';
 import { FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { RATING_BONUS, RECORDING_LIMIT, useSettingsStore } from '@/store/useSettingsStore';
@@ -26,6 +28,10 @@ export default function PaywallScreen() {
   const effectiveLimit = RECORDING_LIMIT + (ratingStatus === 'rated' ? RATING_BONUS : 0);
 
   const { product, purchasing, restoring, error, purchased, buy, restore } = useIAP();
+
+  const auth     = useAuth();
+  const signedIn = auth.status === 'signedIn' && !!auth.user;
+  const [authOpen, setAuthOpen] = useState(false);
 
   useEffect(() => {
     if (!purchased) return;
@@ -76,25 +82,52 @@ export default function PaywallScreen() {
           <Text style={styles.errorText}>{error}</Text>
         )}
 
+        {/* Account step (7-6).
+            Sign-in happens *before* the purchase call, never after: an entitlement that
+            arrives before the identity it belongs to is precisely the reconciliation problem
+            Phase 8 exists to avoid, recreated on purpose. This is also the only place in the
+            app where an account is required — everything else stays free and signed out. */}
+        {signedIn ? (
+          <View style={styles.accountStep}>
+            <Ionicons name="checkmark-circle" size={16} color={theme.success} />
+            <Text style={styles.accountStepText} numberOfLines={1}>
+              Purchasing as {auth.user!.email}
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.accountStep}>
+            <Ionicons name="person-circle-outline" size={16} color={theme.textSub} />
+            <Text style={styles.accountStepText}>
+              You&apos;ll create an account next, so your purchase works on every device.
+            </Text>
+          </View>
+        )}
+
         {/* Purchase button */}
         <View style={styles.buttons}>
           <Pressable
-            onPress={buy}
-            disabled={busy || !product}
+            onPress={signedIn ? buy : () => setAuthOpen(true)}
+            disabled={signedIn && (busy || !product)}
             style={({ pressed, hovered }: any) => [
               styles.buyBtn,
-              (busy || !product) && styles.buyBtnDisabled,
-              (pressed || (Platform.OS === 'web' && hovered)) && !busy && !!product && styles.buyBtnPressed,
+              signedIn && (busy || !product) && styles.buyBtnDisabled,
+              (pressed || (Platform.OS === 'web' && hovered)) && !busy && (!signedIn || !!product) && styles.buyBtnPressed,
             ]}
             accessibilityRole="button"
-            accessibilityLabel="Unlock Full App"
+            accessibilityLabel={signedIn ? 'Unlock Full App' : 'Continue to create your account'}
           >
             {purchasing ? (
               <ActivityIndicator color="#fff" />
             ) : (
               <>
-                <Ionicons name="lock-open-outline" size={20} color="#fff" />
-                <Text style={styles.buyBtnText}>Unlock Full App</Text>
+                <Ionicons
+                  name={signedIn ? 'lock-open-outline' : 'arrow-forward-outline'}
+                  size={20}
+                  color="#fff"
+                />
+                <Text style={styles.buyBtnText}>
+                  {signedIn ? 'Unlock Full App' : 'Continue'}
+                </Text>
               </>
             )}
           </Pressable>
@@ -118,6 +151,13 @@ export default function PaywallScreen() {
         </Pressable>
 
       </View>
+
+      <AuthModal
+        visible={authOpen}
+        initialMode="signUp"
+        onClose={() => setAuthOpen(false)}
+        reason="Your purchase is tied to your account, so it works on every device you play on — including the web version."
+      />
     </SafeAreaView>
   );
 }
@@ -125,6 +165,24 @@ export default function PaywallScreen() {
 function createStyles(t: Theme) {
   return StyleSheet.create({
     safe:      { flex: 1, backgroundColor: t.bg },
+    accountStep: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      gap:               8,
+      backgroundColor:   t.surface,
+      borderWidth:       1,
+      borderColor:       t.border,
+      borderRadius:      12,
+      paddingHorizontal: 14,
+      paddingVertical:   10,
+    },
+    accountStepText: {
+      flex:       1,
+      fontSize:   FONT.xs,
+      fontFamily: Poppins.regular,
+      color:      t.textSub,
+      lineHeight: 16,
+    },
     container: {
       flex: 1,
       ...webMaxWidth(WEB_CONTENT_WIDTH.narrow),

@@ -3,6 +3,8 @@ import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '@/hooks/useTheme';
+import { AvatarCircle } from '@/components/AvatarCircle';
+import { initialsFor, useAuth } from '@/auth/useAuth';
 import { FONT } from '@/constants/keys';
 import { SpaceGrotesk, Poppins } from '@/constants/fonts';
 import { useAppStore, selectViewMode, selectSourceProjectId } from '@/store/useAppStore';
@@ -12,7 +14,11 @@ import { selectMidiProjects, useMidiProjectsStore } from '@/store/useMidiProject
 import type { Theme } from '@/theme';
 
 // Routes that had their own gear->settings shortcut before TopBar existed.
-const GEAR_ROUTES = ['/', '/recording', '/edit', '/export', '/studio'];
+// `/profile` is here and `/settings` deliberately is not: the two screens are each other's
+// counterpart, so each shows the way to the other and neither shows the way to itself.
+const GEAR_ROUTES = ['/', '/recording', '/edit', '/export', '/studio', '/profile'];
+// Same rule in the other direction — the account control is pointless on the page it opens.
+const ACCOUNT_HIDDEN_ROUTES = ['/profile'];
 // Only the two routes that already had a back arrow before TopBar existed —
 // deliberately not router.canGoBack(), so we don't invent a "go back
 // mid-recording" affordance that didn't exist before.
@@ -43,6 +49,8 @@ export function TopBar() {
   // action set by a screen that's still mounted underneath can't render here.
   const headerActions = useHeaderActionStore(selectHeaderActions(pathname));
 
+  const auth = useAuth();
+
   // Set when the open tab was converted out of a Studio project. The project may since
   // have been deleted, so it's resolved rather than trusted — a miss means "source gone".
   const sourceProjectId = useAppStore(selectSourceProjectId);
@@ -55,6 +63,7 @@ export function TopBar() {
 
   const showBack = BACK_ROUTES.includes(pathname);
   const showGear = GEAR_ROUTES.includes(pathname);
+  const showAccount = !ACCOUNT_HIDDEN_ROUTES.includes(pathname);
   const showViewToggle = VIEW_TOGGLE_ROUTES.includes(pathname) && tabNotes.length > 0;
   const showBackToStudio = STUDIO_CRUMB_ROUTES.includes(pathname) && sourceProject !== null;
 
@@ -182,6 +191,44 @@ export function TopBar() {
           <Ionicons name="settings-outline" size={24} color={theme.textSub} />
         </Pressable>
         )}
+
+        {/* Account. Signed out this is a text button rather than a placeholder avatar —
+            an empty circle invites a click without saying what it does, and this is the
+            app's only always-visible route into an account.
+            Hidden on `/profile` itself: a control whose only job is to open the page you are
+            already reading is noise, and the gear takes its place there instead. */}
+        {!showAccount ? null : auth.status === 'signedIn' && auth.user ? (
+          <Pressable
+            onPress={() => router.push('/profile')}
+            style={({ pressed, hovered }: any) => [
+              styles.avatarBtn,
+              (pressed || hovered) && styles.avatarBtnHovered,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel={`Profile — signed in as ${auth.user.email}`}
+          >
+            <AvatarCircle initials={initialsFor(auth.user)} size={30} />
+            {/* Unverified is worth surfacing here, not only on /profile: sync is withheld
+                until it clears, and the top bar is the one place seen on every screen. */}
+            {!auth.user.emailVerified && <View style={styles.avatarBadge} />}
+          </Pressable>
+        ) : auth.status === 'signedOut' ? (
+          <Pressable
+            onPress={() => router.push('/profile')}
+            style={({ pressed, hovered }: any) => [
+              styles.signInBtn,
+              (pressed || hovered) && styles.signInBtnHovered,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Sign in"
+          >
+            <Text style={styles.signInText}>Sign in</Text>
+          </Pressable>
+        ) : (
+          // Resolving: hold the space rather than render a button that is about to be
+          // replaced by an avatar. A bar that reflows on every load reads as a glitch.
+          <View style={styles.avatarPlaceholder} />
+        )}
       </View>
     </View>
   );
@@ -208,6 +255,42 @@ function createStyles(t: Theme) {
       flexDirection: 'row',
       alignItems:    'center',
       gap:           6,
+    },
+    avatarBtn: {
+      borderRadius: 999,
+      padding:      2,
+      borderWidth:  2,
+      borderColor:  'transparent',
+      cursor:       'pointer',
+    } as any,
+    avatarBtnHovered: { borderColor: t.border },
+    // Warning dot for an unconfirmed email. Deliberately not a count badge — there is
+    // nothing to count, only one thing to do.
+    avatarBadge: {
+      position:        'absolute',
+      right:           0,
+      top:             0,
+      width:           10,
+      height:          10,
+      borderRadius:    5,
+      backgroundColor: t.warning,
+      borderWidth:     2,
+      borderColor:     t.surface,
+    },
+    avatarPlaceholder: { width: 34, height: 34 },
+    signInBtn: {
+      paddingHorizontal: 14,
+      paddingVertical:   7,
+      borderRadius:      10,
+      borderWidth:       1,
+      borderColor:       t.border,
+      cursor:            'pointer',
+    } as any,
+    signInBtnHovered: { backgroundColor: t.surfaceAlt },
+    signInText: {
+      fontSize:   FONT.sm,
+      fontFamily: Poppins.semiBold,
+      color:      t.textSub,
     },
     right: {
       flexDirection: 'row',

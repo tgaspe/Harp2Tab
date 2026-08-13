@@ -12,10 +12,17 @@
 >       compressed-audio decode deferred
 > - [x] Phase 6 — MIDI upload → tab conversion
 > - [ ] Phase 7 — User accounts (Firebase Auth) + cloud sync. Detailed plan written
->       2026-08-12: sign-in is the small half, the sync engine is the phase, and account
->       deletion + a privacy-policy/Data-safety update are release blockers on an app that
->       is already live. Carries a scheduling dependency on 12-3's custom domain, and the
->       entitlement read path that Phase 8 writes to.
+>       2026-08-12. **Now split: 7a (accounts) ships here, 7b (the sync engine) ships after
+>       Phase 8** — under the subscribe-time signup model there is nobody with an account to
+>       sync until billing exists. Decisions taken by the user the same day: local-first
+>       storage with a cloud mirror; **Google + email/password** (superseding the locked
+>       email-link decision); **accounts created at subscribe, plus a voluntary sign-in
+>       everywhere** (an earlier same-day save/export wall was dropped — it would have
+>       removed the live app's only output); **free accounts get sync**; and a full
+>       **`/profile` route** (which answers 12-4). Sign-in is the small half — the
+>       email/password surface, `/profile` and the merge engine are the work. Account
+>       deletion + a privacy-policy/Data-safety update are release blockers the moment
+>       accounts exist. Three separate pieces of work block on buying the custom domain.
 > - [ ] Phase 8 — Better monetization + remaining web billing
 > - [ ] Phase 9 — iOS version
 > - [ ] Phase 10 — Improve web UI polish
@@ -37,6 +44,14 @@
 >       first polyphonic engine native could run. Independent of every other phase — it adds
 >       files under `src/audio/` and one registry entry, and changes nothing in the pipeline
 >       it plugs into. Starts with a measurement step that can cancel the phase.
+> - [ ] Phase 15 — **Native port scope — a deferred decision, not scheduled work**
+>       (added 2026-08-12). Holds the question of which features get ported to native at
+>       all, collected from every phase that parked one (7-14, 11's "may drop features",
+>       5c, 13's native no-ops). Native is measurably further along than the phase text
+>       above implies — recording, playback, MIDI import and IAP are all real there — and
+>       it has one known dead end: the Studio's Export lives in a `TopBar` that is `null`
+>       on native. **This phase does not license hedging web work**; the rule in
+>       `feedback_web_first_no_mobile_hedging` still stands.
 >
 > **Phase 11 — what shipped, against what was planned**
 > - 11-1…11-5, 11-8…11-10 complete. End-to-end: import MIDI → Open in Studio → edit →
@@ -595,9 +610,52 @@ data was lost. The field is also what the library list needs to badge how each t
 # Phase 7 — Detailed implementation plan (written 2026-08-12)
 
 Expands the two lines above against the code as it stands after Phases 0–6 and 11. The
-summary describes this phase as sign-in plus sync, which is right, but it hides where the
-work actually is: **sign-in is a week, sync is the phase**, and account deletion is a
-store-policy obligation on an app that is already live rather than a follow-up.
+summary describes this phase as sign-in plus sync, which is right, but it hides three
+quarters of the work. This phase is really five things:
+
+1. **Sign-in** — Google plus email/password. The smallest part.
+2. **Everything email/password drags in** — a confirmation email, a verification state, a
+   password reset flow, one shared action-handler route, and branded email delivery. This
+   is bigger than the sign-in itself and is the part that gets underestimated.
+3. **`/profile` and the signup trigger** — new product surface, not plumbing.
+4. **The sync engine** — the riskiest code in the phase, the only place a bug silently
+   destroys a user's work, and **the part that now ships after Phase 8** (see the staging
+   decision below).
+5. **Account deletion, the privacy policy and the Play Data safety re-declaration** —
+   store-policy obligations, not follow-ups.
+
+**Seven decisions were taken by the user on 2026-08-12** and are settled below rather than
+left open: local-first storage with a cloud mirror; Google + email/password as the sign-in
+methods; **accounts created at subscribe and offered voluntarily anywhere**; **free accounts
+get sync**; a full **`/profile` route**; and **the phase splits into 7a (accounts, now) and
+7b (sync, after Phase 8)**. Three of them overturn what was previously written down — see
+the decision notes.
+
+## What is actually live, and what is not
+
+Checked against `main` on 2026-08-12, because most of this plan's risk assessment depends on
+what real users already have. **`web_version` is 22 commits ahead of `main` and `main` is
+fully contained in it** — a clean fast-forward when it merges.
+
+The live Android app is much smaller than this branch:
+
+- **It has `useAppStore` and `useSettingsStore`. That is all.** No `useRecordingsStore`, no
+  `sessionSnapshot`, no `recordingsMigration`. The library, import, Studio, Frame Inspector
+  and piano roll are all web_version-only.
+- **There is no saved library on the live app.** A session is ephemeral: record → edit →
+  export, then it is gone. So there is no shipped library to grandfather, migrate or
+  reconcile — a real simplification, and the opposite of what this plan first assumed.
+- **`handleSave` on the live app means "write the export file to Downloads"**
+  (`main:src/app/export.tsx:54`), not "save to library". On Android today, save *is* export
+  — it is the app's only output.
+- **The free tier is genuinely active on `main`** (commit `fa3c542`), where
+  `FREE_TIER_ENABLED` does not exist at all. It is `false` only on `web_version`, for
+  development (`useSettingsStore.ts:24`). **Real users hit the 3-session paywall today** —
+  which is what makes the subscribe-time signup decision below land on an existing moment
+  rather than a new one.
+- The only signals available in a shipped install's persisted `harp2tab-settings` blob are
+  `micSensitivity`, `totalRecordingsUsed`, `isPurchased`, `hasCompletedOnboarding` and
+  `ratingStatus`. Any "is this an existing user" test has to be built from those five.
 
 ## The organizing idea: identity is additive, and the cloud is a mirror
 
@@ -678,7 +736,7 @@ SDK's — nothing outside `src/lib/` should import a Firebase type, or the platf
 leaks into every consumer.
 
 **Web ships first and native follows** (`feedback_web_first_no_mobile_hedging`). The native
-half is scoped in 7-11 rather than deferred silently, but nothing in the web work waits on
+half is scoped in 7-14 rather than deferred silently, but nothing in the web work waits on
 it, and the native stub returning "not available on this platform" is a legitimate
 intermediate state.
 
@@ -690,13 +748,112 @@ they later sign in for real, and — the actual disqualifier — an entitlement 
 a UID nobody can ever recover, which is precisely the mess Phase 8's grandfathering is
 already trying to avoid. Signed-out is a real, first-class, fully functional state.
 
-### Sign-in is never a wall
+### Google and email/password — and this overturns the locked email-link decision
 
-There is no gate, no interstitial and no "sign in to continue". The only entry points are
-the account section in Settings (7-4) and a dismissible one-line prompt after a tab is
-saved. Two reasons, both concrete: 12-5 is in the middle of deleting the app's *existing*
-first-launch interruption for being the wrong first impression, and 12-3's landing page
-cannot be a landing page if its first interaction is an auth prompt.
+**User decision, 2026-08-12.** `project_web_version_plan` (2026-07-29) and the Phase 7
+summary both say "Google Sign-In + email link (passwordless) first". That is superseded:
+the methods are **Google and email + password with a confirmation email**. Recording it
+explicitly because it was a locked decision and the memory needs updating with it, not
+quietly contradicting.
+
+The trade is deliberate and worth naming, because it is the source of most of items 2 above:
+email link needs no password, no reset flow and no confirmation email — the link *is* the
+verification. Email/password is the flow every user already understands, and it is the one
+that works when someone's mail client mangles a magic link. Choosing it buys familiarity
+and pays for it with a verification state machine, a reset flow, a shared action-handler
+route and email deliverability. All of that is scoped in 7-4 rather than discovered later.
+
+**Apple is still forced in Phase 9.** Not selected here, and it does not need to be:
+shipping Google on iOS obliges Sign in with Apple by App Store rule. The only Phase 7
+obligation is that the sign-in modal's button column is laid out to take a third provider
+without redesign.
+
+Deliberately excluded: Facebook, GitHub, Microsoft, phone auth, and anonymous auth.
+
+### Accounts are created at subscribe, and offered voluntarily anywhere. No save/export wall.
+
+**User decision, 2026-08-12**, replacing an earlier same-day decision to wall save/export.
+That wall is dropped entirely. There are exactly two ways to get an account:
+
+- **Required at subscribe.** You cannot pay without an identity to attach the entitlement to.
+- **Offered voluntarily, always** — the TopBar avatar and `/profile`, pitched on sync.
+
+Recording, transcribing, editing, playing, saving to the library and exporting all stay free
+and fully available signed out, exactly as they are today.
+
+**Why this beats the wall, on three counts:**
+
+1. **It is the only moment where the account serves the user's own goal.** Paying requires an
+   identity; nobody resents signing up to buy. A save/export wall asks for an account so
+   *we* get an email address, and the user can feel the difference.
+2. **Nothing is taken away from anyone.** The live app's users already hit a 3-session
+   paywall — that gate exists and is active on `main` today. Adding "create an account" to a
+   screen they already see removes no capability. A wall on export would have removed the
+   app's only output (see the live-state section: on Android, save *is* export).
+3. **It collapses the two-gate sequencing problem.** The previous design had a signup wall at
+   session end and a paywall at session start, with an explicit note that a user must never
+   hit both in a row. One gate, one moment, no sequencing rule to get wrong.
+
+**The catch it must not create, and the reason the voluntary door is mandatory:** an existing
+Play Store lifetime buyer never hits the paywall again. Under subscribe-only signup they
+would never create an account, never get a UID, and arrive on the web version as a brand-new
+free user asked to pay for what they already own — precisely the promise-break Phase 8
+already flags. **The people who most need an account are the ones who will never see the
+gate**, so the voluntary entry point is not a nicety, it is the claim path.
+
+**What this does to the grandfathering work:** almost all of it disappears. There is no
+capability being removed, so there is no `preAccountUser` flag, no seeding migration, and no
+negative test to write. The live-state check above also showed the flag as originally
+specified could not have worked — it keyed on a non-empty recordings library, and the
+shipped app has no library at all.
+
+**What survives from the wall's design** is part 3, now attached to the paywall instead:
+**the in-progress take must survive the sign-in round trip.** Google is a popup and returns
+to the same page, but email sign-up ends in a confirmation link that may be opened in another
+browser entirely. The session must be persisted locally *before* the subscribe flow opens.
+This is the detail most likely to be skipped, and it is now the only thing standing between
+"I signed up to keep playing" and "I lost the take I was working on".
+
+**One consequence to accept:** the three free sessions stay per-device, because there is no
+account until payment. `totalRecordingsUsed` remains local and remains trivially resettable
+by clearing storage. This closes an open question the previous design had to leave open, and
+it is the correct trade — server-enforcing a free tier costs a Cloud Function on every
+session start, to protect a limit whose whole purpose is to be hit.
+
+### Free accounts get sync
+
+**User decision, 2026-08-12.** Sync is not part of the subscription; the subscription sells
+unlimited sessions.
+
+This is what makes the voluntary door worth walking through. If sync were paid, a free
+account would confer nothing, nobody would create one, and the model would collapse back to
+accounts-only-at-payment — losing both the email capture and the lifetime buyers' claim path.
+The storage cost is a few hundred KB per user against the sizes measured below.
+
+### The phase splits: 7a now, 7b after Phase 8
+
+**User decision, 2026-08-12**, and a direct consequence of the two above. Same convention as
+Phase 5's 5a/5b split.
+
+| | contents | when |
+|---|---|---|
+| **7a — accounts** | 7-1…7-9, 7-12, 7-13 — bootstrap, auth store, Google, email/password, linking, the subscribe gate, `/profile`, the modal, the `updatedAt` schema, rules, deletion | now |
+| **7b — sync** | 7-10, 7-11 — the merge engine, orchestration, first-sign-in adoption | after Phase 8 |
+| **7-14 — native** | the platform half of everything above | after both |
+
+The reasoning: under this model an account exists mainly to hold a subscription, so until
+Phase 8 ships there is nobody with an account to sync. Building the riskiest code in the
+roadmap for zero users means it sits unexercised until billing lands — the worst possible
+soak conditions for a module whose failure mode is silent data loss.
+
+**7-9 (the `updatedAt` schema migration) stays in 7a anyway**, even though only 7b consumes
+it. It is a one-field migration over persisted user data, it is the only step here that
+touches real libraries, and landing it early is what lets it soak for a whole phase before
+anything depends on it being right.
+
+**What this does to Phase 8:** accounts and billing are now close to one feature. Phase 8
+should be planned assuming 7a is done and 7b is not — its entitlement writer lands against
+the read path built in 7a, and the sync engine follows both.
 
 ### Last-write-wins per document, on an explicit `updatedAt`
 
@@ -706,7 +863,7 @@ has last night's copy", which whole-document LWW resolves correctly. Field-level
 would let two devices produce a note list neither user ever saw.
 
 The cost is that a genuine simultaneous edit loses one side silently. Mitigation is
-disclosure, not machinery: the sync status line names what was replaced (7-10).
+disclosure, not machinery: the sync status line on `/profile` names what was replaced (7-7).
 
 ### Documents sync as opaque payloads, not expanded Firestore maps
 
@@ -784,12 +941,172 @@ is being lost today. Revisit with Phase 8, not here.
 Google Play requires apps that allow account creation to offer in-app account deletion plus
 a publicly reachable deletion URL declared in the Data safety form. **Harp2Tab is live in
 production.** Shipping sign-up without deletion is a policy violation on a shipped app, not
-a gap in a not-yet-released feature — which is why it is 7-9 and not Phase 10 polish.
+a gap in a not-yet-released feature — which is why it is 7-13 and not Phase 10 polish.
 
 The same applies to `PRIVACY_POLICY.md`, which currently states that tab data is "stored
 locally on your device", that audio is "never transmitted to any server", and has a "Data We
 Do NOT Collect" section. Phase 7 makes at least the first of those false. The policy update
 is part of this phase's definition of done.
+
+---
+
+# 7a-UI — the UI-only first pass (planned 2026-08-12)
+
+**Build every screen in 7a against mock state, before any Firebase exists.** Requested by the
+user as the first slice of Phase 7. Four design decisions were taken the same day and are
+applied throughout: a **single centred column** for `/profile`, **initials in a circle and no
+photos**, **URL-param mock states**, and **the full surface scope** — nothing held back.
+
+## Why this slice is worth doing separately
+
+Not just "design before wiring". Three specific dividends:
+
+- **The states outnumber the logic.** `/profile` alone has signed-out, resolving,
+  signed-in-verified, signed-in-unverified, plus five sync-row variants. Every one is
+  reachable in a mock in seconds and awkward to reach against a real Firebase project.
+- **It front-loads the copy.** Most of what makes these screens right is wording — the
+  enumeration-protection error string (7-4), the "sync is coming soon" placeholder (7-7),
+  the delete dialog's "the copies on this device stay where they are". None of it needs auth
+  to write, and all of it is easier to judge on screen than in a plan.
+- **It makes the Firebase step small.** By the time 7-1 starts, the only open question is
+  whether the SDK calls work — not what happens after they return.
+
+## The seam: `AuthUser` is real, the source is fake
+
+```
+   src/auth/types.ts      ← the real contract. Survives into 7-1 unchanged.
+   src/auth/useAuth.ts    ← 7a-UI: reads the URL mock. 7-1: swapped for the store.
+        │
+        └──► every screen and component below imports ONLY from here
+```
+
+The rule that makes the swap cheap: **no component may branch on "is this mocked".** They
+consume `{ user, status, emailVerified, … }` and render. `useAuth` is the only file that
+knows a mock exists, and replacing its body is the whole of the wiring work.
+
+`status` carries the tri-state from 7-2 (`'resolving' | 'signedOut' | 'signedIn'`) even
+though a mock resolves instantly — otherwise the loading skeleton never gets built and 7-2
+inherits it as a surprise.
+
+## The mock harness
+
+`?mock=` on any route, read once in `useAuth`. Not persisted, not in a store, nothing
+rendered in the real UI — the whole mechanism deletes in one commit.
+
+| value | what it renders |
+|---|---|
+| *(absent)* | signed out — the real default |
+| `resolving` | the bootstrap skeleton, held indefinitely so it can actually be looked at |
+| `google` | signed in, verified, Google provider |
+| `email` | signed in, verified, email provider, both methods linked |
+| `unverified` | signed in, email unverified — banner state |
+| `syncing` / `offline` / `syncError` / `syncDiscard` | signed in, with that sync-row variant |
+| `newUser` | signed in, empty library — the zero state the stats row otherwise never shows |
+
+Library counts come from the **real** `useRecordingsStore` and `useMidiProjectsStore`, not
+from the mock. The stats row is genuinely computed local data (7-7 says so), so faking it
+would be faking the one part that is already true.
+
+## Files
+
+**New — `src/auth/`**
+- `types.ts` — `AuthUser`, `AuthStatus`, `SyncStatus`, `AuthProvider`. The 7-1 contract.
+- `useAuth.ts` — mock now, store later.
+- `mockStates.ts` — the table above, one object per key. Deleted at 7-1.
+
+**New — `src/components/`**
+- `AvatarCircle.tsx` — initials, sized prop. Fill is **`accentDeep`, not `accent`**: the
+  theme's own comment says plain `accent` is ~2.2:1 on white and "can't carry white text"
+  (`theme/index.ts:8-10`). This is exactly that case.
+- `AuthModal.tsx` — one component, four internal states (`chooser`, `signUp`, `signIn`,
+  `forgot`) plus a `sent` confirmation panel. Three hosts per 7-8.
+- `PasswordField.tsx` — reveal toggle, and a strength meter driven by length only (7-4:
+  length beats character-class theatre).
+- `VerifyBanner.tsx` — warning banner, "I've confirmed", resend with a visible countdown.
+- `SyncStatusRow.tsx` — the five states from 7-7 as a pure presentational component.
+- `ConfirmDeleteModal.tsx` — typed-DELETE confirmation.
+- `ReauthModal.tsx` — password re-entry. Shared by delete, change-password and change-email
+  per 7-4, so it is built once here.
+
+**New — routes**
+- `src/app/profile.tsx`
+- `src/app/auth/action.tsx` — `/auth/action`, first nested route in the app (every existing
+  route is flat in `src/app/`). Renders all four outcomes off a `?mode=` param, matching what
+  Firebase will really send: `verifyEmail` success, `resetPassword` form, `recoverEmail`, and
+  the expired/already-used state every branch needs.
+
+**Touched**
+- `TopBar.web.tsx` — avatar when signed in, "Sign in" text button when signed out, in the
+  right-hand group beside `headerActions` (`:44`).
+- `settings.tsx` — an Account row linking to `/profile`. **Required, not optional:** `TopBar`
+  is `null` on native (`TopBar.tsx`), so without this `/profile` is unreachable there.
+- `paywall.tsx` — the 7-6 subscribe step, rendered but inert.
+- `_layout.tsx` — nothing, deliberately. The mock resolves synchronously; 7-2 adds the real
+  bootstrap gate.
+
+## Reuse, not reinvention
+
+- **`CandidateList` / `CandidateRow`** (`CandidateRow.tsx:20-40`) for the sign-in-methods
+  list and the provider chooser — already a wired `radiogroup` with `accessibilityRole`, and
+  already the app's answer to "a list of selectable options with a title and a subtitle".
+- **Settings' `sectionLabel` + `card` + `cardRow`** language for every `/profile` section, so
+  the two per-user screens read as siblings. Only the identity header and the stats row are
+  new shapes.
+- **`NameRecordingModal`'s shell** (`Modal` + `backdrop` + `card`, `transparent`,
+  `animationType="fade"`, `onRequestClose`) for all four new modals.
+- **`webMaxWidth(WEB_CONTENT_WIDTH.standard)`** — 720px (`constants/layout.ts:8`) for
+  `/profile`, and `.narrow` (480) for `/auth/action`, which is a single-CTA flow exactly like
+  the paywall and onboarding it shares that bucket with. **Do not invent a 640.**
+
+## What must not be faked
+
+One rule, and it is the only thing in this slice that could cost a user real work:
+
+**The sync row ships the 7a placeholder — "Sync is coming soon; your tabs are saved on this
+device" — and the mock's `synced` variant is for review only.** No build that a user can
+reach may show `✓ Synced` while no sync engine exists. A green tick that invites someone to
+trust a backup that is not there is worse than no row at all.
+
+The same honesty applies to the plan block (Phase 8) and to every button in this slice: an
+inert control must look inert or say what it is waiting for. Nothing here silently no-ops.
+
+## Accessibility, built in rather than retrofitted
+
+Per `project_app_architecture`, the commitment is that new surfaces get this from the start:
+
+- Every modal traps focus, closes on Escape, and returns focus to whatever opened it.
+- The provider chooser and sign-in-methods list are radiogroups — free via `CandidateList`.
+- Form fields carry real labels, and errors are associated with their field rather than
+  floating as loose text.
+- The password reveal toggle is a button with state, not an icon.
+- Everything reachable and operable by keyboard on web, since the whole slice is web-first.
+
+## Verification
+
+- **Every `?mock=` value, in both themes.** Light and dark are one prop away
+  (`useTheme`), so there is no excuse for a state that only works in one.
+- **Both `/profile` layouts by width** — 1440 and 720 — since it is a single centred column
+  and the failure mode is a stats row that wraps badly.
+- **The zero state** (`?mock=newUser`) with an empty library, which is what every real first
+  sign-in will actually look like.
+- **Keyboard-only pass** through the modal's four states and the delete confirmation.
+- **Nothing regresses signed out.** With no `?mock=`, the app must be exactly what it is
+  today — that is the same no-regression check 7a's verification section leads with.
+
+## Build order
+
+1. `src/auth/types.ts` + `useAuth.ts` + `mockStates.ts`. Nothing to look at, and everything
+   else depends on the shape.
+2. `AvatarCircle`, `SyncStatusRow`, `VerifyBanner` — the three presentational pieces.
+3. `/profile`, all states. The biggest surface, and the one the design decisions were taken
+   for.
+4. `AuthModal` + `PasswordField`. Second biggest, and reviewable in isolation before it has
+   three hosts.
+5. `TopBar` entry + the Settings Account row. `/profile` becomes reachable.
+6. `ConfirmDeleteModal` + `ReauthModal`.
+7. `/auth/action`.
+8. `paywall.tsx`'s subscribe step. Last, because it is the only touched file that a real user
+   can already reach.
 
 ## 7-1 · Firebase bootstrap, platform-split
 
@@ -829,68 +1146,357 @@ condition rather than adding a second gate — but **only for the initial resolu
 the splash overlay must not be extended to cover a slow network. Signed-out is the correct
 render for a failed resolution, not a spinner.
 
-Persisted alongside: `lastUid`, `adoptedUids: string[]` (both used by 7-7).
+`AuthUser` carries **`emailVerified`**, and it is not cosmetic — 7-4 gates on it, and it
+changes after the user acts *outside the app*, so `onAuthChange` alone will not report it.
+See the reload note in 7-4.
 
-## 7-3 · Sign-in methods
+Persisted alongside: `lastUid`, `adoptedUids: string[]` (both used by 7-11).
 
-**Google (web)** — `signInWithPopup`. Popups are blocked only when not user-gesture-driven,
-which a button click is; redirect carries the storage-partitioning problem described in 7-1
-and is the worse default even with the custom domain in place.
+## 7-3 · Google sign-in
 
-**Email link (passwordless)** — three parts, and the middle one is where these usually
-break:
-1. `sendSignInLink` with a continuation URL pointing at `/auth/continue`.
-2. **Stash the email in `localStorage` before navigating away.** The link can be opened in a
-   different browser (mail app, different device), where that value is absent — the screen
-   must ask for the email rather than dead-ending. This is the case that gets skipped and
-   then reported as "the login link doesn't work".
-3. `/auth/continue` must be a **real exported route**. With `web.output: "static"`
-   (`app.json:28`) there is no server to rewrite unknown paths, so a client-only redirect
-   target does not exist as HTML. Add a Firebase Hosting rewrite as well, or a cold load of
-   the link 404s.
+`signInWithPopup` on web. Popups are blocked only when not user-gesture-driven, which a
+button click is; redirect carries the storage-partitioning problem described in 7-1 and is
+the worse default even with the custom domain in place.
 
-**Apple** — Phase 9, per the summary. Keep the note that offering Google obliges Sign in
-with Apple on iOS; it is an App Store rule, not a preference.
-
-**Native Google (7-11)** — `@react-native-google-signin/google-signin` +
+**Native (7-14)** — `@react-native-google-signin/google-signin` +
 `@react-native-firebase/auth`, and the SHA-1 fingerprint registered in the Firebase project
 must be **the Play App Signing certificate's, taken from the Play Console — not the local
 upload keystore's** (`project_release_setup` has the keystore). Google sign-in fails only in
 release builds when this is wrong, which is the most expensive time to find out.
 
-## 7-4 · Account UI — and the 12-4 decision this resolves
+## 7-4 · Email + password: the whole surface
 
-12-4 asks whether the profile page is a route or a Settings section, and recommends a
-Settings section. Phase 7 should **build the Settings section and not the route**: account
-(email, provider, sign out), sync status (7-10), delete account (7-9). With entitlement
-still a local boolean until Phase 8 and the home-sidebar stats not yet displaced until 12-2,
-a `/profile` route would hold three rows.
+The decision to take email/password over a magic link buys familiarity and pays for it
+here. All of the following is load-bearing; none of it is optional once the method ships.
 
-Signing in itself is a modal, not a route — the `ConvertTrackModal` precedent from Phase 11
-applies: a bounded decision with two buttons.
+### The state machine
+
+```
+   sign up ──► account exists, emailVerified = false ──► verification email sent
+                            │                                      │
+              app fully usable, sync withheld              user clicks link
+                            │                                      │
+                            └──────── verified ◄──────────  /auth/action
+                                          │
+                                    sync begins
+```
+
+**Unverified users are not locked out — sync is what waits.** Firebase happily signs in an
+unverified user, so the enforcement point is ours to choose, and the honest one is the thing
+the account is *for*. Blocking the app would strand someone whose confirmation email is
+slow, at the exact moment they were trying to save a take. Withholding sync costs them
+nothing they had a minute ago and makes the reason to verify immediate and legible.
+
+Phase 8 should additionally require verification before purchase — an entitlement attached
+to an unverified address is an entitlement attached to nobody.
+
+**`emailVerified` does not update on its own.** The user verifies in another tab or on their
+phone; the SDK's cached token still says false. `onAuthChange` will not fire for it. The app
+needs an explicit `reload()` of the current user — on window focus, and on a "I've verified"
+button in the banner. Skipping this produces the single most common complaint about this
+flow: "I verified and it still says I haven't."
+
+### One route handles three actions
+
+Firebase sends verification, password reset and email-change-revocation to **one action
+handler URL**, distinguished by a `mode` query parameter. So the app needs exactly one new
+auth route, not three:
+
+`/auth/action?mode=verifyEmail|resetPassword|recoverEmail&oobCode=…`
+
+- `verifyEmail` → `applyActionCode`, then a success state with a route back into the app.
+- `resetPassword` → `verifyPasswordResetCode` to get the email, show a new-password form,
+  `confirmPasswordReset`.
+- `recoverEmail` → the "someone changed your email, undo it" path. Cheap to include once the
+  route exists; conspicuous if a user ever lands on it and gets a blank screen.
+- Every branch needs an expired/already-used state. These links expire, and users click them
+  from an inbox days later.
+
+**It must be a real exported route.** With `web.output: "static"` (`app.json:28`) there is no
+server to rewrite unknown paths, so a client-only target does not exist as HTML and a cold
+load 404s. Add the Firebase Hosting rewrite too.
+
+### Error copy, under email enumeration protection
+
+Firebase now defaults to email enumeration protection **on**, which deliberately collapses
+`auth/user-not-found` and `auth/wrong-password` into a single `auth/invalid-credential`.
+The UI therefore **cannot** say "no account with that email" or "wrong password" — it does
+not know which, by design. Copy has to be "That email and password don't match an account",
+with the reset link offered alongside. Write it that way from the start; retrofitting error
+copy after someone reports the vagueness as a bug is how the protection gets switched off.
+
+### Password rules
+
+Firebase's floor is 6 characters, which is too low to ship as the product's answer. Enforce
+our own client-side minimum (8, with a strength meter, no composition rules — length beats
+character-class theatre) and mirror it in the Identity Platform password policy if that is
+enabled, so the server agrees with the form.
+
+Also needed: change password and change email, both of which throw
+`auth/requires-recent-login` on a stale session — the same re-authentication step 7-13's
+deletion needs, so build it once as a shared `reauthenticate()` prompt.
+
+### The confirmation email itself
+
+Firebase's default template sends from `noreply@<project>.firebaseapp.com` with Firebase's
+own wording. For a paid product that is a bad first impression and a real deliverability
+risk — it is the first email the user ever gets from Harp2Tab, and it arrives looking like
+it came from someone else's infrastructure.
+
+- **Launch:** customize the templates in the Firebase console and **verify a custom sender
+  domain** (SPF/DKIM DNS records). Free, and it makes the mail come from Harp2Tab.
+- **Later, if the emails start mattering to conversion:** generate links with the Admin
+  SDK's `generateEmailVerificationLink` / `generatePasswordResetLink` in a Cloud Function and
+  send them through a real sender (Resend, Postmark) with the app's own design. Full control,
+  costs a service.
+
+**This is the third thing in the phase blocked on the custom domain** (with 7-1's
+`authDomain` and 12-3's landing page). It is now the strongest argument for buying the
+domain before Phase 7 starts rather than during it.
+
+## 7-5 · Account linking, and the one-account-per-email setting
+
+The profile page offers "+ Add email sign-in" (7-7), which is `linkWithCredential`. The
+reverse — someone who signed up with a password later pressing "Continue with Google" on the
+same address — is the one that goes wrong on its own.
+
+**Keep Firebase's "one account per email address" setting ON.** With it off, the same human
+signing in two ways gets two UIDs, two Firestore subtrees and two libraries, and neither
+looks broken from the inside. That is an unrecoverable data-partition bug caused by a console
+checkbox, which is exactly the kind that ships.
+
+With it on, the second method throws `auth/account-exists-with-different-credential`, and the
+app must handle it rather than surfacing the raw code: tell the user the address is already
+registered, sign them in with the original method, then link the new credential. That flow is
+a required piece of work, not an edge case.
+
+## 7-6 · The subscribe gate
+
+Per the decision above: no wall on save or export. The only required signup is at payment,
+and it lands on a screen that already exists.
+
+**Where it goes.** `src/app/paywall.tsx`, between "I want this" and the purchase call. The
+free-tier gate that routes users there is untouched — `resolveSessionGate`
+(`sessionGate.ts:15`) keeps returning `'showPaywall'` exactly as it does today, and every
+entry point keeps calling it. This phase adds a step *inside* the paywall, not a new gate
+around the app.
+
+**The order within the paywall matters.** Sign in *before* the purchase call, never after:
+an entitlement that arrives before the identity it belongs to is the reconciliation problem
+Phase 8 is already trying to avoid, recreated on purpose. The paywall becomes:
+
+```
+   see the plans  →  choose one  →  sign in / create account  →  pay  →  entitlement
+                                              │
+                                    already signed in? skip
+```
+
+**Persist the session first.** Before the paywall opens, snapshot the in-progress take to the
+local library. Email signup ends in a confirmation link that may open in a different browser,
+and a user who loses their take on the way to paying will not come back. This is the one part
+of the abandoned wall's design that carries over intact, and it is a hard requirement.
+
+**Existing users are unaffected.** `isPurchased` is already true for them, so
+`resolveSessionGate` returns `'allow'` and they never reach the paywall. Nothing about their
+app changes.
+
+### The voluntary door
+
+The other half of the decision, and the one that is easy to under-build because nothing
+forces it. Two entry points, both leading to the same modal from 7-8:
+
+- **TopBar avatar** — a "Sign in" text button when signed out (`TopBar.web.tsx:44`'s
+  right-hand group).
+- **`/profile`'s signed-out state** — the pitch page in 7-7.
+
+Its copy is about sync, not about payment, because that is what a free account actually
+gives. And it carries the lifetime buyers' claim path: **"Bought Harp2Tab on Google Play?
+Sign in to keep your lifetime access on the web."** That sentence is the entire reason this
+door is mandatory rather than optional — see the decision note. The mechanism behind it is
+Phase 8's RevenueCat import; the doorway is here.
+
+## 7-7 · `/profile` — the page
+
+**This resolves 12-4's open question**, which asks route-or-Settings-section and recommends
+the section. The user chose the route on 2026-08-12, and the choice is better than 12-4's
+reasoning assumed: 12-4 judged a route would hold three rows, but with sync status, the
+plan block, connected sign-in methods, the verification banner and the danger zone, it holds
+six sections — and it gives 12-2's displaced home-sidebar stats the home that section
+already says they want.
+
+**The split with Settings follows 7-10's sync rule exactly: `/profile` is what belongs to
+the user, Settings is what belongs to the device.** Account, plan, stats and sync go to
+`/profile`; mic sensitivity, calibration, theme and engine defaults stay in Settings. That is
+the same line the sync engine draws, so there is one rule to remember, not two.
+
+**Entry point:** the avatar in `TopBar.web.tsx`'s right-hand group, beside the existing
+`headerActions` slot (`TopBar.web.tsx:44`) — signed out it is a "Sign in" text button.
+Native has no persistent bar at all (`TopBar.tsx` returns `null`), so on native `/profile` is
+reached from Settings; that asymmetry is already how the app works, not a new one.
+
+### Signed in, verified
+
+```
+ ┌──────────────────────────────────────────────────────┐
+ │  ◐   Theo Gaspe                                      │
+ │      theodorogtc@gmail.com · Google                  │
+ │      Member since August 2026                        │
+ │                                     [ Sign out ]     │
+ ├──────────────────────────────────────────────────────┤
+ │  47 tabs   ·   6 projects   ·   3h 12m of playing    │
+ │  ✓ Synced 2 minutes ago                [ Sync now ]  │
+ ├──────────────────────────────────────────────────────┤
+ │  PLAN                                                │
+ │  Free — 3 of 3 sessions used                         │
+ │                                     [ Upgrade ]      │
+ ├──────────────────────────────────────────────────────┤
+ │  SIGN-IN METHODS                                     │
+ │  ✓ Google          theodorogtc@gmail.com             │
+ │  + Add email and password                            │
+ ├──────────────────────────────────────────────────────┤
+ │  Export all my tabs                                  │
+ │  Delete account                                      │
+ └──────────────────────────────────────────────────────┘
+```
+
+- **Stats are computed locally** from `useRecordingsStore` and `useMidiProjectsStore` — no
+  query, no aggregation document, no loading state. "Playing time" is the sum of
+  `TabRecording.duration`, which already exists on every record.
+- **The plan block is a placeholder until Phase 8** and should say so honestly rather than
+  render a fake subscription. Until then it reads from local `isPurchased` and links to the
+  existing `/paywall`.
+- **So is the sync row, until 7b.** In 7a it reads `Sync is coming soon — your tabs are saved
+  on this device`, which is true, rather than a green tick that means nothing. A fake
+  `✓ Synced` on a build with no sync engine is the one thing on this page that could cost a
+  user real work, because it invites them to trust a backup that does not exist.
+- **Sign-in methods is a list, not a static row** — it is what makes 7-5's linking reachable.
+
+### Signed in, not yet verified
+
+```
+ ┌──────────────────────────────────────────────────────┐
+ │  ⚠  Confirm your email to turn on sync               │
+ │     We sent a link to theo@example.com.              │
+ │     [ Resend email ]   [ I've confirmed ]            │
+ ├──────────────────────────────────────────────────────┤
+ │  ◐   theo@example.com · Email                        │
+ │      Member since August 2026        [ Sign out ]    │
+ ├──────────────────────────────────────────────────────┤
+ │  47 tabs  ·  6 projects  ·  Sync paused until        │
+ │                            you confirm your email    │
+ └──────────────────────────────────────────────────────┘
+```
+
+`[ I've confirmed ]` is the explicit `reload()` from 7-4. Resend needs a visible cooldown —
+Firebase rate-limits these and will start failing, and a button that silently stops working
+is worse than one that says "wait 60 seconds".
+
+### Signed out
+
+`/profile` is a real URL people will reach signed out — bookmarks, the avatar button, a
+shared link. It must be a pitch, not an error:
+
+```
+ ┌──────────────────────────────────────────────────────┐
+ │              Your tabs, everywhere                   │
+ │                                                      │
+ │   Create a free account to keep your tabs and open   │
+ │   them on any device you play on.                    │
+ │                                                      │
+ │        [ Continue with Google ]                      │
+ │        [ Sign up with email   ]                      │
+ │          Already have an account?  Sign in           │
+ │                                                      │
+ │   You have 14 tabs and 2 projects on this device.    │
+ │   They'll come with you.                             │
+ └──────────────────────────────────────────────────────┘
+```
+
+The last two lines are 7-11's adoption promise, stated with the real local counts *before*
+sign-in. It is the only honest place to say it, because afterwards it has already happened.
+
+### Sync row states
+
+One line, five states, never a dashboard:
+
+| state | copy |
+|---|---|
+| idle | `✓ Synced 2 minutes ago` |
+| syncing | `⟳ Syncing…` |
+| offline | `⚡ Offline — 3 changes waiting` |
+| error | `⚠ Sync failed — Retry` |
+| LWW discard | `Replaced this device's copy of "Blues in G" with a newer version from 11:42.` |
+
+The last one earns its place: the failure mode of silent last-write-wins is a user who
+believes the app ate their edit. Naming it turns a data-loss bug report into understood
+behaviour.
+
+### Delete account
+
+A typed confirmation, and it must state what is *not* deleted:
+
+```
+ ╔════════════════════════════════════════════════════╗
+ ║  Delete your account?                              ║
+ ║                                                    ║
+ ║  This permanently deletes your account and the 47  ║
+ ║  tabs and 6 projects synced to it. It cannot be    ║
+ ║  undone.                                           ║
+ ║                                                    ║
+ ║  The copies on this device stay where they are.    ║
+ ║  Export them first if you want them elsewhere.     ║
+ ║                                                    ║
+ ║  Type DELETE to confirm:  [            ]           ║
+ ║                                                    ║
+ ║  [ Cancel ]                    [ Delete account ]  ║
+ ╚════════════════════════════════════════════════════╝
+```
+
+## 7-8 · The sign-in modal
+
+One component, three hosts — the subscribe gate (7-6), the profile page signed-out state
+(7-7), and the TopBar button. The `ConvertTrackModal` precedent from Phase 11 applies: a bounded
+decision belongs in a modal, and being a modal is what lets three surfaces share it.
+
+It has four internal states — `chooser`, `signUpEmail`, `signInEmail`, `forgotPassword` —
+and they are states of one modal, not four routes. Only `/auth/action` is a route, because
+only it is arrived at from outside the app.
 
 ```
   ╔══════════════════════════════════════════════╗
-  ║  Sign in to Harp2Tab                         ║
-  ║  Your tabs, on every device you use.         ║
+  ║  Create your account                    [×]  ║
   ║                                              ║
   ║  ┌────────────────────────────────────────┐  ║
   ║  │  Continue with Google                  │  ║
   ║  └────────────────────────────────────────┘  ║
-  ║                     or                       ║
+  ║  ────────────────  or  ───────────────────   ║
+  ║  Email                                       ║
   ║  ┌────────────────────────────────────────┐  ║
   ║  │  you@example.com                       │  ║
   ║  └────────────────────────────────────────┘  ║
-  ║  [ Email me a sign-in link ]                 ║
+  ║  Password                                    ║
+  ║  ┌────────────────────────────────────────┐  ║
+  ║  │  ••••••••                          👁  │  ║
+  ║  └────────────────────────────────────────┘  ║
+  ║  ▪▪▪▪▪▪░░░░  Strong enough                   ║
   ║                                              ║
-  ║  Your 14 saved tabs will move with you.      ║
+  ║  ┌────────────────────────────────────────┐  ║
+  ║  │  Create account                        │  ║
+  ║  └────────────────────────────────────────┘  ║
+  ║                                              ║
+  ║  Already have an account?  Sign in           ║
   ╚══════════════════════════════════════════════╝
 ```
 
-The last line is the adoption promise from 7-7 stated *before* sign-in, with the real local
-count. It is the only honest place to say it, because after sign-in it has already happened.
+- **The provider column takes a third button without redesign** — that is the Phase 9 Apple
+  obligation, prepaid.
+- The post-submit state is not a spinner and then a dismissal. It is a "check your inbox"
+  panel naming the address, because the next thing the user must do happens in another app.
+- Dismissing is always allowed, from every host including the subscribe gate — backing out
+  of the gate returns to the paywall, which is itself dismissible today. Nothing in this
+  phase makes any screen inescapable.
 
-## 7-5 · Schema: `updatedAt` and `deletedAt`
+## 7-9 · Schema: `updatedAt` and `deletedAt` — 7a, though only 7b consumes it
 
 `TabRecording` has `createdAt` and no `updatedAt` (`types/index.ts:82-94`) — there is no
 field to conflict-resolve on. `MidiProject` already has one, stamped centrally by `touch()`
@@ -909,7 +1515,7 @@ call site to remember.
   document.** They are per-user state, not per-device, and the type comments already treat
   them as part of the record.
 
-## 7-6 · The sync engine
+## 7-10 · The sync engine — **7b, after Phase 8**
 
 ```
 src/sync/
@@ -940,6 +1546,12 @@ and on an explicit "Sync now". Not a live Firestore listener — a listener mean
 change the library out from under an open editor, which is exactly the "no screen reads
 Firestore" rule broken by the back door.
 
+**And only when `emailVerified`** (7-4). The engine's entry condition is a signed-in *and*
+verified user; everyone else is `offline`-equivalent and keeps writing locally. Putting the
+check here, at the single entry point, is what keeps the verification decision from
+scattering into every call site — and it is why withholding sync costs nothing to implement
+while blocking the app would have cost a gate on every screen.
+
 **Offline:** local writes always succeed; the push is retried on the next trigger. No queue
 of operations is needed because the unit is the whole document and LWW makes a replayed push
 idempotent — that is a real dividend of the LWW choice, worth stating so nobody builds the
@@ -957,7 +1569,7 @@ them means a laptop inheriting a phone's calibration. Sync `themeOverride`,
 flags local. `isPurchased` and `totalRecordingsUsed` are governed by the entitlement
 decision above, not by this list.
 
-## 7-7 · First sign-in: adopt, never replace — and the second-account trap
+## 7-11 · First sign-in: adopt, never replace — and the second-account trap — **7b, after Phase 8**
 
 The obvious case is easy: user has a local library, signs in, cloud is empty → upload
 everything. Ids are `rec-${Date.now()}-${random}` (`sessionSnapshot.ts:38`), so cross-device
@@ -977,7 +1589,7 @@ The rule, using `lastUid` / `adoptedUids` from 7-2:
 - Signing out leaves the local library in place — it is the signed-out library, and wiping
   it on sign-out would delete work from anyone who signed in to look and signed back out.
 
-## 7-8 · Firestore security rules
+## 7-12 · Firestore security rules
 
 ```
 /users/{uid}/tabs/{id}          read, write: request.auth.uid == uid
@@ -998,7 +1610,7 @@ paywall bypass if it is wrong.
 Rules get their own test run (`@firebase/rules-unit-testing` against the emulator), because
 "nobody else can read my tabs" is not a property that should be verified by inspection.
 
-## 7-9 · Account deletion and data export
+## 7-13 · Account deletion and data export
 
 - **In-app:** Settings → Delete account, with a typed confirmation. Deletes the Firestore
   subtree, the entitlement document, and the Auth user.
@@ -1018,30 +1630,29 @@ Rules get their own test run (`@firebase/rules-unit-testing` against the emulato
 - **`PRIVACY_POLICY.md` update and the Play Data safety re-declaration**, per the decision
   above. Both are release blockers for the Android build, not documentation chores.
 
-## 7-10 · Sync status in Settings
+## 7-14 · Native parity — **deferred to Phase 15**
 
-One line, not a dashboard: `Synced 2 minutes ago` / `Syncing…` / `Offline — 3 changes
-waiting` / `Sync failed — retry`. Plus "Sync now".
+**Not scheduled here.** Whether native gets accounts at all is one of the questions Phase 15
+holds; building the native auth half before that is decided is porting by default.
 
-When LWW discards a version, say which one and when: *"Replaced this device's copy of
-'Blues in G' with a newer version from 11:42."* The failure mode of silent LWW is a user who
-believes the app ate their edit; naming it converts a data-loss bug report into an
-understood behaviour.
-
-## 7-11 · Native parity (scoped, follows web)
-
+What it would take, recorded so the estimate exists when the decision is taken:
 `@react-native-firebase/auth` + `@react-native-google-signin/google-signin`, the Play App
 Signing SHA-1 from 7-3, and the `@react-native-firebase/app` config plugin question from the
 existing-state section. The sync engine, `merge.ts`, the stores and every screen are shared
 and unchanged — the only native-specific code is `src/lib/auth.ts` and the native project
-config. That is the payoff for the platform-split seam.
+config. That is the payoff for the platform-split seam, and it is why this is cheap to defer:
+deferring it costs nothing that has to be redone.
 
 ## What Phase 7 does not do
 
-Payments and entitlement *writing* (Phase 8) · Sign in with Apple (Phase 9) · sharing,
-public tab links or collaboration (not on the roadmap) · realtime multi-device editing (LWW
-is the decision) · syncing `frames` (decided above) · server-side free-tier enforcement
-(deferred to Phase 8 with the counter).
+Payments and entitlement *writing* (Phase 8) · **the sync engine itself, which is 7b and
+follows Phase 8** · Sign in with Apple (Phase 9, where it becomes mandatory) ·
+email-link/passwordless sign-in (superseded) · Facebook, GitHub, Microsoft, phone and
+anonymous auth · **any gate on save or export** (dropped 2026-08-12 — signed-out users keep
+every capability they have today) · sharing, public tab links or collaboration (not on the
+roadmap) · realtime multi-device editing (LWW is the decision) · syncing `frames` (decided
+above) · server-side free-tier enforcement (moot — the free tier is per-device because there
+is no account until payment).
 
 ## Verification
 
@@ -1050,53 +1661,99 @@ is the decision) · syncing `frames` (decided above) · server-side free-tier en
   clean pull, both-edited conflict both directions, tie, delete-then-sync, delete-then-
   recreate, tombstone expiry, empty cloud, empty local, second-account refusal. No network,
   no emulator — it is a pure function.
+- **The no-regression check, which is now the cheapest and most important one:** signed out,
+  every existing capability still works — record, edit, save to library, export, share. The
+  subscribe-gate decision means the correct diff for a signed-out user is *nothing*, and that
+  is easy to verify and easy to break accidentally.
 - **Rules tests** against the emulator: another user's uid cannot read `/users/{uid}/tabs`,
   and no client can write `/entitlements/{uid}`.
 - **Two-browser manual pass:** sign in on both, edit in one, foreground the other, confirm
   the merge and the status line. Then the same with one browser offline (DevTools) to
   confirm local writes survive and push on reconnect.
-- **The flicker check:** hard-reload signed in and confirm the account UI never renders its
-  signed-out state first. This is the bug the tri-state exists to prevent, so it needs an
-  actual look, not a unit test.
+- **The email round trip, on a real inbox, twice** — once opening the confirmation link in
+  the same browser, once in a different one. The second is where `/auth/action` and the
+  `reload()` from 7-4 either work or produce "I verified and it still says I haven't".
+- **The subscribe-gate survival test:** exhaust the free tier signed out, reach the paywall,
+  sign up with email, open the confirmation link in a *different browser*, come back. The
+  take must still be there. This is 7-6's hard requirement and it has no unit test.
+- **The flicker check:** hard-reload signed in and confirm `/profile` and the TopBar avatar
+  never render their signed-out state first. This is the bug the tri-state exists to
+  prevent, so it needs an actual look.
 - **Size check:** after syncing a 3,000-note recording, read the document's actual stored
   size and confirm the opaque-payload decision held.
 
 ## Suggested build order
 
-1. **7-5 schema + v3 migration.** Nothing else can be reconciled without `updatedAt`, and it
-   is the only step that touches persisted user data — land it early and let it soak.
-2. **7-6 `merge.ts` + `verify-sync.ts`, with no network at all.** The riskiest logic, built
-   where it is cheapest to get wrong.
-3. **7-1/7-2 bootstrap + `useAuthStore`,** web only. Ends with a UID in the console.
-4. **7-3/7-4 sign-in methods and the Settings section.** Ends with a real sign-in.
-5. **7-8 rules,** before the first real write. Writing data under permissive rules and
-   tightening later means a window where the emulator and production disagree.
-6. **7-6 orchestration + 7-7 adoption.** First actual sync.
-7. **7-9 deletion, privacy policy, Data safety.** Before any of this reaches the Play build.
-8. **7-10 status UI**, then **7-11 native.**
+### 7a-UI — every screen, mock state, no Firebase (first)
+
+0. **The whole of `7a-UI` above**, in its own build order. Ends with all of 7a's UI
+   reviewable at `?mock=` URLs and nothing wired. Chosen as the first slice by the user on
+   2026-08-12.
+
+### 7a — accounts (now)
+
+1. **7-9 schema + v3 migration.** The only step that touches persisted user data, and 7b
+   cannot reconcile anything without `updatedAt`. First, so it soaks for an entire phase
+   before anything depends on it being right.
+2. **7-1 / 7-2 bootstrap + `useAuthStore`,** web only. Ends with a UID in the console.
+3. **7-3 Google + 7-8 the modal.** The short path to a real sign-in, and the one that proves
+   the platform seam before the email surface is built on top of it.
+4. **7-12 rules,** before the first real write — including the entitlement read path.
+   Writing under permissive rules and tightening later means a window where the emulator and
+   production disagree.
+5. **7-4 email/password + 7-5 linking.** Deliberately after Google: it is the largest single
+   sub-step, and everything before it works without it.
+6. **7-7 `/profile`.** By now it has real states to render rather than mockups to guess at.
+   Its sync row ships as a placeholder until 7b, and should say so rather than lie.
+7. **7-13 deletion, privacy policy, Data safety.** The moment accounts exist, these are
+   obligations. Before any of this reaches a Play build.
+8. **7-6 the subscribe gate + the voluntary door.** Last of 7a, because it is the step that
+   sends people into the account flow — it should land when that flow is finished and worth
+   arriving at.
+
+### 7b — sync (after Phase 8)
+
+9. **7-10 `merge.ts` + `verify-sync.ts`, with no network at all.** The riskiest logic in the
+   roadmap, built where it is cheapest to get wrong.
+10. **7-10 orchestration + 7-11 adoption.** First actual sync, against accounts that by now
+    really exist.
+11. **7-7's sync row and LWW disclosure**, replacing the 7a placeholder.
+
+### Then
+
+12. **7-14 native.**
 
 ## Open questions
 
-1. **Custom domain timing.** 7-1's `authDomain` recommendation and 12-3's landing page both
-   need the domain, which is not bought yet. Buy it before Phase 7 starts, or ship auth on
-   `harp2tab.firebaseapp.com` and migrate `authDomain` later (a migration that invalidates
-   in-flight email links)?
-2. **Does signing in do anything a user can feel on day one?** Cross-device sync is the
-   honest answer, and it is only compelling to someone with two devices. If the answer needs
-   to be stronger, it is Phase 8's entitlement portability — which would argue for shipping
-   7 and 8 close together rather than with 9 and 10 between them.
-3. **Firestore or Realtime Database.** Firestore is assumed throughout (better rules, better
-   querying). RTDB is a smaller web bundle and the sync model here is a flat key-value
-   mirror that would fit it. Worth a bundle measurement in 7-1 before committing.
-4. **Settings sync subset** — is the device/user split in 7-6 right, specifically
-   `defaultAlgorithm` and `transcriptionParams`? They are arguably tuned against a
-   particular microphone.
+1. **Custom domain timing — the phase's biggest scheduling risk.** Three things need it:
+   7-1's `authDomain`, 7-4's email sender domain, and 12-3's landing page. Shipping auth on
+   `harp2tab.firebaseapp.com` and migrating later invalidates in-flight links and re-verifies
+   the sender. **Recommendation: buy the domain before Phase 7 starts** — it is a €10
+   purchase gating three separate pieces of work.
+2. **Firestore or Realtime Database.** Firestore is assumed throughout (better rules, better
+   querying). RTDB is a smaller web bundle and this sync model is a flat key-value mirror
+   that would fit it. Worth a bundle measurement in 7-1 before committing — and 7b's deferral
+   means there is time to make the measurement properly.
+3. **Settings sync subset** — is the device/user split in 7-10 right, specifically
+   `defaultAlgorithm` and `transcriptionParams`? They are arguably tuned against a particular
+   microphone.
+4. **Does `/profile` ship on native at all?** ~~Open here~~ — **moved to Phase 15**, which
+   holds every native-scope question in one place. It is a genuine question rather than a
+   default: native is where the paying users currently are, but the subscribe gate only
+   fires at purchase, which on Android already goes through Play Billing.
+
+**Closed by the 2026-08-12 decisions:** whether the free tier attaches to the account (no —
+there is no account until payment, so `totalRecordingsUsed` stays per-device); and whether
+the wall applies to native (there is no wall).
 
 ## Phase 8 — Better monetization + remaining web billing
 - RevenueCat + Stripe integration per the already-locked pricing/architecture decisions (see `project_web_version_plan` memory).
+- **Plan it against 7a done and 7b not** (see the 2026-08-12 staging decision in Phase 7). The account exists by then, `/profile` has a plan block waiting for real data, `/entitlements/{uid}` exists with its read path and rules, and 7-6 already routes users into sign-in *before* the purchase call — so Phase 8 supplies the entitlement **writer**, not the identity. The sync engine (7b) follows Phase 8, not the other way round.
+- **The lifetime buyers' claim path is a Phase 8 mechanism behind a Phase 7 door.** 7-6's voluntary sign-in carries the copy ("Bought Harp2Tab on Google Play? Sign in to keep your lifetime access on the web"); this phase makes it true.
 - **Joint Phase 7/8 deliverable, not solely Phase 8's**: grandfathering existing `react-native-iap` Play Store lifetime buyers is an identity-linking problem — an existing anonymous Android purchaser has no Firebase UID until their first login. Needs an explicit reconciliation step (RevenueCat's Play-Store-purchase import tied to first sign-in, or a manual backfill), not something that falls out of the RevenueCat SDK integration by itself.
 
 ## Phase 9 — iOS version
+- **Scope now depends on Phase 15.** This phase answers "does iOS exist at all" (a capture-bridge spike plus store setup); Phase 15 answers "what does any native platform contain". Settle 15 first, or iOS gets built by porting one screen at a time, which is how a second platform quietly doubles the maintenance cost of every phase after it.
 - The JS `pitchDetector.ts` port is already proven platform-agnostic (it's what web uses) — reuse it rather than porting the C++/Oboe MPM math to Swift.
 - What's still needed: a small native audio-capture surface, since neither `expo-audio` nor `expo-av`'s recording APIs expose live raw-PCM frame callbacks *during* recording on iOS (they're file/segment-oriented). Spike a small bridge — a Swift `AVAudioEngine` tap, or a small Expo Module — that emits `{frequency, rms}` in the same shape Android's Kotlin module does, then feed that into the existing JS pipeline unchanged.
 
@@ -1452,8 +2109,15 @@ sign out), entitlement/subscription status and manage-billing link (Phase 8), an
 per-user stats displaced from the home sidebar in 12-2 — they suit a profile page better
 than a rail.
 
-**Decision needed:** a separate `/profile` route, or a section at the top of Settings.
-Recommend a section in Settings until there is enough there to justify a route.
+**Decided 2026-08-12 — a separate `/profile` route.** Designed in full in **7-7**, which
+supersedes the recommendation this section previously made. The reasoning here (a route
+would hold three rows) turned out to understate it: with sync status, the plan block,
+connected sign-in methods, the verification banner and the danger zone it holds six
+sections. The split is `/profile` for what belongs to the *user*, Settings for what belongs
+to the *device* — the same line 7-10's sync engine draws.
+
+**What 12-2 should know:** the displaced home-sidebar stats now have a designed home in
+7-7's stats row, so 12-2 does not need to find one.
 
 ## 12-5 · Calibration only before the first recording
 
@@ -2737,6 +3401,114 @@ if this engine is never built.
   param sets, three descriptions that must each say plainly why someone would choose it.
   That is a copy problem and it is real; the descriptions in 14-5 are a first draft, not a
   finished answer.
+
+---
+
+# Phase 15 — Native port scope (decision deferred, added 2026-08-12)
+
+**This phase exists to hold a decision, not to schedule work.** Every phase above is planned
+web-first per `feedback_web_first_no_mobile_hedging`, and several of them ended with a
+native question parked at the bottom (Phase 7's 7-14, Phase 11's "native is a later port
+that may drop features", Phase 5c, Phase 13's native no-ops). Those questions are collected
+here rather than answered one at a time inside phases that are really about something else.
+
+**The decision itself is Theo's and is explicitly not being taken now**: which features get
+ported to native at all. Nothing below should be read as a commitment to port anything. The
+inventory and the suggestions are raw material for that decision.
+
+**Do not let this phase become a reason to hedge web work.** The rule stands: build the web
+product properly, decide the native subset afterwards. A feature being hard to port is not
+an argument against building it on web.
+
+## The state of native today — measured, not assumed
+
+Checked against the code on 2026-08-12, because the plan text above understates native in
+several places. Native is in better shape than "unported" and worse shape than "works".
+
+| area | native today | evidence |
+|---|---|---|
+| Live recording + pitch detection | **Real, and better than web** — Oboe + C++ MPM at 50Hz | `src/native/AudioCapture.ts` |
+| Playback + metronome | **Real, different design** — pre-renders the whole sequence to a WAV via `synthesizeWav` and plays the file, since there is no `OscillatorNode` | `src/native/Playback.ts:8-10` |
+| MIDI import | **Real** — `expo-file-system` reads the bytes, and the rest of the pipeline is pure TS | `src/audio/readFileBytes.ts` |
+| Audio import | **WAV only** — Expo 55 exposes no compressed-audio decoder | `src/audio/decodeAudio.ts:1-8` (Phase 5c) |
+| Neural transcription | **Unavailable** — `available: false`, registry hides it and falls back to pMPM | `src/audio/algorithms/basicPitch.ts:18` |
+| In-app purchase | **Real on native, stubbed on web** — the one inversion | `src/hooks/useIAP.web.ts` |
+| Persistent top bar | **Does not exist** — returns `null` | `src/components/TopBar.tsx` |
+| Everything else (Home, Edit, Piano Roll, Studio, Import, Frame Inspector) | **Renders, unverified** — the `Platform.OS` branches in these screens are layout and hover concerns, not feature gates, so the screens do mount on native. Nobody has driven them on a phone. | `edit.tsx:391`, `studio.tsx:773`, `frame-inspector.tsx:979` |
+
+**The one concrete functional break already visible:** the Studio parks its Export action in
+the global `TopBar` through `useHeaderActionStore`, and uses the Harp2Tab logo as the way
+back to the library (Phase 11's notes say so explicitly). `TopBar` is `null` on native. So
+**the MIDI Studio on native currently has no Export button and no way back** — not a layout
+problem, a dead end. Whatever this phase decides, that is the shape of the work: the web
+build made reasonable use of a chrome that native does not have.
+
+## What this phase must decide
+
+For each feature: **port as-is · port redesigned · drop on native · defer**. The useful unit
+is the feature, not the file — several features are already 90% portable TypeScript sitting
+behind one platform-specific edge.
+
+## Feature inventory, with suggestions
+
+Suggestions only. Each is a starting position to argue with, not a recommendation to adopt.
+
+### Likely ports cleanly — the pipeline is pure TypeScript
+- **Tab editing (list view)** — already the native app's main screen today. Ports as-is.
+- **Export, all five formats** — `generators.ts` is pure; `expo-sharing` and `expo-file-system` are already dependencies and already used. Ports as-is.
+- **MIDI import → tab** — the whole Phase 6 path is platform-agnostic once bytes are read, and reading them already works.
+- **Home-as-library** — `useRecordingsStore` uses the AsyncStorage shim; nothing web-specific in the data.
+- **Phase 14's spectral engine, if it ships** — pure TypeScript by design, no model download, no TensorFlow. **It would be the first polyphonic engine native could run**, which is a real argument for Phase 14 that has nothing to do with accuracy.
+
+### Need a native answer before they can be ported
+- **The MIDI Studio's chrome** — the `TopBar` problem above. Either give native a real header, or give the Studio its own (which Phase 11 explicitly decided against on web). This is the single largest unresolved native question in the app.
+- **Piano roll on a phone screen** — drag-to-move/resize at finger precision, on a pitch ladder that is already tight on a laptop. The arrow-key nudge accessibility path (Phase 4) has no touch equivalent. Suggestion: a tap-to-select + numeric-inspector model rather than a scaled-down drag surface, reusing the list view's precision editing for the fiddly parts.
+- **Two-column layouts** — recording, import's tune step, edit's sidebar (`edit.tsx:391` is web-only already). All specified as "stacked on native" in the plans above; none built or tried.
+- **Audio import beyond WAV** — Phase 5c, a MediaCodec/AVFoundation Expo module. Suggestion: worth it only if audio import is judged a core native feature; if native is mostly a recording companion, WAV-only plus a clear message is a defensible permanent answer.
+- **Neural transcription** — `tfjs-react-native`, or a native Core ML / TFLite path, or accept that native transcribes with pMPM and the spectral engine. Suggestion: do not port Basic Pitch. The download, the memory and the second stack are a poor trade on a phone, and Phase 14 may make the point moot.
+- **Frame Inspector** — the zoomable multi-track visualisation is a wide-screen tool. Suggestion: defer, or ship a cut-down single-track version.
+
+### Probably drop, or web-only by nature
+- **The landing page and SEO** (12-3) — web-only by definition.
+- **`/profile` and accounts** (Phase 7) — genuinely open, and Phase 7's own open question 4. Native is where the paying users currently are, but Play Billing already owns the purchase flow, so the subscribe-time gate has a different shape there.
+- **Cloud sync** (7b) — no technical blocker at all (the merge engine is pure), purely a question of whether native accounts exist.
+- **Hover-dependent affordances** — tooltips, hover states, the drag handles that appear on hover. These need touch equivalents or removal; they cannot simply be ported.
+
+### Things native could do that web cannot — worth considering as native's reason to exist
+- **Receive files from the system share sheet** — "Open with Harp2Tab" on an audio or MIDI file from Files, Voice Memos, WhatsApp. `expo-linking` is already a dependency; this is intent filters on Android and a document type on iOS. Arguably the strongest native-only feature available, and it turns the app into a destination rather than a place you go.
+- **Keep the screen awake while recording** — `expo-keep-awake` is already installed.
+- **Haptic feedback on note detection or metronome beats** — `expo-haptics` is already installed. Cheap, and it is the kind of thing that makes a mobile app feel native rather than wrapped.
+- **Background or lock-screen recording** — real work, and the honest question is whether anyone records a harmonica with their phone in their pocket.
+- **Better microphone access** — native already has the superior capture path (Oboe, low latency, real C++ MPM). If native's positioning is "the recording device", that is the feature to lead with.
+
+## Relationship to Phase 9 (iOS)
+
+They are different questions and should stay separate. **Phase 9 asks whether iOS exists at
+all** — it is a capture-bridge spike (`AVAudioEngine` tap emitting the same `{frequency,
+rms}` shape) plus store setup. **Phase 15 asks what any native platform contains.** Phase 15's
+answer applies to Android too, where the app is already live.
+
+Sequencing suggestion: settle Phase 15 first. Building iOS before deciding what native *is*
+means porting by default, one screen at a time, which is how a second platform quietly
+doubles the maintenance surface of every future phase.
+
+## Open questions — the ones the decision turns on
+
+1. **What is native for?** Three coherent answers, and they imply very different subsets: a
+   full peer of the web app; a *recording companion* that captures takes and hands them to
+   the web app to edit; or a *viewer* for a library built elsewhere. The companion answer is
+   the one the code is already closest to, and the one that plays to native's genuine
+   advantage — it has the better microphone path.
+2. **Does the existing live Android app get upgraded to the web feature set, or does it stay
+   as it is?** It currently has none of the library, import or Studio work
+   (`project_live_app_vs_web_branch`). "Leave it be and put new work on web" is a legitimate
+   answer for a solo developer, and it should be considered explicitly rather than by
+   default.
+3. **Does native get accounts?** Phase 7's open question 4, restated. Everything downstream
+   of it — sync, entitlement portability, `/profile` — follows from the answer.
+4. **Who maintains parity?** Every phase after this one gains a "and on native?" cost. If the
+   answer to (1) is "full peer", that cost is permanent and should be priced in before
+   agreeing to it.
 
 ## Cross-cutting technical risks (apply across phases, not phase-specific)
 - **`nsdf`/clarity is typed but never populated.** `AudioFrame.nsdf` exists in the type but Android's Kotlin module never sets it and web hardcodes `0`. Frame Inspector (Phase 2) only has real `frequency`/`rms`/post-hoc `confidence` to show — a genuine pitch-clarity track would need new native + JS work, not just wiring up an existing value.
