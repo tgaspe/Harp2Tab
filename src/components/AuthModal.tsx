@@ -12,10 +12,11 @@
  *   enumeration protection deliberately collapses both into one code, so the app genuinely
  *   does not know which it was. Guessing would be a lie; naming both is the honest form.
  * - **The post-submit panel is not a spinner.** The next thing the user has to do happens in
- *   their inbox, so the modal has to say so and name the address it went to.
+ *   their inbox, so the modal has to say so and name the address it went to. This now applies
+ *   to password reset only — see `SentPanel`.
  *
- * UI-only pass: the auth calls are inert (`useAuth`'s `notWired`), but every transition,
- * validation and error state below is real.
+ * Wired at 7-3 (Google) and 7-4 (email and password). Every transition, validation and error
+ * state was built during the UI pass and did not change when the real calls landed.
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
@@ -77,8 +78,6 @@ export function AuthModal({ visible, initialMode = 'signUp', onClose, reason }: 
   const [emailError, setEmailError]       = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [formError, setFormError]         = useState<string | null>(null);
-  /** Which flow produced the `sent` panel — the copy differs. */
-  const [sentKind, setSentKind] = useState<'verify' | 'reset'>('verify');
 
   // Re-seed on open rather than carrying over whatever was typed last time. Same reasoning
   // as NameRecordingModal's effect.
@@ -125,7 +124,6 @@ export function AuthModal({ visible, initialMode = 'signUp', onClose, reason }: 
       setBusy(true);
       try {
         await auth.sendPasswordReset(email);
-        setSentKind('reset');
         setMode('sent');
       } catch (error) {
         setFormError(messageFor(error));
@@ -138,8 +136,16 @@ export function AuthModal({ visible, initialMode = 'signUp', onClose, reason }: 
     try {
       if (mode === 'signUp') {
         await auth.signUpWithEmail(email, password);
-        setSentKind('verify');
-        setMode('sent');
+        // Closes rather than showing a "check your inbox" panel, which is what this did
+        // during the UI pass.
+        //
+        // 7-4 signs a new account in immediately and leaves it unverified — the app is fully
+        // usable, only sync waits. So by the time this resolves the user is already on a
+        // signed-in screen with `VerifyBanner` on it, and that banner says the same sentence
+        // this panel would ("We sent a link to …"), except it persists across navigation
+        // instead of trapping them behind a modal they have to dismiss. Two surfaces telling
+        // one story, and the modal was the worse of them.
+        onClose();
       } else {
         await auth.signInWithEmail(email, password);
         onClose();
@@ -200,7 +206,7 @@ export function AuthModal({ visible, initialMode = 'signUp', onClose, reason }: 
             keyboardShouldPersistTaps="handled"
           >
             {mode === 'sent' ? (
-              <SentPanel theme={theme} email={email} kind={sentKind} onBack={() => switchTo('signIn')} />
+              <SentPanel theme={theme} email={email} onBack={() => switchTo('signIn')} />
             ) : (
               <>
                 {mode !== 'forgot' && (
@@ -364,8 +370,13 @@ function SwitchLink({
   );
 }
 
-/** The panel after submitting. Deliberately not a spinner: the next step happens in another
- *  app, so the modal has to say what to go and do.
+/** The panel after requesting a password reset. Deliberately not a spinner: the next step
+ *  happens in another app, so the modal has to say what to go and do.
+ *
+ *  Reset is the only flow that still lands here. Signup used to as well, until it started
+ *  signing the user straight in — `VerifyBanner` says the same thing on the page behind, and
+ *  says it persistently. Reset has no such banner, because the user is not signed in and by
+ *  definition cannot be, so this panel is the only thing that tells them to go and look.
  *
  *  TODO(domain): the mail this panel promises currently arrives from
  *  `noreply@<project>.firebaseapp.com` in Firebase's default wording — a poor first
@@ -374,23 +385,19 @@ function SwitchLink({
  *  "check your spam folder" line, that is a workaround for the missing sender domain, not a
  *  fix. See `src/auth/useAuth.ts`. */
 function SentPanel({
-  theme, email, kind, onBack,
-}: { theme: Theme; email: string; kind: 'verify' | 'reset'; onBack: () => void }) {
+  theme, email, onBack,
+}: { theme: Theme; email: string; onBack: () => void }) {
   const styles = createStyles(theme);
   return (
     <View style={styles.sent}>
       <Ionicons name="mail-outline" size={40} color={theme.accent} />
-      <Text style={styles.sentTitle}>
-        {kind === 'verify' ? 'Confirm your email' : 'Reset link sent'}
-      </Text>
+      <Text style={styles.sentTitle}>Reset link sent</Text>
       <Text style={styles.sentBody}>
-        We sent {kind === 'verify' ? 'a confirmation link' : 'a link to set a new password'} to{' '}
+        We sent a link to set a new password to{' '}
         <Text style={styles.sentEmail}>{email}</Text>.
       </Text>
       <Text style={styles.sentHint}>
-        {kind === 'verify'
-          ? 'You can keep using Harp2Tab in the meantime — your tabs are saved on this device either way.'
-          : 'The link expires after a while, so open it soon.'}
+        The link expires after a while, so open it soon.
       </Text>
       <Pressable
         onPress={onBack}

@@ -17,6 +17,20 @@ export class SignInCancelled extends Error {
   }
 }
 
+export class AccountExistsWithOtherMethod extends Error {
+  constructor(readonly email: string) {
+    super(`An account already exists for ${email} using a different sign-in method.`);
+    this.name = 'AccountExistsWithOtherMethod';
+  }
+}
+
+export class ReauthRequired extends Error {
+  constructor() {
+    super('Please confirm it is you before making this change.');
+    this.name = 'ReauthRequired';
+  }
+}
+
 const NOT_ON_NATIVE = 'Accounts are web-only for now — this is coming to the app in a later release.';
 
 export async function signInWithGoogle(): Promise<AuthUser> {
@@ -38,4 +52,49 @@ export function onAuthChange(callback: (user: AuthUser | null) => void): () => v
 
 export async function reloadUser(): Promise<AuthUser | null> {
   return null;
+}
+
+/* Every remaining function exists so the two halves of the seam stay type-identical. If this
+ * file drifts from `auth.web.ts`, the web build keeps working and only native breaks — at
+ * whatever later date someone tries to build it. Keeping the shapes in lockstep is what makes
+ * `tsc` catch that today instead. */
+
+export async function signUpWithEmail(_email: string, _password: string): Promise<AuthUser> {
+  throw new Error(NOT_ON_NATIVE);
+}
+
+export async function signInWithEmail(_email: string, _password: string): Promise<AuthUser> {
+  throw new Error(NOT_ON_NATIVE);
+}
+
+export async function sendPasswordReset(_email: string): Promise<void> {
+  throw new Error(NOT_ON_NATIVE);
+}
+
+export async function resendVerification(): Promise<void> {
+  throw new Error(NOT_ON_NATIVE);
+}
+
+export async function updateDisplayName(_name: string): Promise<AuthUser> {
+  throw new Error(NOT_ON_NATIVE);
+}
+
+export async function linkEmailPassword(_email: string, _password: string): Promise<AuthUser> {
+  throw new Error(NOT_ON_NATIVE);
+}
+
+export async function reauthenticate(_password?: string): Promise<void> {
+  throw new Error(NOT_ON_NATIVE);
+}
+
+export async function applyVerificationCode(_oobCode: string): Promise<void> {
+  throw new Error(NOT_ON_NATIVE);
+}
+
+export async function checkPasswordResetCode(_oobCode: string): Promise<string> {
+  throw new Error(NOT_ON_NATIVE);
+}
+
+export async function confirmPasswordReset(_oobCode: string, _newPassword: string): Promise<void> {
+  throw new Error(NOT_ON_NATIVE);
 }

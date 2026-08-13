@@ -17,17 +17,28 @@
  * rewrites unknown paths, so a client-only redirect target does not exist as HTML and a cold
  * load 404s. A Firebase Hosting rewrite is needed alongside it.
  *
- * TODO(domain): this route's origin moves when the custom domain lands. Firebase mints
- * action links against `authDomain`, so while that is `harp2tab.firebaseapp.com` every link
- * points there — and switching invalidates any link already sitting in someone's inbox. The
- * Hosting rewrite above has to be configured for whichever origin is live. See the block in
- * `src/auth/useAuth.ts` for the full deferral.
+ * TODO(domain): **this page is not what Firebase's emails currently link to.** Two separate
+ * things have to change when the domain lands, and missing the second is easy:
  *
- * UI-only pass: nothing is verified and no code is consumed. `?mode=` drives the branch and
- * `?state=` forces the outcome so every screen can be reviewed.
+ *  1. `authDomain` in `.env`, plus the Hosting `__/auth` rewrite described above.
+ *  2. **The action URL on each email template** — Firebase console → Authentication →
+ *     Templates → the pencil beside "action URL". It defaults to
+ *     `https://harp2tab.firebaseapp.com/__/auth/action`, which is Firebase's own generic
+ *     handler page, so until it is repointed here every verification and reset link lands
+ *     there instead. The flow *works* — the address really is confirmed — it just happens on
+ *     a page that is not ours.
+ *
+ * Switching also invalidates any link already sitting in someone's inbox. To exercise this
+ * page before then, take the `oobCode` out of a real email's link and open
+ * `/auth/action?mode=verifyEmail&oobCode=…` here: the code is valid whichever page spends it.
+ * See the block in `src/auth/useAuth.ts` for the full deferral.
+ *
+ * Wired at 7-4. The `oobCode` in the URL is consumed for real; `?state=` survives as a
+ * dev-only override so the expired and success panels stay reviewable without having to let
+ * a real link go stale.
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator, Platform, Pressable, StyleSheet, Text, View, type ViewStyle,
 } from 'react-native';
@@ -35,6 +46,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { MIN_PASSWORD_LENGTH, PasswordField } from '@/components/PasswordField';
+import { applyVerificationCode, checkPasswordResetCode, confirmPasswordReset } from '@/auth/auth';
 import { useTheme } from '@/hooks/useTheme';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { FONT } from '@/constants/keys';
@@ -51,28 +63,77 @@ export default function AuthActionScreen() {
   const theme  = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
 
-  const params = useLocalSearchParams<{ mode?: string; state?: string }>();
-  const mode = (params.mode as Mode) || 'verifyEmail';
+  const params = useLocalSearchParams<{ mode?: string; state?: string; oobCode?: string }>();
+  const mode    = (params.mode as Mode) || 'verifyEmail';
+  const oobCode = typeof params.oobCode === 'string' ? params.oobCode : undefined;
 
-  // UI-only: `?state=` forces the branch. With real auth this comes from applyActionCode /
-  // verifyPasswordResetCode.
-  const forced = params.state as Outcome | undefined;
-  const [outcome, setOutcome] = useState<Outcome>(forced ?? (mode === 'resetPassword' ? 'working' : 'success'));
+  // `?state=` still forces the branch, but only in development — the expired panel is
+  // otherwise reachable solely by waiting for a real link to rot. Ignored in production so a
+  // shared URL cannot be made to claim an address was confirmed when it was not.
+  const forced = __DEV__ ? (params.state as Outcome | undefined) : undefined;
 
+  const [outcome, setOutcome] = useState<Outcome>(forced ?? 'working');
   const [password, setPassword] = useState('');
   const [busy, setBusy]         = useState(false);
   const [error, setError]       = useState<string | null>(null);
+
+  /**
+   * Consume the code on arrival.
+   *
+   * `verifyEmail` and `recoverEmail` complete here with nothing more to ask the user.
+   * `resetPassword` only *validates* the code at this point — the actual change waits for the
+   * new password below — which is why its success path leaves the form on screen rather than
+   * jumping to a confirmation.
+   *
+   * Runs once. Action codes are single-use, so a re-run on re-render would spend the code and
+   * then report it as already used, which is the same screen a genuinely expired link gets.
+   */
+  const consumed = useRef(false);
+  useEffect(() => {
+    if (forced || consumed.current) return;
+    consumed.current = true;
+
+    if (!oobCode) {
+      // Reached without a code at all — a hand-typed URL, or a mail client that mangled the
+      // link. Same remedy as expiry, so the same panel.
+      setOutcome('invalid');
+      return;
+    }
+
+    (async () => {
+      try {
+        if (mode === 'resetPassword') {
+          await checkPasswordResetCode(oobCode);
+          setOutcome('working');
+        } else {
+          await applyVerificationCode(oobCode);
+          setOutcome('success');
+        }
+      } catch {
+        // Deliberately not surfacing the underlying message: every failure here — expired,
+        // already used, malformed — has one remedy, and `mapErrors` has already logged the
+        // real cause for us.
+        setOutcome('invalid');
+      }
+    })();
+  }, [forced, mode, oobCode]);
 
   async function handleSetPassword() {
     if (password.length < MIN_PASSWORD_LENGTH) {
       setError(`Use at least ${MIN_PASSWORD_LENGTH} characters.`);
       return;
     }
+    if (!oobCode) {
+      setOutcome('invalid');
+      return;
+    }
     setError(null);
     setBusy(true);
     try {
-      console.warn('[7a-UI] confirmPasswordReset is not wired yet — this pass is UI only.');
+      await confirmPasswordReset(oobCode, password);
       setOutcome('success');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not set your password. Please try again.');
     } finally { setBusy(false); }
   }
 
@@ -81,7 +142,19 @@ export default function AuthActionScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.container}>
-        {outcome === 'invalid' ? (
+        {/* Checking, for the two modes that complete without asking anything. Without this
+            the success panel would render while `applyActionCode` was still in flight — the
+            app telling the user their address was confirmed slightly before it was, and
+            still saying so if the call then failed. `resetPassword` is excluded because its
+            `working` state is the form itself. */}
+        {outcome === 'working' && mode !== 'resetPassword' ? (
+          <View style={styles.panel}>
+            <ActivityIndicator size="large" color={theme.accent} />
+            <Text style={styles.body}>
+              {mode === 'recoverEmail' ? 'Restoring your email address…' : 'Confirming your email…'}
+            </Text>
+          </View>
+        ) : outcome === 'invalid' ? (
           <Panel
             theme={theme}
             icon="time-outline"
@@ -164,12 +237,16 @@ export default function AuthActionScreen() {
           />
         )}
 
-        <Text style={styles.mockNotice}>
-          UI preview — no code is being verified. Try{' '}
-          <Text style={styles.mockCode}>?mode=resetPassword</Text>,{' '}
-          <Text style={styles.mockCode}>?mode=recoverEmail</Text>,{' '}
-          <Text style={styles.mockCode}>?state=invalid</Text>.
-        </Text>
+        {/* Development only. The codes are real now, so this line would be a lie in a build a
+            user can reach — and `?state=` is ignored there anyway. */}
+        {__DEV__ && (
+          <Text style={styles.mockNotice}>
+            Dev override — force a panel with{' '}
+            <Text style={styles.mockCode}>?state=invalid</Text> or{' '}
+            <Text style={styles.mockCode}>?state=success</Text>. Without it, the{' '}
+            <Text style={styles.mockCode}>oobCode</Text> in the URL is consumed for real.
+          </Text>
+        )}
       </View>
     </SafeAreaView>
   );

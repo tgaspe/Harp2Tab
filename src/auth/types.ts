@@ -19,9 +19,16 @@ export interface AuthUser {
   /** Google supplies one; an email signup starts without. Editable either way. */
   displayName:   string | null;
   /**
-   * Not cosmetic — sync is withheld until it is true (see 7-4), and it changes when the
-   * user acts *outside* the app, so the SDK's cached value goes stale. Whatever populates
-   * this later has to reload the user explicitly rather than waiting for an auth event.
+   * Whether *we* consider the address confirmed — not a mirror of Firebase's own flag.
+   *
+   * Not cosmetic: sync is withheld until it is true (see 7-4), and it changes when the user
+   * acts *outside* the app, so the SDK's cached value goes stale. Whatever populates this has
+   * to reload the user explicitly rather than waiting for an auth event.
+   *
+   * **It is `true` for any account with a Google identity, whatever Firebase reports** —
+   * Firebase clears its own flag when a password is linked to a Google account, without
+   * sending anything to confirm. See the note in `auth.web.ts`'s `toAuthUser`, and note that
+   * 7-12's Firestore rules have to apply the same definition or the two will disagree.
    */
   emailVerified: boolean;
   /** Every method linked to this account. Length > 1 after `linkWithCredential`. */

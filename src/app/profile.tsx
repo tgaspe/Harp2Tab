@@ -28,6 +28,8 @@ import { AppSidebar } from '@/components/AppSidebar';
 import { AuthModal } from '@/components/AuthModal';
 import { AvatarCircle } from '@/components/AvatarCircle';
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal';
+import { EditNameModal } from '@/components/EditNameModal';
+import { SetPasswordModal } from '@/components/SetPasswordModal';
 import { SyncStatusRow } from '@/components/SyncStatusRow';
 import { VerifyBanner } from '@/components/VerifyBanner';
 import {
@@ -50,6 +52,25 @@ const PROVIDER_LABEL: Record<AuthProviderId, string> = {
   password: 'Email and password',
 };
 
+/**
+ * Where a result message appears.
+ *
+ * One notice at the top of the page was the first attempt and it was wrong: `/profile` is a
+ * long single column, and "Change password" sits far enough down that a confirmation at the
+ * top is off-screen when it appears. A message the user has to go looking for does not do the
+ * job of a message — it reads as a button that did nothing.
+ *
+ * So each result renders beside the control that caused it. `'top'` is still right for the
+ * verification banner, which is itself at the top.
+ */
+type NoticeAnchor = 'top' | 'profile' | 'signin';
+
+interface Notice {
+  tone:   'ok' | 'warn';
+  text:   string;
+  anchor: NoticeAnchor;
+}
+
 /** Total playing time across the library, as "3h 12m" / "12m". */
 function formatPlayingTime(totalMs: number): string {
   const minutes = Math.round(totalMs / 60000);
@@ -67,29 +88,52 @@ export default function ProfileScreen() {
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<'signUp' | 'signIn'>('signUp');
   const [deleteOpen, setDeleteOpen]       = useState(false);
-  const [notice, setNotice]               = useState<string | null>(null);
+  const [notice, setNotice]               = useState<Notice | null>(null);
+  const [nameOpen, setNameOpen]           = useState(false);
+  const [linkOpen, setLinkOpen]           = useState(false);
 
   /**
-   * Wraps an auth action so a failure lands on screen instead of in an unhandled rejection.
+   * Wraps an auth action so its outcome lands on screen — both outcomes.
    *
-   * Needed from 7-3 onward: these actions used to `console.warn` and resolve, so every call
-   * site here could ignore the result. They now throw — the ones that are genuinely unbuilt
-   * (7-4's email surface, 7-13's deletion) say so, and the real ones carry copy already
-   * written for a user. Either way the page has to be able to show it, and a button that
-   * silently does nothing is exactly the failure this slice's own rules forbid.
+   * Failure reporting came first (7-3): these actions used to `console.warn` and resolve, so
+   * call sites could ignore the result, and they now throw instead.
+   *
+   * **`success` matters just as much, and its absence was a real bug.** Several of these
+   * actions do their whole job somewhere the user cannot see — "Change password" sends an
+   * email and changes nothing on the page. With no confirmation, a working button is
+   * indistinguishable from a dead one, and the honest reading of a screen that does nothing
+   * is that nothing happened. Any action whose effect is invisible here must pass a message.
    */
   const run = useCallback(
-    (action: () => Promise<unknown>) => async () => {
+    (action: () => Promise<unknown>, success?: string, anchor: NoticeAnchor = 'top') => async () => {
       setNotice(null);
       try {
         await action();
+        if (success) setNotice({ tone: 'ok', text: success, anchor });
       } catch (error) {
-        setNotice(error instanceof Error && error.message
-          ? error.message
-          : 'Something went wrong. Please try again.');
+        setNotice({
+          tone: 'warn',
+          anchor,
+          text: error instanceof Error && error.message
+            ? error.message
+            : 'Something went wrong. Please try again.',
+        });
       }
     },
     [],
+  );
+
+  /** Renders the notice only where it belongs, so each call site can drop one in place. */
+  const noticeAt = useCallback(
+    (anchor: NoticeAnchor) => (notice && notice.anchor === anchor ? (
+      <Text
+        style={[styles.notice, notice.tone === 'ok' ? styles.noticeOk : styles.noticeWarn]}
+        accessibilityRole="alert"
+      >
+        {notice.text}
+      </Text>
+    ) : null),
+    [notice, styles],
   );
 
   // Real local data, not mocked — see the note at the top of the file.
@@ -235,9 +279,7 @@ export default function ProfileScreen() {
               beside each control: several of these actions are triggered from the global
               header or from inside a modal that closes, so a message anchored to the button
               would appear somewhere the user is no longer looking. */}
-          {!!notice && (
-            <Text style={styles.notice} accessibilityRole="alert">{notice}</Text>
-          )}
+          {noticeAt('top')}
 
           {!verified && (
             <View style={styles.bannerWrap}>
@@ -270,13 +312,16 @@ export default function ProfileScreen() {
               first
               label="Name"
               value={user.displayName ?? 'Not set'}
-              action={{ label: 'Edit', onPress: run(() => auth.updateDisplayName(name)) }}
+              action={{ label: 'Edit', onPress: () => setNameOpen(true) }}
             />
             <FieldRow label="Email" value={user.email} />
             <FieldRow label="Joined" value={joinedOn(user)} />
             <FieldRow
               label="Status"
-              action={verified ? undefined : { label: 'Resend', onPress: run(auth.resendVerification) }}
+              action={verified ? undefined : {
+                label: 'Resend',
+                onPress: run(auth.resendVerification, 'Confirmation email sent again — check your inbox.', 'profile'),
+              }}
             >
               <View style={styles.inlineStatus}>
                 <Ionicons
@@ -289,6 +334,7 @@ export default function ProfileScreen() {
                 </Text>
               </View>
             </FieldRow>
+            {noticeAt('profile')}
           </Section>
 
           <Section
@@ -331,9 +377,14 @@ export default function ProfileScreen() {
             ))}
             <View style={styles.sectionAction}>
               {user.providers.includes('password')
-                ? <Button label="Change password" onPress={run(() => auth.sendPasswordReset(user.email))} />
-                : <Button label="Add email and password" onPress={() => openAuth('signUp')} />}
+                ? <Button label="Change password" onPress={run(
+                    () => auth.sendPasswordReset(user.email),
+                    `We've sent a link to ${user.email}. Open it to set a new password.`,
+                    'signin',
+                  )} />
+                : <Button label="Add email and password" onPress={() => setLinkOpen(true)} />}
             </View>
+            {noticeAt('signin')}
           </Section>
 
           <Section
@@ -378,6 +429,30 @@ export default function ProfileScreen() {
         visible={authModalOpen}
         initialMode={authModalMode}
         onClose={() => setAuthModalOpen(false)}
+      />
+
+      {/* A web-shaped dialog rather than `NameRecordingModal`'s phone sheet — see the note
+          at the top of `EditNameModal`. */}
+      <EditNameModal
+        visible={nameOpen}
+        initialName={user.displayName ?? ''}
+        onConfirm={async (next) => {
+          setNameOpen(false);
+          await run(() => auth.updateDisplayName(next), 'Name updated.', 'profile')();
+        }}
+        onCancel={() => setNameOpen(false)}
+      />
+
+      {/* 7-5. Adds a password to a Google-only account — deliberately not the sign-up modal,
+          which would try to create a second account for an address that already has one. */}
+      <SetPasswordModal
+        visible={linkOpen}
+        email={user.email}
+        onConfirm={async (password) => {
+          await auth.linkEmailPassword(user.email, password);
+          setLinkOpen(false);
+        }}
+        onCancel={() => setLinkOpen(false)}
       />
     </Shell>
   );
@@ -485,14 +560,14 @@ function createStyles(t: Theme) {
       paddingVertical: 10,
       paddingHorizontal: 14,
       borderRadius:    10,
-      backgroundColor: `${t.warning}1A`,
       borderWidth:     1,
-      borderColor:     `${t.warning}44`,
       color:           t.textPrimary,
       fontFamily:      Poppins.regular,
       fontSize:        FONT.sm,
       lineHeight:      20,
     },
+    noticeOk:   { backgroundColor: `${t.success}1A`, borderColor: `${t.success}44` },
+    noticeWarn: { backgroundColor: `${t.warning}1A`, borderColor: `${t.warning}44` },
 
     // Answers "what do I have here?" before any settings row does, and gives the top of the
     // page density that a run of label/value rows cannot.

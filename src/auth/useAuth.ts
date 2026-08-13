@@ -47,7 +47,17 @@
 
 import { useCallback } from 'react';
 import { useLocalSearchParams } from 'expo-router';
-import { SignInCancelled, signInWithGoogle, signOut } from './auth';
+import {
+  SignInCancelled,
+  linkEmailPassword,
+  resendVerification,
+  sendPasswordReset,
+  signInWithEmail,
+  signInWithGoogle,
+  signOut,
+  signUpWithEmail,
+  updateDisplayName,
+} from './auth';
 import { resolveMockState } from './mockStates';
 import { useAuthStore } from './useAuthStore';
 import type { AuthState, AuthUser } from './types';
@@ -104,13 +114,22 @@ const notBuilt = (what: string) => async () => {
  * leave anything behind in a user's storage when this harness is deleted.
  *
  * **Kept past 7-1, against the plan, and `__DEV__`-gated instead — deliberate.** The plan
- * deletes this file at 7-1. But Google sign-in produces only one of the states the screens
- * render: a verified Google user. `unverified`, the five sync-row variants and the empty
- * `newUser` library are unreachable with real auth until 7-4 and 7b, so deleting the harness
- * now would leave `VerifyBanner` and `SyncStatusRow` with no way to be looked at for a phase
- * or more. `__DEV__` is false in any production bundle, so the mechanism cannot reach a user
- * — which was the actual risk the deletion was protecting against. It goes at 7-7, when
- * `/profile` has real states to render.
+ * deletes this file at 7-1, and the risk it was guarding against is that a mock signed-in
+ * state reaches a real user. `__DEV__` is false in every production bundle, so that cannot
+ * happen; the gate buys the same safety without the loss.
+ *
+ * **Re-examined at 7-7 and kept again**, now that most states are genuinely reachable
+ * (sign out, Google, an email signup for `unverified`, an empty library for `newUser`). Two
+ * are still not, and they are the reason:
+ *
+ * - `?mock=resolving` holds the bootstrap skeleton indefinitely. Real resolution takes a few
+ *   milliseconds, so without this the skeleton cannot be looked at at all.
+ * - The five sync-row variants cannot exist until 7b — `sync` is pinned to `'unavailable'`
+ *   in the store for the whole of 7a.
+ *
+ * So it goes at the end of 7b, when the sync row has real states and the skeleton is the only
+ * thing left. Delete `mockStates.ts`, this block, `useMockOverride` and `isMock` together —
+ * `grep -rn "isMock" src/` is the full list of call sites.
  */
 let latchedMock: string | undefined;
 
@@ -169,6 +188,31 @@ export function useAuth(): UseAuthResult {
 
   const doSignOut = useCallback(async () => { await signOut(); }, []);
 
+  /**
+   * The email actions need no local state handling for the same reason Google does not:
+   * `onAuthChange` fires and the store updates itself. The exceptions are the two that change
+   * the *current* user without producing an auth event — `updateDisplayName` and
+   * `linkEmailPassword` both mutate the signed-in user in place — so those push the returned
+   * user into the store by hand, exactly as `reload` does.
+   */
+  const setUser = useAuthStore((s) => s.setUser);
+
+  const doSignUpWithEmail = useCallback(async (email: string, password: string) => {
+    await signUpWithEmail(email, password);
+  }, []);
+
+  const doSignInWithEmail = useCallback(async (email: string, password: string) => {
+    await signInWithEmail(email, password);
+  }, []);
+
+  const doUpdateDisplayName = useCallback(async (name: string) => {
+    setUser(await updateDisplayName(name));
+  }, [setUser]);
+
+  const doLinkEmailPassword = useCallback(async (email: string, password: string) => {
+    setUser(await linkEmailPassword(email, password));
+  }, [setUser]);
+
   const state: AuthState = mocked ?? { status, user, sync };
 
   return {
@@ -177,16 +221,15 @@ export function useAuth(): UseAuthResult {
     signInWithGoogle:   doSignInWithGoogle,
     signOut:            doSignOut,
     reloadUser:         reload,
-    // 7-4. Listed explicitly rather than collapsed into a loop so that adding the real
-    // implementation is a visible one-line change per action.
-    signUpWithEmail:    notBuilt('Email sign-up'),
-    signInWithEmail:    notBuilt('Email sign-in'),
-    sendPasswordReset:  notBuilt('Password reset'),
-    resendVerification: notBuilt('Resending the confirmation email'),
-    linkEmailPassword:  notBuilt('Linking email sign-in'),
-    // 7-13.
+    signUpWithEmail:    doSignUpWithEmail,
+    signInWithEmail:    doSignInWithEmail,
+    sendPasswordReset,
+    resendVerification,
+    linkEmailPassword:  doLinkEmailPassword,
+    updateDisplayName:  doUpdateDisplayName,
+    // 7-13, the last of 7a's actions still unbuilt. Deletion is not just a `delete()` call —
+    // it carries the re-auth step, the Firestore subtree and the store-policy obligations.
     deleteAccount:      notBuilt('Account deletion'),
-    updateDisplayName:  notBuilt('Changing your display name'),
   };
 }
 

@@ -12,10 +12,22 @@
  */
 
 import {
+  EmailAuthProvider,
   GoogleAuthProvider,
+  applyActionCode,
+  confirmPasswordReset as fbConfirmPasswordReset,
+  createUserWithEmailAndPassword,
+  linkWithCredential,
   onAuthStateChanged,
+  reauthenticateWithCredential,
+  reauthenticateWithPopup,
+  sendEmailVerification,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
   signInWithPopup,
   signOut as fbSignOut,
+  updateProfile,
+  verifyPasswordResetCode,
   type User,
 } from 'firebase/auth';
 import { firebaseAuth } from './firebase.web';
@@ -28,6 +40,99 @@ export class SignInCancelled extends Error {
   constructor() {
     super('Sign-in cancelled');
     this.name = 'SignInCancelled';
+  }
+}
+
+/**
+ * Raised when someone signs in with a method the address is not registered under — 7-5's
+ * case. Carries the address so the caller can name it without re-deriving it.
+ *
+ * Its own type because the remedy is a flow, not a message: sign in with the original
+ * method, then link the new one. A caller that cannot distinguish this from a generic
+ * failure can only tell the user to try again, which is exactly what will not work.
+ */
+export class AccountExistsWithOtherMethod extends Error {
+  constructor(readonly email: string) {
+    super(`An account already exists for ${email} using a different sign-in method.`);
+    this.name = 'AccountExistsWithOtherMethod';
+  }
+}
+
+/** Raised when Firebase wants a fresh sign-in before a sensitive change. Callers respond by
+ *  opening `ReauthModal` and retrying, rather than by showing this to the user. */
+export class ReauthRequired extends Error {
+  constructor() {
+    super('Please confirm it is you before making this change.');
+    this.name = 'ReauthRequired';
+  }
+}
+
+/**
+ * Firebase error code → copy that is safe to show a user.
+ *
+ * **The enumeration-protection cases are the ones to get right.** The project has email
+ * enumeration protection enabled, which deliberately collapses "no account with that
+ * address" and "wrong password" into a single `auth/invalid-credential` — the app genuinely
+ * cannot tell which, by design. So the copy names both possibilities and offers the reset
+ * link alongside. Writing it this way from the start matters: the tempting fix, when someone
+ * reports the vagueness as a bug, is to turn the protection off.
+ */
+function describeAuthError(code: string): string {
+  switch (code) {
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password':
+    case 'auth/user-not-found':
+      return 'That email and password don\'t match an account. Check them, or reset your password.';
+    case 'auth/email-already-in-use':
+      // Names Google explicitly rather than saying "sign in instead". With
+      // one-account-per-email linking enabled, much the most likely reason this address is
+      // taken is that it was created with Google — and telling someone to sign in, when the
+      // account they have has no password, sends them to a form that cannot work and then to
+      // a reset email for a password that never existed.
+      return 'There is already an account with that email. Sign in instead — and if you created it with Google, use Continue with Google.';
+    case 'auth/invalid-email':
+      return 'That does not look like an email address.';
+    case 'auth/weak-password':
+      return 'That password is too short. Use at least 8 characters.';
+    case 'auth/too-many-requests':
+      return 'Too many attempts. Wait a few minutes and try again.';
+    case 'auth/network-request-failed':
+      return 'Could not reach the server. Check your connection and try again.';
+    case 'auth/user-disabled':
+      return 'That account has been disabled.';
+    case 'auth/provider-already-linked':
+      return 'That sign-in method is already on your account.';
+    case 'auth/credential-already-in-use':
+      return 'That email is already used by another account.';
+    case 'auth/operation-not-allowed':
+      return 'That sign-in method is not enabled for this project.';
+    default:
+      // The code is included rather than hidden. These are the cases nobody anticipated, and
+      // a user who can quote the code turns an unreproducible report into a fixable one.
+      return `Something went wrong (${code}). Please try again.`;
+  }
+}
+
+/**
+ * Wraps an SDK call so every failure leaves here as a plain `Error` with user-safe copy,
+ * and the original is always logged.
+ *
+ * Centralised because the alternative — a `try/catch` per function — is how one of them ends
+ * up leaking `auth/invalid-credential` into the UI.
+ */
+async function mapErrors<T>(what: string, action: () => Promise<T>): Promise<T> {
+  try {
+    return await action();
+  } catch (error) {
+    const code = (error as { code?: string }).code ?? '(no code)';
+    console.error(`[auth] ${what} failed:`, code, error);
+
+    if (code === 'auth/requires-recent-login') throw new ReauthRequired();
+    if (code === 'auth/account-exists-with-different-credential') {
+      const email = (error as { customData?: { email?: string } }).customData?.email ?? '';
+      throw new AccountExistsWithOtherMethod(email);
+    }
+    throw new Error(describeAuthError(code));
   }
 }
 
@@ -55,11 +160,34 @@ export function toAuthUser(user: User): AuthUser {
     .map((p) => toProviderId(p.providerId))
     .filter((p): p is AuthProviderId => p !== null);
 
+  /**
+   * **A Google identity counts as a confirmed address, even when Firebase's own flag says
+   * otherwise.** Decided by the user, 2026-08-13, after observing the behaviour below.
+   *
+   * Firebase sets `emailVerified` back to `false` when an email/password credential is
+   * linked to an account — including one created through Google, where the address was
+   * already verified. It also sends no email when that happens. The result is an account
+   * that is told to confirm an address nobody asked it to confirm, by a banner promising a
+   * link that was never sent.
+   *
+   * Trusting Google here is sound rather than a shortcut: verification exists to prove the
+   * user controls the address, and signing in through Google proves exactly that. Asking
+   * again proves nothing new.
+   *
+   * **This obliges 7-12's Firestore rules to agree.** A rule written as
+   * `request.auth.token.email_verified == true` will reject these users, and the symptom
+   * would be a UI that says confirmed next to a backend that refuses to sync — worse than
+   * the bug this fixes, and much harder to trace. The rule has to accept a Google identity
+   * too, via `'google.com' in request.auth.token.firebase.identities`. Do not write those
+   * rules without reading this comment.
+   */
+  const confirmedByGoogle = providers.includes('google');
+
   return {
     uid:           user.uid,
     email:         user.email ?? '',
     displayName:   user.displayName,
-    emailVerified: user.emailVerified,
+    emailVerified: user.emailVerified || confirmedByGoogle,
     providers,
     // `creationTime` is an RFC-1123 string, not epoch ms. Parsed once here so "Member since"
     // never has to know that. Falls back to now rather than NaN, which would render as
@@ -131,6 +259,149 @@ export async function signInWithGoogle(): Promise<AuthUser> {
 
 export async function signOut(): Promise<void> {
   await fbSignOut(firebaseAuth());
+}
+
+/* ── Email and password (7-4) ─────────────────────────────────────────────────────────── */
+
+/**
+ * Create the account, then send the confirmation email.
+ *
+ * The user is signed in immediately and `emailVerified` is false. That is deliberate and is
+ * 7-4's decision: **unverified users are not locked out — sync is what waits.** Firebase
+ * signs them in happily, so the enforcement point is ours to choose, and blocking the app
+ * would strand someone whose confirmation mail is slow at the exact moment they were trying
+ * to save a take.
+ *
+ * The verification send is not allowed to fail the signup. The account exists by then, so
+ * throwing here would report failure for something that succeeded, and the user would be
+ * unable to retry without hitting `email-already-in-use`. `VerifyBanner`'s resend button is
+ * the recovery path, and it is on screen the moment this returns.
+ */
+export async function signUpWithEmail(email: string, password: string): Promise<AuthUser> {
+  const credential = await mapErrors('Email sign-up', () =>
+    createUserWithEmailAndPassword(firebaseAuth(), email, password));
+
+  try {
+    await sendEmailVerification(credential.user);
+    // Logged on success too, not only on failure. Delivery is invisible from here — the SDK
+    // resolves when Firebase has *accepted* the request, which says nothing about whether the
+    // mail arrived. Without this line, "no email" cannot be told apart from "never sent", and
+    // those have completely different causes.
+    console.info('[auth] Verification email accepted by Firebase for', credential.user.email);
+  } catch (error) {
+    console.error('[auth] Verification email failed to send after signup:', error);
+  }
+
+  return toAuthUser(credential.user);
+}
+
+export async function signInWithEmail(email: string, password: string): Promise<AuthUser> {
+  const credential = await mapErrors('Email sign-in', () =>
+    signInWithEmailAndPassword(firebaseAuth(), email, password));
+  return toAuthUser(credential.user);
+}
+
+/**
+ * Under enumeration protection this resolves whether or not the address has an account —
+ * that is the point of the setting, and the UI must not imply otherwise. `AuthModal`'s
+ * "check your inbox" panel is worded to be true either way.
+ */
+export async function sendPasswordReset(email: string): Promise<void> {
+  await mapErrors('Password reset', () => sendPasswordResetEmail(firebaseAuth(), email));
+}
+
+export async function resendVerification(): Promise<void> {
+  const current = firebaseAuth().currentUser;
+  if (!current) throw new Error('You are not signed in.');
+  if (current.emailVerified) throw new Error('Your email is already confirmed.');
+  await mapErrors('Resend verification', () => sendEmailVerification(current));
+  console.info('[auth] Verification email re-sent, accepted by Firebase for', current.email);
+}
+
+export async function updateDisplayName(name: string): Promise<AuthUser> {
+  const current = firebaseAuth().currentUser;
+  if (!current) throw new Error('You are not signed in.');
+  await mapErrors('Update display name', () => updateProfile(current, { displayName: name }));
+  return toAuthUser(current);
+}
+
+/* ── Linking (7-5) ────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Adds a password to an account that currently signs in with Google only.
+ *
+ * The address is taken from the signed-in user rather than from an argument: linking a
+ * *different* address would produce an account whose password login and Google login
+ * disagree about who owns it, which is the same data-partition failure 7-5 exists to prevent.
+ */
+export async function linkEmailPassword(email: string, password: string): Promise<AuthUser> {
+  const current = firebaseAuth().currentUser;
+  if (!current) throw new Error('You are not signed in.');
+  if (current.email && email.toLowerCase() !== current.email.toLowerCase()) {
+    throw new Error(`Your account uses ${current.email}. A password can only be added to that address.`);
+  }
+
+  const credential = EmailAuthProvider.credential(email, password);
+  const linked = await mapErrors('Link email sign-in', () => linkWithCredential(current, credential));
+
+  /**
+   * Re-read from the server before reporting the result.
+   *
+   * Linking rewrites the account's provider list, and the `User` handed back carries the
+   * token from *before* that write. `emailVerified` is the field where this shows: an account
+   * created with Google is already verified, and a stale copy that says otherwise puts the
+   * "Confirm your email to turn on sync" banner in front of someone who has nothing to
+   * confirm — asking them to prove what Google just proved.
+   *
+   * Cheap, and the only way to be sure the flag reflects the account rather than the moment
+   * before it changed.
+   */
+  await linked.user.reload();
+  const fresh = firebaseAuth().currentUser ?? linked.user;
+  console.info('[auth] Linked email sign-in. emailVerified before/after reload:',
+    linked.user.emailVerified, '→', fresh.emailVerified);
+
+  return toAuthUser(fresh);
+}
+
+/**
+ * Re-authenticates before a sensitive change. Shared by deletion, email change and password
+ * change, which is why it is one function rather than three inline blocks.
+ *
+ * A password account re-enters its password; a Google-only account cannot, so it goes back
+ * through the provider popup. `ReauthModal` already renders both paths, and passing no
+ * password is how it says "this account has no password".
+ */
+export async function reauthenticate(password?: string): Promise<void> {
+  const current = firebaseAuth().currentUser;
+  if (!current) throw new Error('You are not signed in.');
+
+  await mapErrors('Re-authentication', async () => {
+    if (password && current.email) {
+      const credential = EmailAuthProvider.credential(current.email, password);
+      await reauthenticateWithCredential(current, credential);
+    } else {
+      await reauthenticateWithPopup(current, new GoogleAuthProvider());
+    }
+  });
+}
+
+/* ── The action-handler codes (7-4's `/auth/action`) ──────────────────────────────────── */
+
+/** `?mode=verifyEmail`. Confirms the address the code was minted for. */
+export async function applyVerificationCode(oobCode: string): Promise<void> {
+  await mapErrors('Email verification', () => applyActionCode(firebaseAuth(), oobCode));
+}
+
+/** `?mode=resetPassword`, step one: validate the code and recover the address it belongs to,
+ *  so the form can name whose password is being set rather than asking blind. */
+export async function checkPasswordResetCode(oobCode: string): Promise<string> {
+  return mapErrors('Password reset check', () => verifyPasswordResetCode(firebaseAuth(), oobCode));
+}
+
+/** `?mode=resetPassword`, step two. */
+export async function confirmPasswordReset(oobCode: string, newPassword: string): Promise<void> {
+  await mapErrors('Password reset', () => fbConfirmPasswordReset(firebaseAuth(), oobCode, newPassword));
 }
 
 /**

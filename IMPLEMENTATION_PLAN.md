@@ -1607,8 +1607,24 @@ document nested beneath it *no matter what a more specific rule says* — a
 the deny real. This is the single most commonly botched rule in this shape, and it is a
 paywall bypass if it is wrong.
 
+**If any rule gates on verification, it must not use `email_verified` alone** — found while
+testing 7-5 on 2026-08-13. Firebase clears `emailVerified` when an email/password credential
+is linked to an account, *including a Google account where the address was already verified*,
+and sends no confirmation email when it does. The app therefore treats a Google identity as a
+confirmed address regardless of the flag (`auth.web.ts`'s `toAuthUser`, decided by the user
+the same day). A rule written as `request.auth.token.email_verified == true` would reject
+exactly those users, producing a UI that says confirmed beside a backend that refuses to
+sync. The rule has to read:
+
+```
+request.auth.token.email_verified == true
+  || 'google.com' in request.auth.token.firebase.identities
+```
+
 Rules get their own test run (`@firebase/rules-unit-testing` against the emulator), because
-"nobody else can read my tabs" is not a property that should be verified by inspection.
+"nobody else can read my tabs" is not a property that should be verified by inspection —
+and the case above deserves a test of its own, since it is invisible to inspection twice
+over.
 
 ## 7-13 · Account deletion and data export
 
