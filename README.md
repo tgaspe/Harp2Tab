@@ -1,99 +1,63 @@
-# Welcome to your Expo app 👋
+# Harp2Tab
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Turn harmonica playing into harmonica tab.
 
-## Get started
+Record straight from the microphone, or upload an audio or MIDI file, and Harp2Tab works out
+which hole and breath direction produces each note — `4` for blow, `-4` for draw, `-3'` for a
+bend, `4o` for an overblow — then lets you edit the result and export it.
 
-1. Install dependencies
+Live on Google Play as [Harp2Tab](https://play.google.com/store/apps/details?id=com.chewpacastudios.harp2tab),
+and as a web app built from the same codebase.
 
-   ```bash
-   npm install
-   ```
+## What it does
 
-2. Start the app
+- **Record** — live pitch detection while you play, with the tab building up as you go.
+- **Upload audio** — transcribe a file, with the harmonica key detected automatically.
+- **Upload MIDI** — convert an existing part to tab for a harmonica key you choose, with
+  bends and overblows flagged so you can simplify them.
+- **Edit** — a list editor and a piano-roll editor over the same session, with playback.
+- **MIDI Studio** — a multi-track editor for imported MIDI; convert any track to tab.
+- **Export** — TXT, CSV, JSON, MIDI, MusicXML.
 
-   ```bash
-   npx expo start
-   ```
+Supports all 12 diatonic keys, including bends, overblows and overdraws.
 
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Getting started
 
 ```bash
-npm run reset-project
+npm install
+cp .env.example .env      # fill in the six Firebase web values
+npm run web               # web dev server
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+For an Android device build, Play Store releases, Firebase emulators and the ADB workflow,
+see [docs/development.md](docs/development.md).
 
-### Other setup steps
+## How it fits together
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+| Area | Where | What it holds |
+|---|---|---|
+| Screens | `src/app/` | expo-router file-based routes — record, import, edit, studio, export, profile, settings |
+| Audio pipeline | `src/audio/` | decode → transcribe → notes → tab. The largest and most load-bearing directory |
+| Transcription engines | `src/audio/algorithms/` | `pmpm` (offline pitch tracker), `basicPitch` (neural, web), `spectral` (planned) |
+| Harmonica mapping | `src/audio/HarmonicaMapper.ts` | pitch ↔ hole/breath, for all 12 keys |
+| Export | `src/export/generators.ts` | pure `TabNote[]` → file, per format |
+| State | `src/store/` | persisted Zustand stores |
+| Auth & billing | `src/auth/`, `src/billing/` | Firebase Auth, entitlements |
+| Native audio | `android/audiocapture/` | C++ (Oboe) capture + MPM pitch detection |
+| Cloud Functions | `functions/` | RevenueCat webhook → entitlement writer |
+| Harnesses | `scripts/verify-*.ts` | the test suite — see [docs/testing.md](docs/testing.md) |
 
-## Learn more
+Platform differences are handled by file extension, not by branching: `foo.ts` is the native
+implementation and `foo.web.ts` the web one, and the bundler picks. See
+[docs/architecture.md](docs/architecture.md).
 
-To learn more about developing your project with Expo, look at the following resources:
+## Documentation
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
-
-## Roadmap
-
-- [ ] Home screen becomes a library/dashboard (recent recordings + three "start new" paths: record, upload audio, upload MIDI) instead of jumping straight to the key picker
-- [x] Audio upload tab transcription feature, with automatic harmonica key detection (no manual key picker needed for uploaded audio) — web decodes any browser-supported format; Android is WAV-only until a native decoder exists (Phase 5c)
-- [ ] MIDI file upload → harmonica tab conversion: user picks target harmonica key (transposes MIDI notes), with overblow/bend notes highlighted so the user can choose to simplify/edit them; needs a keyboard-accessible "browse files" button alongside any drag-and-drop zone
-- [ ] Piano-roll style editor (Signal-like): drag notes up/down across harmonica-playable pitches, resize/move in time, with playback. Coexists as a toggleable alternate view alongside the existing list-based edit screen (not a replacement) — some edits (precise numeric duration) are easier as a table. Needs an arrow-key nudge alternative to dragging for keyboard/screen-reader users
-- [ ] Better monetization model
-- [ ] Web version
-- [ ] iOS version
-- [ ] Frame Inspector — frame-by-frame view of detected note, loudness, and note segmentation. User-facing (not dev-only): an "Inspect frames" button on the Edit screen opens it for the current tab's session. Works on sessions from *either* creation path (live recording or audio upload) — both run the same `NoteDetector`/pitch-detector pipeline, just fed from different sources. Requires retaining the raw frame stream after processing (currently discarded once notes are committed) on both paths. Recommendation: ship the visualization tracks to everyone; keep the raw threshold-tuning sliders (noise floor ×, min duration, confirm hold, etc.) behind an "Advanced" disclosure rather than headline UI, since they're algorithm constants, not something a typical user needs
-- [ ] Improve web UI
-- [ ] User account creation
-- [ ] Playback of the edited tab — shared plumbing (reused MIDI generation) needed by the piano-roll editor, the list edit screen, and a pre-export preview, not a one-off button
-- [ ] Recording history/library
-
-## Web Version Plan
-
-Decisions locked 2026-07-29 (discussion only — not yet implemented).
-
-### Architecture
-- Reuse Expo/react-native-web instead of a separate web app (`react-native-web` is already a dependency, and `app.json` already sets `web.output: "static"`).
-- Only `src/native/AudioCapture.ts` is Android-specific (bridge to the Oboe+MPM C++ module, emits `{frequency, rms, nsdf}` at 50Hz). Everything downstream (`src/audio/NoteDetector.ts`, harmonica mapping, UI) is already portable.
-- Pitch detection on web: reimplement MPM in JS running inside an AudioWorklet, matching the same frame shape so downstream code needs no changes.
-
-### Payments & entitlements
-- **RevenueCat + Stripe** (Stripe as the web billing backend behind RevenueCat), not raw Stripe — unifies entitlements across Google Play Billing, App Store (once iOS ships), and web under one customer identity.
-- Fees at time of decision: Stripe ~2.9% + $0.30 (+0.7% Billing add-on) per US card charge; RevenueCat free up to $2,500/mo tracked revenue, then 1% above that.
-
-### Pricing
-- Monthly: **$3.49**
-- Yearly: **$27.99** (~33% off monthly-equivalent, ≈$2.33/mo)
-- Lifetime: **$44.99** one-time
-- Existing Play Store one-time buyers are grandfathered in as lifetime automatically when this ships — the current paywall markets "one-time purchase · no subscription," so don't break that promise.
-
-### Hosting
-- **Firebase Hosting**, reusing the existing Firebase project (already used for Crashlytics).
-- No custom domain owned yet — plan is to buy one (e.g. a `.app` TLD) via Cloudflare Registrar or Porkbun, then connect via Firebase Hosting's custom domain flow.
-
-### Auth
-- **Firebase Auth**, reusing the existing Firebase project, so premium entitlement is portable across web/Android/iOS regardless of which platform the user paid on.
-- Planned sign-in methods: Google Sign-In + email link first; Sign in with Apple once iOS ships.
-- Entitlement flow: Stripe/RevenueCat webhook → Cloud Function → write premium status to Firestore keyed by Firebase UID → web and mobile both read that to gate premium features.
+| Document | For |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | How the pipeline is put together, and the conventions to follow |
+| [docs/development.md](docs/development.md) | Running, building, releasing, device debugging |
+| [docs/testing.md](docs/testing.md) | The verification harnesses and what each covers |
+| [docs/plan/](docs/plan/) | Phase-by-phase implementation plan and status ledger |
+| [PRIVACY_POLICY.md](PRIVACY_POLICY.md) | Published privacy policy |
+| [AGENTS.md](AGENTS.md) | Instructions for coding agents |

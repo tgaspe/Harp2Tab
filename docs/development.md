@@ -1,4 +1,18 @@
-# Harp2Tab — Developer Notes
+# Development
+
+Running, building, releasing and debugging Harp2Tab. For how the code is put together see
+[architecture.md](architecture.md); for the verification harnesses see [testing.md](testing.md).
+
+## First-time setup
+
+```bash
+npm install
+cp .env.example .env      # then fill in the six Firebase web values
+```
+
+`.env.example` documents where each value comes from. The Firebase web config is public by
+design — it identifies the project rather than authorising anything — but it lives in `.env`
+so staging and production can differ per machine. Firestore rules are what protect the data.
 
 ## App Info
 - **Package:** `com.chewpacastudios.harp2tab`
@@ -20,13 +34,58 @@ adb logcat | grep -i harp2tab   # filter logs to your app only
 ```
 
 ---
-## Build on Your Browser
+
+## Web (the primary target)
 
 ```bash
 npx expo start --web
 ```
 
-To test on your computer browser localhost.
+Serves at `localhost:8081`.
+
+> **The dev server can serve stale code.** If a fix doesn't appear to apply, restart with
+> `npx expo start --web --clear` and confirm the served bundle actually changed before
+> concluding the fix failed. A per-module `curl` against
+> `.bundle?modulesOnly=true` will compile-check a single file without opening a browser.
+
+### Static web build
+
+```bash
+npx expo export --platform web     # → dist/
+npx firebase deploy --only hosting
+```
+
+---
+
+## Firebase
+
+The project is `harp2tab` (see `.firebaserc`). Firestore rules live in `firestore.rules`;
+Cloud Functions — currently the RevenueCat webhook entitlement writer — live in `functions/`
+and are a **separate npm package** with its own `package.json` and `node_modules`.
+
+```bash
+npm --prefix functions install
+npm --prefix functions run build       # tsc → functions/lib
+npm --prefix functions run typecheck
+
+npx firebase emulators:start           # firestore :8080, functions :5001, UI :4000
+npx firebase deploy --only functions
+```
+
+`functions/.secret.local` holds emulator secrets and is never committed.
+
+---
+
+## Tests
+
+There is no Jest setup — verification is a set of `scripts/verify-*.ts` harnesses run with
+`tsx`:
+
+```bash
+npx tsx scripts/verify-audio-import.ts
+```
+
+See [testing.md](testing.md) for the full suite and what each harness covers.
 
 ---
 
@@ -122,18 +181,25 @@ Builds on Expo's servers — multi-architecture (~76MB AAB vs ~35MB local arm64-
 | Native audio C++ | `android/audiocapture/src/main/cpp/` |
 | Harmonica mapping | `src/audio/HarmonicaMapper.ts` |
 | App store | `src/store/useAppStore.ts` |
+| Firestore rules | `firestore.rules` |
+| Cloud Functions | `functions/src/` |
+| Firebase web config | `.env` *(gitignored, see `.env.example`)* |
 
 ---
 
 ## Paywall
 
-Live: trial gate (3 base + 3 review-bonus recordings) and paywall are active in `src/app/index.tsx`, wired to `harp2tab_premium` (one-time IAP via `react-native-iap`).
+Live on Android: trial gate (3 base + 3 review-bonus recordings) and paywall are active in
+`src/app/index.tsx`, wired to `harp2tab_premium` (one-time IAP via `react-native-iap`).
+
+Web billing (Stripe Managed Payments behind RevenueCat) is a separate path — see
+[plan/phase-08-monetization.md](plan/phase-08-monetization.md).
 
 ---
 
 ## Key Constraints
 
-- **Android only** — no iOS build configured
+- **Native is Android only** — no iOS build configured
 - **Architecture:** `arm64-v8a` only (set in `build.gradle` `abiFilters`)
 - **New Architecture:** `newArchEnabled: false` (Expo SDK 55 / RN 0.83.6)
 - **`expo-file-system`:** import from `'expo-file-system/legacy'` (v55 breaking change)
