@@ -1617,8 +1617,6 @@ export function PianoRoll({
     return () => node.removeEventListener('wheel', onWheel);
   }, []);
 
-  if (!harmonicaKey || positions.length === 0) return null;
-
   const playheadLeft = (currentTimeMs / 1000) * pxPerSecond;
   const showPlayhead = isPlaying || currentTimeMs > 0;
 
@@ -1871,6 +1869,22 @@ export function PianoRoll({
           if (success) runOnJS(handleCreateNoteAt)(e.x, e.y);
         })
       : Gesture.Race(selectionTapGesture, marqueeGesture);
+
+  /**
+   * Nothing to draw without a key or a row set.
+   *
+   * **This guard sits below every hook deliberately.** It used to run ~250 lines earlier,
+   * before the loop-pin and loop-region hooks — which meant a render with no positions called
+   * fourteen fewer hooks than a render with them, and React's hook order is positional. The
+   * first render that gained positions after one that lacked them would throw *"Rendered more
+   * hooks than during the previous render"*, which is a white screen rather than a warning.
+   * It is reachable: the Studio mounts the roll before a project's rows resolve.
+   *
+   * Everything between the last hook and here is local arithmetic and gesture construction —
+   * none of it reads `positions` or `harmonicaKey` — so running it on the empty case costs a
+   * few objects and is what keeps the hook order fixed.
+   */
+  if (!harmonicaKey || positions.length === 0) return null;
 
   return (
     <View style={styles.outer} onLayout={handleViewportLayout}>

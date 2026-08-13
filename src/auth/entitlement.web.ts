@@ -48,7 +48,22 @@ export async function fetchEntitlement(uid: string): Promise<Entitlement | null>
   const snapshot = await getDoc(doc(getFirestore(firebaseApp()), 'entitlements', uid));
   if (!snapshot.exists()) return null;
 
-  const data = snapshot.data() as Partial<Entitlement>;
+  // `plan` is widened to `string` deliberately: it is whatever the writer put there, and the
+  // job of the checks below is to decide whether that is something this reader can honour.
+  // Typing it as `EntitlementPlan` here would assume the answer to the question being asked.
+  const data = snapshot.data() as Omit<Partial<Entitlement>, 'plan'> & { plan?: string };
+
+  /**
+   * The revoke tombstone — an expired, refunded or cancelled entitlement.
+   *
+   * The writer leaves this instead of deleting the document, because deleting it would take
+   * the `updatedAt` watermark with it and let a retried pre-revoke event reinstate what was
+   * just revoked (see `RevokedDoc` in `functions/src/revenuecat.ts`). It means exactly what a
+   * missing document means here, and is silent for the same reason: it is a normal state, not
+   * a disagreement between writer and reader.
+   */
+  if (data.plan === 'revoked') return null;
+
   if (data.plan !== 'lifetime' && data.plan !== 'subscription') {
     // A document whose plan we do not recognise is not an entitlement we can honour. Loud,
     // because it means the writer and this reader have drifted apart.

@@ -1,14 +1,14 @@
 /**
- * The entitlement writer (8-2) — the only thing in the system that may write
- * `/entitlements/{uid}`.
+ * Server-side entitlement work: the writer (8-2), and the cleanup that account deletion
+ * cannot do from the client (7-13).
  *
- * `firestore.rules` denies that path to every client (`allow write: if false`), and
- * `verify-firestore-rules.ts` tests that it does. This runs with the Admin SDK, which bypasses
- * rules, so the rule stays exactly as strict as it reads: the client cannot write its own
- * entitlement, and a paywall bypass would have to go through this endpoint.
+ * `firestore.rules` denies `/entitlements/{uid}` to every client (`allow write: if false`), and
+ * `verify-firestore-rules.ts` tests that it does. Both functions here run with the Admin SDK,
+ * which bypasses rules, so the rule stays exactly as strict as it reads: the client cannot
+ * write its own entitlement, and a paywall bypass would have to go through this endpoint.
  *
- * **Which is why the first thing it does is authenticate.** Anything that can POST here can
- * grant itself paid access forever.
+ * **Which is why the first thing the webhook does is authenticate.** Anything that can POST
+ * there can grant itself paid access forever.
  *
  * All the interesting decisions live in `revenuecat.ts`, which is pure and tested. This file is
  * transport: verify, parse, guard against stale deliveries, write.
@@ -17,9 +17,12 @@
 import { onRequest } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
 import * as logger from 'firebase-functions/logger';
+import * as functionsV1 from 'firebase-functions/v1';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
-import { isFresh, mapEvent, type EntitlementDoc, type RevenueCatEvent } from './revenuecat';
+import {
+  isAmbiguousGrant, isFresh, mapEvent, type RevenueCatEvent, type StoredDoc,
+} from './revenuecat';
 
 initializeApp();
 
@@ -90,11 +93,22 @@ export const revenuecatWebhook = onRequest(
         break;
 
       case 'upsert':
+        // Granted either way — but an expiry-less grant with no lifetime signal is either a
+        // product id missing from `RC_LIFETIME_PRODUCT_IDS` or a malformed subscription event,
+        // and both are worth a human seeing before a customer does.
+        if (isAmbiguousGrant(event)) {
+          logger.error('Grant has no expiry and no lifetime signal — stored as a subscription', {
+            type:       event.type,
+            id:         event.id,
+            productId:  event.product_id,
+            periodType: event.period_type,
+          });
+        }
         await applyWrite(action.uid, event, action.doc);
         break;
 
       case 'revoke':
-        await applyWrite(action.uid, event, null);
+        await applyWrite(action.uid, event, action.doc);
         break;
     }
 
@@ -109,12 +123,13 @@ export const revenuecatWebhook = onRequest(
  * arrive concurrently, and the staleness check is worthless if another delivery can land
  * between reading `updatedAt` and writing the new one.
  *
- * A revoke deletes the document rather than writing `plan: 'none'`. `fetchEntitlement` already
- * treats a missing document as "no entitlement" — the normal state of every free account — so
- * deletion needs no new state on the read side and cannot be misread as a plan the client does
- * not recognise.
+ * **A revoke writes a tombstone rather than deleting.** Deleting the document destroys the
+ * `updatedAt` watermark the staleness check depends on, so the next delivery — including a
+ * retried event from *before* the revoke — reads no watermark, passes `isFresh`, and reinstates
+ * the entitlement that was just taken away. `RevokedDoc` exists to keep the watermark alive; the
+ * read side already treats an unrecognised plan as no entitlement, so nothing there changes.
  */
-async function applyWrite(uid: string, event: RevenueCatEvent, doc: EntitlementDoc | null) {
+async function applyWrite(uid: string, event: RevenueCatEvent, doc: StoredDoc) {
   const ref = getFirestore().collection('entitlements').doc(uid);
 
   await getFirestore().runTransaction(async (tx) => {
@@ -132,11 +147,11 @@ async function applyWrite(uid: string, event: RevenueCatEvent, doc: EntitlementD
       return;
     }
 
-    if (doc) tx.set(ref, doc);
-    else tx.delete(ref);
+    tx.set(ref, doc);
   });
 
-  logger.info(doc ? 'Entitlement written' : 'Entitlement revoked', { uid, type: event.type });
+  logger.info(doc.plan === 'revoked' ? 'Entitlement revoked' : 'Entitlement written',
+    { uid, type: event.type });
 }
 
 /** Constant-time compare, so the secret cannot be recovered a byte at a time. */
@@ -146,3 +161,51 @@ function timingSafeEqual(a: string, b: string): boolean {
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
 }
+
+/**
+ * Erase a deleted account's server-side data (7-13).
+ *
+ * **The client cannot do this, by design.** `firestore.rules` denies every client a write to
+ * `/entitlements/{uid}`, and a browser cannot reliably delete a subtree even where it is
+ * allowed to — a tab closed halfway through leaves a half-deleted account, which is worse than
+ * an undeleted one. So deletion runs here, triggered by the Auth deletion itself, and it
+ * cannot be skipped by the client going away.
+ *
+ * `deleteAccount()` in `auth.web.ts` deletes the Auth user and nothing else; this is the other
+ * half, and the reason its docstring no longer has to claim there is nothing server-side to
+ * remove. That claim was true when it was written — Phase 8 made it false by creating the
+ * entitlement document, and nothing failed loudly when it did.
+ *
+ * **What this does not do is cancel a subscription.** Stripe holds the billing relationship,
+ * not Firebase, so deleting the account here does not stop the money. The paywall path warns
+ * about that before deletion (`ConfirmDeleteModal`) because it is the user's to act on, not
+ * something this function can quietly fix.
+ *
+ * A v1 trigger deliberately: `beforeUserDeleted` is a blocking function and needs Identity
+ * Platform, which this project does not use, while `auth.user().onDelete()` works against
+ * plain Firebase Auth. Failures here are logged rather than thrown — a retry storm on a
+ * deleted account helps nobody, and the entitlement is unreachable regardless once the uid
+ * it is keyed to can never sign in again.
+ */
+export const onAccountDeleted = functionsV1
+  .region('us-central1')
+  .auth.user()
+  .onDelete(async (user) => {
+    const db = getFirestore();
+
+    try {
+      await db.collection('entitlements').doc(user.uid).delete();
+    } catch (err) {
+      logger.error('Failed to delete entitlement for deleted account', { uid: user.uid, err });
+    }
+
+    // The synced library (7b). Empty today because the sync engine does not exist yet — done
+    // now anyway, so that shipping 7b is not also a silent re-break of account deletion.
+    try {
+      await db.recursiveDelete(db.collection('users').doc(user.uid));
+    } catch (err) {
+      logger.error('Failed to delete user subtree for deleted account', { uid: user.uid, err });
+    }
+
+    logger.info('Erased server-side data for deleted account', { uid: user.uid });
+  });

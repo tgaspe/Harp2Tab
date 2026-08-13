@@ -68,11 +68,24 @@ npm --prefix functions install
 npm --prefix functions run build       # tsc → functions/lib
 npm --prefix functions run typecheck
 
+export JAVA_HOME=$(/usr/libexec/java_home -v 21)   # the emulator needs JDK 21+
+export PATH="$JAVA_HOME/bin:$PATH"                 # and resolves `java` from PATH, not JAVA_HOME
 npx firebase emulators:start           # firestore :8080, functions :5001, UI :4000
 npx firebase deploy --only functions
 ```
 
 `functions/.secret.local` holds emulator secrets and is never committed.
+
+Two functions are deployed:
+
+| Function | Trigger | Does |
+|---|---|---|
+| `revenuecatWebhook` | HTTPS POST | Writes `/entitlements/{uid}` from RevenueCat events |
+| `onAccountDeleted` | Auth user deletion | Erases the entitlement document and the user's synced subtree |
+
+Set `RC_LIFETIME_PRODUCT_IDS` (comma-separated) once 8-1 configures the real product ids —
+it is how the writer recognises a one-time purchase rather than inferring it from a missing
+expiry field.
 
 ---
 

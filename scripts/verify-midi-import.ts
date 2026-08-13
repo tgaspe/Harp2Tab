@@ -392,9 +392,23 @@ function octaveFold(): void {
 /** The decided policy: unplayable pitches survive as `tab: ''`, never dropped, never
  *  snapped to a neighbour. */
 function unplayablePolicy(): void {
-  // C#6 (85) and G#6 (92) have no position at all on a C diatonic harp — the layout table
-  // has gaps there, unlike the accidentals covered by bends and overblows lower down.
-  const pitches = [84, 85, 86, 91, 92, 93];
+  /**
+   * Unreachable now means *out of range*, not "a gap in the middle".
+   *
+   * This case used to use C#6 and G#6, on the grounds that the layout table had holes at
+   * those pitches. It no longer does: `HarmonicaMapper` gained the overdraws (`85: '-7o'`,
+   * `92: '-9o'`, `97: '-10o'`), which were added precisely because "needs an extreme
+   * technique" is a different claim from "impossible" — and they filled every interior gap.
+   * Sweeping the chromatic span confirms it: between C4 and C#7 a C diatonic can now reach
+   * every semitone, so the only unplayable pitches left are the ones off either end.
+   *
+   * The policy under test is unchanged — unplayable pitches survive as `tab: ''`, never
+   * dropped and never snapped to a neighbour — so the fixture moves to pitches that are
+   * genuinely unplayable and the assertions stay as they were. C#7 is included deliberately:
+   * it is the top overdraw, and the boundary is only meaningful if the last reachable pitch
+   * is reached.
+   */
+  const pitches = [59, 60, 84, 97, 98, 100];   // B3 · C4 · C6 · C#7 · D7 · E7
   const notes: MidiNote[] = pitches.map((midi, i) => ({ midi, timeMs: i * 400, durationMs: 300 }));
   const tabbed = notesToTabs(notes, 'C', 'diatonic', 'midiVelocity');
 
@@ -403,9 +417,16 @@ function unplayablePolicy(): void {
   const blanks      = tabbed.filter((n) => !n.tab).map((n) => n.note);
 
   check(
-    'unreachable pitches arrive as tab: \'\' with their pitch intact',
-    kept && pitchesKept && blanks.length === 2 && blanks[0] === 'C#6' && blanks[1] === 'G#6',
+    'pitches outside the harp\'s range arrive as tab: \'\' with their pitch intact',
+    kept && pitchesKept
+      && blanks.length === 3 && blanks[0] === 'B3' && blanks[1] === 'D7' && blanks[2] === 'E7',
     `${tabbed.length}/${pitches.length} notes kept, unplayable: ${blanks.join(', ') || 'none'}`,
+  );
+
+  check(
+    'every pitch inside the range is reachable, overdraws included',
+    tabbed.filter((n) => [60, 84, 97].includes(pitches[tabbed.indexOf(n)])).every((n) => n.tab !== ''),
+    `C4=${tabbed[1].tab} C6=${tabbed[2].tab} C#7=${tabbed[3].tab}`,
   );
 
   check(

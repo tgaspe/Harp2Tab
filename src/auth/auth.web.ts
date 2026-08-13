@@ -397,11 +397,20 @@ export async function reauthenticate(password?: string): Promise<void> {
  * alongside the account would destroy work the account never owned, and the confirmation
  * dialog promises the opposite in as many words.
  *
- * **Scope today is the Auth user only.** There is no Firestore yet (7-12 / 7b), so there is
- * no subtree and no entitlement document to remove. When those exist this needs the Cloud
- * Function the plan describes — a client cannot reliably delete a subtree, and a half-deleted
- * account is worse than an undeleted one. Until then this is complete rather than partial,
- * because there is genuinely nothing else stored server-side.
+ * **Server-side data is erased by `onAccountDeleted`, not here.** The client is denied write
+ * access to `/entitlements/{uid}` by `firestore.rules`, and a browser cannot reliably delete a
+ * subtree in any case — a tab closed halfway through leaves a half-deleted account, which is
+ * worse than an undeleted one. So the Auth deletion below *triggers* the Cloud Function that
+ * removes the entitlement document and the synced library.
+ *
+ * This used to say there was nothing server-side to remove, which was true when it was written
+ * and stopped being true the moment Phase 8's webhook started writing entitlement documents.
+ * Nothing failed when it did — which is the argument for the cleanup living on a trigger rather
+ * than in a caller that has to remember.
+ *
+ * **Deleting the account does not cancel a subscription.** Stripe holds the billing
+ * relationship, so the charges continue against an account that can no longer sign in.
+ * `ConfirmDeleteModal` says so before the fact; nothing here can undo it after.
  *
  * Throws `ReauthRequired` on a stale session, via `mapErrors`. That is not an edge case: the
  * users most likely to be deleting are the long-dormant ones, who are exactly the users whose

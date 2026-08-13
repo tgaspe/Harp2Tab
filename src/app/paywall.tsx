@@ -107,7 +107,7 @@ export default function PaywallScreen() {
           />
           <Text style={styles.title}>Harp2Tab</Text>
           <Text style={styles.tagline}>
-            You've used your {effectiveLimit} free recordings.
+            You&apos;ve used your {effectiveLimit} free recordings.
           </Text>
           <Text style={styles.sub}>
             Unlock the full app to keep recording and exporting your tabs.

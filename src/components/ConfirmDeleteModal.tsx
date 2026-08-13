@@ -32,11 +32,23 @@ interface Props {
   visible:       boolean;
   tabCount:      number;
   projectCount:  number;
+  /**
+   * Whether a *renewing* subscription is attached to this account.
+   *
+   * Deleting the account does not cancel it — Stripe holds the billing relationship, not
+   * Firebase — so the charges continue against an account that can no longer sign in to stop
+   * them. That is the one consequence here the user cannot discover or undo afterwards, which
+   * is why it is stated before rather than after. Lifetime and device unlocks are unaffected
+   * and must not raise it: a warning that fires for everyone is one nobody reads.
+   */
+  hasActiveSubscription: boolean;
   onConfirm:     () => Promise<void>;
   onCancel:      () => void;
 }
 
-export function ConfirmDeleteModal({ visible, tabCount, projectCount, onConfirm, onCancel }: Props) {
+export function ConfirmDeleteModal({
+  visible, tabCount, projectCount, hasActiveSubscription, onConfirm, onCancel,
+}: Props) {
   const theme  = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
 
@@ -80,6 +92,18 @@ export function ConfirmDeleteModal({ visible, tabCount, projectCount, onConfirm,
             )}
             . It cannot be undone.
           </Text>
+
+          {hasActiveSubscription && (
+            <View style={styles.billingNotice}>
+              <Ionicons name="card-outline" size={16} color={theme.record} />
+              <Text style={styles.billingText}>
+                <Text style={styles.billingLead}>This does not cancel your subscription. </Text>
+                Billing is handled by our payment provider, not by your Harp2Tab account, so
+                charges continue after the account is gone — and you will no longer be able to
+                sign in to stop them. Cancel first, then come back and delete.
+              </Text>
+            </View>
+          )}
 
           <View style={styles.keepNotice}>
             {/* See SyncStatusRow: `phone-portrait-outline` is tofu on web. */}
@@ -205,6 +229,25 @@ function createStyles(t: Theme) {
       color:      t.textSub,
       lineHeight: 17,
     },
+    /** Carries the record colour rather than the neutral surface — this one is a warning,
+     *  where `keepNotice` beside it is reassurance, and they must not read as the same thing. */
+    billingNotice: {
+      flexDirection:   'row',
+      gap:             10,
+      backgroundColor: t.surface,
+      borderRadius:    12,
+      borderWidth:     1,
+      borderColor:     t.record,
+      padding:         12,
+    },
+    billingText: {
+      flex:       1,
+      fontSize:   FONT.xs,
+      fontFamily: Poppins.regular,
+      color:      t.textSub,
+      lineHeight: 17,
+    },
+    billingLead: { fontFamily: Poppins.semiBold, color: t.textPrimary },
     field: { gap: 6, marginTop: 2 },
     fieldLabel: { fontSize: FONT.xs, fontFamily: Poppins.semiBold, color: t.textSub },
     input: {

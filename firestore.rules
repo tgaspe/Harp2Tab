@@ -32,7 +32,7 @@ service cloud.firestore {
      * would disagree: the UI would say confirmed while every sync request was denied. That
      * failure is invisible from the client and miserable to trace.
      *
-     * Discovered 2026-08-13 by hitting it. See 7-12 in IMPLEMENTATION_PLAN.md.
+     * Discovered 2026-08-13 by hitting it. See 7-12 in docs/plan/phase-07-accounts.md.
      */
     function confirmed() {
       return request.auth.token.email_verified == true

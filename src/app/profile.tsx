@@ -528,6 +528,10 @@ export default function ProfileScreen() {
         visible={deleteOpen}
         tabCount={recordings.length}
         projectCount={projects.length}
+        /* Only a renewing plan bills again. A lifetime purchase and a device unlock are both
+           done paying, so warning about them would train the warning to be ignored. Grace
+           counts: the card failed, but the subscription is live and will retry. */
+        hasActiveSubscription={premiumState.premium && premiumState.plan === 'subscription'}
         onConfirm={run(attemptDelete, undefined, 'danger')}
         onCancel={() => setDeleteOpen(false)}
       />

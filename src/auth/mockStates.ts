@@ -18,10 +18,19 @@ const DAY  = 24 * HOUR;
 /** Fixed so screenshots and repeat visits are comparable. Roughly "a while ago". */
 const MEMBER_SINCE = Date.UTC(2026, 7, 3);
 
+/**
+ * **No real addresses or names here.**
+ *
+ * `__DEV__` stops these *states* reaching a user, but it does not stop the *strings* being
+ * bundled: this module is still in the production graph (`MOCK_KEYS` feeds the listing in
+ * `/profile`'s footer), so every literal below ships and is readable in the deployed JS. A
+ * developer's own address in a fixture is therefore a published address, and bundles get
+ * scraped for exactly that. `example.com` is reserved by RFC 2606 for this.
+ */
 const googleUser: AuthUser = {
   uid:           'mock-google',
-  email:         'theodorogtc@gmail.com',
-  displayName:   'Theo Gaspe',
+  email:         'google-user@example.com',
+  displayName:   'Ada Harmon',
   emailVerified: true,
   providers:     ['google'],
   createdAt:     MEMBER_SINCE,

@@ -256,6 +256,40 @@ export default function KeySelectionScreen() {
     preview.play(recording.tabNotes, { bpm: recording.bpm ?? 100, metronomeEnabled: false, rate: 1 });
   }
 
+  // Sidebar stats (web, returning users only) — computed from the same recordings array as
+  // the list, not tracked separately.
+  //
+  // These replaced a raw recording count (already printed in the section header a few inches
+  // to the right) and a total note count (a number with no scale to read it against). Each
+  // one here answers a question instead: how much have I done, which harp do I actually
+  // reach for, and — the only figure on the panel that can change today — what have I done
+  // this week. All three come out of fields `TabRecording` already carries.
+  //
+  // **Sits above the onboarding guard below, deliberately.** React identifies hooks by call
+  // order, so a hook placed after an early return is skipped on the renders that take it —
+  // and `hasCompletedOnboarding` flips false→true in the ordinary first-run flow. The render
+  // straight after onboarding would then call one more hook than the render before it and
+  // throw "Rendered more hooks than during the previous render". This depends only on
+  // `recordings`, so computing it before the guard costs one pass over an already-loaded array.
+  const libraryStats = useMemo(() => {
+    const totalMs = recordings.reduce((sum, r) => sum + r.duration, 0);
+
+    const keyCounts = new Map<HarmonicaKey, number>();
+    for (const r of recordings) keyCounts.set(r.key, (keyCounts.get(r.key) ?? 0) + 1);
+    // Ties break on whichever key was seen first, which is insertion order — arbitrary but
+    // stable, and a tie means there is no most-used key to be wrong about.
+    let topKey: HarmonicaKey | null = null;
+    let topCount = 0;
+    for (const [key, count] of keyCounts) {
+      if (count > topCount) { topKey = key; topCount = count; }
+    }
+
+    const weekAgo   = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const thisWeek  = recordings.filter((r) => r.createdAt >= weekAgo).length;
+
+    return { totalMs, topKey, topCount, thisWeek };
+  }, [recordings]);
+
   if (!hasCompletedOnboarding) return null;
 
   // Shared across the web hero dropdown and the native single-column layout below — the
@@ -420,32 +454,6 @@ export default function KeySelectionScreen() {
     });
   const libraryFiltersActive = libraryKeyFilter !== 'all' || librarySearchTrimmed !== '';
 
-  // Sidebar stats (web, returning users only) — computed from the same recordings array as
-  // the list, not tracked separately.
-  //
-  // These replaced a raw recording count (already printed in the section header a few inches
-  // to the right) and a total note count (a number with no scale to read it against). Each
-  // one here answers a question instead: how much have I done, which harp do I actually
-  // reach for, and — the only figure on the panel that can change today — what have I done
-  // this week. All three come out of fields `TabRecording` already carries.
-  const libraryStats = useMemo(() => {
-    const totalMs = recordings.reduce((sum, r) => sum + r.duration, 0);
-
-    const keyCounts = new Map<HarmonicaKey, number>();
-    for (const r of recordings) keyCounts.set(r.key, (keyCounts.get(r.key) ?? 0) + 1);
-    // Ties break on whichever key was seen first, which is insertion order — arbitrary but
-    // stable, and a tie means there is no most-used key to be wrong about.
-    let topKey: HarmonicaKey | null = null;
-    let topCount = 0;
-    for (const [key, count] of keyCounts) {
-      if (count > topCount) { topKey = key; topCount = count; }
-    }
-
-    const weekAgo   = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    const thisWeek  = recordings.filter((r) => r.createdAt >= weekAgo).length;
-
-    return { totalMs, topKey, topCount, thisWeek };
-  }, [recordings]);
 
   /** Sidebar-width duration: "3h 42m" / "42m" / "48s". Never zero-padded — this is a
    *  headline figure, not a timecode. */
@@ -662,7 +670,7 @@ export default function KeySelectionScreen() {
                 showsVerticalScrollIndicator={false}
               >
                 <Text style={styles.dashboardTitle}>Welcome back</Text>
-                <Text style={styles.dashboardSubtitle}>Here's where you left off.</Text>
+                <Text style={styles.dashboardSubtitle}>Here&apos;s where you left off.</Text>
 
                 {/* Scrolls away with the greeting it belongs to — this is page header, read
                     on arrival, not a persistent readout to browse the library against. */}

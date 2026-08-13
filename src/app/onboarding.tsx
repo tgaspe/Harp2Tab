@@ -308,7 +308,7 @@ export default function OnboardingScreen() {
                 style={({ pressed }) => [styles.btn, pressed && styles.btnPressed]}
                 onPress={startBlowCountdown}
               >
-                <Text style={styles.btnText}>I'm Ready</Text>
+                <Text style={styles.btnText}>I&apos;m Ready</Text>
               </Pressable>
             ) : (
               <>

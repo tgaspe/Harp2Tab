@@ -19,7 +19,9 @@ import {
   type PremiumState,
 } from '../src/store/entitlementState';
 import type { Entitlement } from '../src/auth/entitlement';
-import { mapEvent, isFresh, type RevenueCatEvent } from '../functions/src/revenuecat';
+import {
+  isAmbiguousGrant, isFresh, isLifetimeGrant, mapEvent, type RevenueCatEvent, type StoredDoc,
+} from '../functions/src/revenuecat';
 
 let failures = 0;
 
@@ -91,11 +93,33 @@ check('REFUND_REVERSED upserts', kindOf({ type: 'REFUND_REVERSED' }) === 'upsert
   check('NON_RENEWING_PURCHASE is the lifetime product',
     action.kind === 'upsert' && action.doc.plan === 'lifetime' && action.doc.expiresAt === undefined);
 }
+/**
+ * Lifetime needs positive evidence.
+ *
+ * Inferring it from a *missing* `expiration_at_ms` meant one absent field on a payload we do
+ * not control granted permanent, unrevocable access. These pin the replacement: the signals
+ * that do mean lifetime, and the ambiguous case that no longer does.
+ */
 {
   const action = mapEvent(ev({ expiration_at_ms: null }), PROD);
-  check('a grant with no expiry is a non-expiring entitlement (the 8-7 manual grant)',
-    action.kind === 'upsert' && action.doc.plan === 'lifetime');
+  check('a subscription-shaped grant with no expiry is NOT lifetime',
+    action.kind === 'upsert' && action.doc.plan === 'subscription',
+    action.kind === 'upsert' ? action.doc.plan : action.kind);
+  check('  …and is flagged as ambiguous for a human',
+    isAmbiguousGrant(ev({ expiration_at_ms: null })));
 }
+{
+  const action = mapEvent(ev({ expiration_at_ms: null, period_type: 'LIFETIME' }), PROD);
+  check('period_type LIFETIME is a lifetime grant (the 8-7 manual grant)',
+    action.kind === 'upsert' && action.doc.plan === 'lifetime' && action.doc.expiresAt === undefined);
+  check('  …and is not ambiguous',
+    !isAmbiguousGrant(ev({ expiration_at_ms: null, period_type: 'LIFETIME' })));
+}
+check('a normal subscription grant is never ambiguous', !isAmbiguousGrant(ev()));
+check('lifetime is not inferred from period_type NORMAL',
+  !isLifetimeGrant(ev({ expiration_at_ms: null })));
+check('NON_RENEWING_PURCHASE is a lifetime signal in its own right',
+  isLifetimeGrant(ev({ type: 'NON_RENEWING_PURCHASE', expiration_at_ms: null })));
 
 console.log('\nCANCELLATION — the one that is always got wrong');
 check('a cancelled subscription is NOT revoked', kindOf({ type: 'CANCELLATION' }) === 'upsert');
@@ -145,6 +169,58 @@ check('a replay of the same event still applies (idempotent, same document)',
 check('a newer event applies', isFresh(ev({ event_timestamp_ms: NOW + 1000 }), NOW));
 check('a RENEWAL arriving after the EXPIRATION that followed it is dropped',
   !isFresh(ev({ type: 'RENEWAL', event_timestamp_ms: NOW - 1000 }), NOW));
+
+/**
+ * The staleness guard across a **revoke**, which is where it used to fail open.
+ *
+ * `isFresh` reads its watermark out of the stored document, so while a revoke deleted that
+ * document the guard had nothing to compare against: the next delivery — including a retry of
+ * an event from *before* the revoke — found no watermark, passed, and reinstated the access
+ * that had just been taken away. A refunded lifetime buyer got it back permanently, because
+ * nothing in the client expires a lifetime plan.
+ *
+ * Driven through a stand-in for `applyWrite`'s transaction rather than through `isFresh`
+ * alone, because the bug lived in the seam between the two and neither one was wrong by itself.
+ */
+{
+  let stored: StoredDoc | null = null;
+
+  const deliver = (over: Partial<RevenueCatEvent>) => {
+    const event = ev(over);
+    const action = mapEvent(event, PROD);
+    if (action.kind !== 'upsert' && action.kind !== 'revoke') return;
+    if (!isFresh(event, stored?.updatedAt)) return;   // exactly index.ts's guard
+    stored = action.doc;
+  };
+
+  deliver({ type: 'NON_RENEWING_PURCHASE', event_timestamp_ms: NOW,        expiration_at_ms: null });
+  deliver({ type: 'CANCELLATION', cancel_reason: 'CUSTOMER_SUPPORT', event_timestamp_ms: NOW + 1000 });
+  deliver({ type: 'NON_RENEWING_PURCHASE', event_timestamp_ms: NOW,        expiration_at_ms: null });
+
+  check('a refunded lifetime purchase is not resurrected by a retried purchase event',
+    stored !== null && (stored as StoredDoc).plan === 'revoked',
+    `stored plan: ${stored === null ? 'DELETED (watermark lost)' : (stored as StoredDoc).plan}`);
+}
+{
+  let stored: StoredDoc | null = null;
+  const deliver = (over: Partial<RevenueCatEvent>) => {
+    const event = ev(over);
+    const action = mapEvent(event, PROD);
+    if (action.kind !== 'upsert' && action.kind !== 'revoke') return;
+    if (!isFresh(event, stored?.updatedAt)) return;
+    stored = action.doc;
+  };
+
+  deliver({ type: 'RENEWAL',    event_timestamp_ms: NOW,        expiration_at_ms: NOW + 30 * DAY });
+  deliver({ type: 'EXPIRATION', event_timestamp_ms: NOW + 1000 });
+  deliver({ type: 'RENEWAL',    event_timestamp_ms: NOW,        expiration_at_ms: NOW + 30 * DAY });
+
+  check('an expired subscription is not resurrected by a retried RENEWAL',
+    stored !== null && (stored as StoredDoc).plan === 'revoked',
+    `stored plan: ${stored === null ? 'DELETED (watermark lost)' : (stored as StoredDoc).plan}`);
+}
+check('a revoke still lets a genuinely newer event back in',
+  isFresh(ev({ type: 'INITIAL_PURCHASE', event_timestamp_ms: NOW + 5000 }), NOW + 1000));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 8-3 · document → access

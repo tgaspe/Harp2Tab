@@ -16,12 +16,12 @@ written that way. Read that before changing one.
 | Harness | Cases | Covers |
 |---|---|---|
 | `verify-audio-import.ts` | 22 | Audio-upload round trip: `parseWav` → `analyzeSamples` → `framesToNotes`. WAV format matrix, take retention, key detection |
-| `verify-midi-import.ts` | 23 | MIDI-upload round trip. Fixtures are both the app's own exported SMF and hand-built bytes for what the exporter can't produce (multi-track, percussion, tempo changes, chords) |
+| `verify-midi-import.ts` | 24 | MIDI-upload round trip. Fixtures are both the app's own exported SMF and hand-built bytes for what the exporter can't produce (multi-track, percussion, tempo changes, chords) |
 | `verify-midi-studio.ts` | 81 | Studio foundations: the tempo/meter map, SMF write/read, project serialization and its per-track sidecar |
 | `verify-export.ts` | 16 | Multi-track export across all five formats, asserting single-track output hardest — every file a user has ever exported looks like that |
 | `verify-recordings-migration.ts` | 18 | Persisted-schema migrations for the recordings store, driven with hand-authored old payloads |
-| `verify-entitlement.ts` | 45 | The entitlement resolver — RevenueCat event → document → access — with an injected clock, so renewals and expiries don't take a month to test |
-| `verify-firestore-rules.ts` | — | `firestore.rules` against the emulator. **Needs a second terminal**, see below |
+| `verify-entitlement.ts` | 54 | The entitlement resolver — RevenueCat event → document → access — with an injected clock, so renewals and expiries don't take a month to test |
+| `verify-firestore-rules.ts` | 24 | `firestore.rules` against the emulator. **Needs a second terminal**, see below |
 | `verify-spectral-pitch.ts` | — | Calibration harness for the spectral engine. A measurement tool, not a regression gate — see below |
 
 ### Firestore rules
@@ -29,9 +29,19 @@ written that way. Read that before changing one.
 Runs against the emulator, so it never touches the real project:
 
 ```bash
-npx firebase emulators:start --only firestore   # terminal 1
-npx tsx scripts/verify-firestore-rules.ts       # terminal 2
+export JAVA_HOME=$(/usr/libexec/java_home -v 21)   # see below
+export PATH="$JAVA_HOME/bin:$PATH"                 # firebase-tools resolves `java` from PATH
+npx firebase emulators:start --only firestore      # terminal 1
+npx tsx scripts/verify-firestore-rules.ts          # terminal 2
 ```
+
+> **The emulator needs JDK 21 or newer.** `firebase-tools` refuses to start on anything older,
+> and the error names Java rather than the emulator, which is easy to read as "the harness is
+> broken." If several JDKs are installed, the default is often not the newest — `/usr/libexec/java_home -V`
+> lists them. This is worth setting up rather than skipping: these 24 checks are the only thing
+> standing between the rules file and a paywall bypass, and the rule shapes involved (a
+> permissive parent `match` silently overriding a nested `allow write: if false`) are invisible
+> to code review.
 
 ### Spectral engine calibration
 
