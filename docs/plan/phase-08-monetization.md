@@ -101,16 +101,53 @@ have to be *acted on* before the code that depends on it exists.
   "50% off the first year" and influencer codes are.** Recorded as a knowing trade, because it
   will be noticed later as an absence rather than a decision.
 
-### The prices stand: $3.49 / $27.99 / $44.99, lifetime still sold on web
+### ~~The prices stand: $3.49 / $27.99 / $44.99~~ → **€4.49 / €35.99 / €57.99, repriced 2026-08-14**
 
-Confirmed against the fee table rather than re-derived. What the table adds is one number
-worth having in front of the paywall design: **monthly nets $2.97 of $3.49, annual nets
-$25.90 of $27.99.** Fixed per-transaction cost is what does it — 15% on the monthly charge
-against 8.5% on the annual one, for the same customer.
+**Superseded by the user's decision on 2026-08-14, taken before RevenueCat imported the
+catalogue** — the last moment it was free, since Stripe prices are immutable and no web
+subscriber exists. Lifetime is still sold on web; only the numbers and the currency moved.
+The original reasoning is kept below because the fee argument in it turned out to be wrong,
+and that is worth not repeating.
 
-That does not make monthly wrong; it makes monthly a conversion instrument rather than a
-revenue one. Which plan the paywall pre-selects is therefore a deliberate choice (annual), not
-a layout accident.
+**The ladder is a ratio, not three numbers.** Annual is 8 months of monthly (8.02 before,
+8.02 after) and lifetime is 12.9 months (1.61× annual). Preserving those ratios at €4.49 is
+what produces €35.99 and €57.99 — they were derived, not chosen.
+
+**This is a ~48% rise, not the ~29% the headline numbers suggest.** At EUR/USD ≈ 1.154 the old
+prices were €3.03 / €24.26 / €39.00. Taken knowingly, and on positioning rather than fees:
+the category (Yousician ≈ €20/mo, Fender Play ≈ €10/mo, Ultimate Guitar Pro ≈ €40/yr) sits far
+above us, and a €3 monthly cannibalises the annual plan the paywall pre-selects. That is open
+question 5 — monthly's role — answered ahead of conversion data, because there is no
+conversion data either way and repricing after launch costs grandfathering and an email.
+
+**The fee correction that reshaped this section.** Every figure below was US pricing
+(2.9% + $0.30). This account is Belgian, and Stripe charges by card origin — **EEA standard
+1.5% + €0.25**, EEA premium 2.8%, UK 2.5%, international 3.15% (+2% on conversion) — with
+Managed Payments' 3.5% on top. So the real numbers are **5% + €0.25 on an EEA card**: monthly
+nets €4.02 of €4.49 (10.6%), annual €33.94 of €35.99 (5.7%), lifetime €54.84 of €57.99 (5.4%).
+Unconfirmed: whether Stripe Billing's 0.7% stacks on top of Managed Payments.
+
+The fixed-fee asymmetry is therefore real but much smaller than the 15%-vs-8.5% below — which
+means monthly is still a conversion instrument rather than a revenue one, but for ladder
+reasons rather than fee reasons. Which plan the paywall pre-selects remains a deliberate
+choice (annual), not a layout accident.
+
+**Open, and flagged at 8-1's product import:** prices are EUR-only, so US buyers — plausibly
+the largest market, blues harp being what it is — see a foreign currency plus their bank's FX
+fee. Options are EUR-only (chosen for now), a parallel USD price via Stripe multi-currency, or
+whatever localised presentment Managed Payments does on its own. Revisit once traffic shows
+where buyers actually are; it needs checking that RevenueCat surfaces multi-currency cleanly.
+
+*Original reasoning, superseded:*
+
+> Confirmed against the fee table rather than re-derived. What the table adds is one number
+> worth having in front of the paywall design: **monthly nets $2.97 of $3.49, annual nets
+> $25.90 of $27.99.** Fixed per-transaction cost is what does it — 15% on the monthly charge
+> against 8.5% on the annual one, for the same customer.
+>
+> That does not make monthly wrong; it makes monthly a conversion instrument rather than a
+> revenue one. Which plan the paywall pre-selects is therefore a deliberate choice (annual), not
+> a layout accident.
 
 ### Web only — Android is not touched by this phase
 
@@ -250,6 +287,36 @@ Sequential; each step blocks the next.
    contact. This does not reverse the 2026-08-13 deferral: everything in this phase can be
    built and tested in Stripe test mode against nothing, and the domain gates **go-live**, not
    the build. Add it to the fix-up checklist (`grep -rn "TODO(domain)" src/`).
+
+### Setup state — what exists in Stripe as of 2026-08-14
+
+8-1 steps 1 and 2 are done. **Belgium is eligible for Managed Payments** (8-1.1 answered —
+this closes the phase's blocking open question and takes the Paddle fallback off the table).
+
+The account is a **sandbox** — Stripe replaced the old test-mode toggle with sandboxes, which
+are isolated copies carrying their own API keys, webhooks and data. Consequence for 8c: the
+RevenueCat connection and the webhook built against this sandbox **do not carry over to live**
+and get redone against the activated account.
+
+| | id |
+|---|---|
+| account | `acct_1U4QQhEE7XhRWEbE` — "Harp2Tab sandbox", country BE, `charges_enabled: false`, `details_submitted: false` |
+| publishable key | `pk_test_51U4QQhEE7XhRWEbEpK9RXbmEVju5Mg09QixyFdqaA5TTfkn9G3UUOsC94fbpgosaEhyrzTVvBksTjkGbhklq1D0300NuXtJCly` |
+| monthly | `prod_V4ZiRNhE4Z46KV` → `price_1U4QkFEE7XhRWEbEBUTxzoIb` (€4.49/month) |
+| annual | `prod_V4ZiiNm4QnNCqp` → `price_1U4QkGEE7XhRWEbE2shVLHvB` (€35.99/year) |
+| lifetime | `prod_V4Zi9i9aFBYHoS` → `price_1U4QkIEE7XhRWEbEYDYql4tK` (€57.99 one-time) |
+
+**`prod_V4Zi9i9aFBYHoS` is the value for `RC_LIFETIME_PRODUCT_IDS`** — not yet set. Until it
+is, a lifetime purchase arrives with no expiry and no lifetime signal, and `isAmbiguousGrant`
+logs it rather than granting permanent access (`functions/src/index.ts:99`).
+
+The three USD prices created earlier the same day are archived, not deleted — Stripe prices are
+immutable, so the euro reprice was create-new + archive-old. Product ids survived it, which is
+why the id above stays valid across the change.
+
+Not done: RevenueCat account, the Marketplace app, the product import, the `premium`
+entitlement, the Offering, payment-domain registration (8-1 steps 3–5), and 8-1.6's lifetime
+test purchase.
 
 ### The database is real, and it is in the US
 

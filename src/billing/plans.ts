@@ -27,30 +27,39 @@ export interface WebPlan {
 }
 
 /**
- * Prices locked 2026-07-29, reconfirmed 2026-08-13 against the merchant-of-record fee table.
- * Worth knowing while reading them: after fees the monthly plan nets $2.97 and the annual one
- * $25.90, so annual is not merely better for the user.
+ * Prices locked 2026-07-29, reconfirmed 2026-08-13, and **repriced into euros 2026-08-14**
+ * before RevenueCat imported anything — the last moment the change was free, since no web
+ * subscriber exists and Stripe prices are immutable once sold against.
+ *
+ * The ladder is a ratio, not three numbers: annual is 8 months of monthly, lifetime is 12.9.
+ * That held at $3.49/$27.99/$44.99 and it holds here, which is why these are the euro figures
+ * and not a currency conversion (at EUR/USD ≈ 1.154 the old prices were €3.03/€24.26/€39.00,
+ * so this is a deliberate ~48% rise, taken on positioning: the category sits far above us).
+ *
+ * Worth knowing while reading them: on an EEA card the fee is 5% + €0.25 (Stripe Belgium's
+ * 1.5% + €0.25 plus Managed Payments' 3.5% — *not* the US 2.9% + $0.30 this file used to
+ * assume), so monthly nets €4.02 and annual €33.94. Annual is not merely better for the user.
  */
 export const MOCK_WEB_PLANS: WebPlan[] = [
   {
     id:      'yearly',
     name:    'Yearly',
-    price:   '$27.99',
+    price:   '€35.99',
     cadence: 'per year',
-    note:    'About $2.33 a month — save 33%',
+    note:    '€3.00 a month — save 33%',
     badge:   'Best value',
   },
   {
     id:      'monthly',
     name:    'Monthly',
-    price:   '$3.49',
+    price:   '€4.49',
     cadence: 'per month',
     note:    'Cancel any time',
   },
   {
     id:      'lifetime',
     name:    'Lifetime',
-    price:   '$44.99',
+    price:   '€57.99',
     cadence: 'one time',
     note:    'Pay once, keep it forever',
   },
