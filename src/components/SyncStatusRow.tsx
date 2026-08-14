@@ -6,9 +6,11 @@
  * who concludes the app ate their edit. Naming the document and the time turns a data-loss
  * bug report into understood behaviour.
  *
- * **`unavailable` is what 7a actually ships**, and it is the only state a user-reachable
- * build may show until the sync engine exists (7b, after Phase 8). A green "Synced" tick
- * with nothing behind it invites someone to trust a backup that is not there.
+ * **`unavailable` is not a placeholder any more, but it is still the honest default.** It now
+ * means the engine is deliberately not running — signed out, address unconfirmed, or the
+ * feature switched off — and each of those says which. A green "Synced" tick is only ever
+ * shown when a pull and a push both completed; anything less invites someone to trust a backup
+ * that is not there.
  */
 
 import React, { useMemo } from 'react';
@@ -22,7 +24,7 @@ import type { Theme } from '@/theme';
 
 interface Props {
   sync:     SyncStatus;
-  /** Absent while there is no engine to ask — 7a renders no action at all. */
+  /** Absent when there is nothing to ask — signed out, or a build with no engine running. */
   onSyncNow?: () => void;
 }
 
@@ -59,8 +61,22 @@ function present(sync: SyncStatus): Presentation {
         // font Expo web actually serves, so it renders as a tofu box.
         icon: 'time-outline',
         tint: (t) => t.textMuted,
-        text: 'Sync is coming soon',
-        detail: 'Your tabs are saved on this device.',
+        text: 'Not syncing',
+        // Each reason names the way out, because "not syncing" with no next step reads as a
+        // fault in the app rather than a state the user can leave.
+        detail:
+          sync.reason === 'unverified'
+            ? 'Confirm your email address and your library will start syncing.'
+            : sync.reason === 'signedOut'
+              ? 'Your tabs are saved on this device. Sign in to keep them on every device.'
+              : 'Your tabs are saved on this device.',
+      };
+    case 'needsChoice':
+      return {
+        icon: 'help-circle-outline',
+        tint: (t) => t.warning,
+        text: 'Waiting on you',
+        detail: 'This device holds tabs from another account. Choose what happens to them before syncing starts.',
       };
     case 'syncing':
       return { icon: 'sync-outline', tint: (t) => t.accent, text: 'Syncing…' };

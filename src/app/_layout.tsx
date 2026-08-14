@@ -26,6 +26,8 @@ import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { TopBar } from '@/components/TopBar';
 import { startAuthListener } from '@/auth/useAuthStore';
 import { startEntitlementListener } from '@/store/useEntitlementStore';
+import { startSyncListener } from '@/sync/syncEngine';
+import { AdoptionPrompt } from '@/sync/AdoptionPrompt';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -74,6 +76,16 @@ export default function RootLayout() {
    */
   useEffect(() => startEntitlementListener(), []);
 
+  /**
+   * Cloud sync (7b-4), started the same way and for the same reason: one module owns the
+   * network, every screen reads a store.
+   *
+   * Started unconditionally rather than only when signed in — it gates on the auth store itself,
+   * and a signed-out app still needs it to report *why* nothing is syncing rather than leaving
+   * `/profile` showing whatever the last session ended on.
+   */
+  useEffect(() => startSyncListener(), []);
+
   if (!fontsLoaded) return null;
 
   return (
@@ -82,6 +94,11 @@ export default function RootLayout() {
         <AnimatedSplashOverlay />
         <TopBar />
         <Stack screenOptions={{ headerShown: false }} />
+        {/* Mounted at the root, not on `/profile` (7-11). Sign-in happens from the TopBar, the
+            paywall and the sign-in modal, so the question can be raised from anywhere — and it
+            blocks sync until it is answered, which makes it the wrong thing to hide behind a
+            route the user may never visit. */}
+        <AdoptionPrompt />
       </ThemeProvider>
     </GestureHandlerRootView>
   );

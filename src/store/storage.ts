@@ -6,3 +6,4 @@ export const recordingsStorage = createJSONStorage(() => localStorage);
 export const midiProjectsStorage = createJSONStorage(() => localStorage);
 export const authStorage = createJSONStorage(() => localStorage);
 export const entitlementStorage = createJSONStorage(() => localStorage);
+export const syncStorage = createJSONStorage(() => localStorage);

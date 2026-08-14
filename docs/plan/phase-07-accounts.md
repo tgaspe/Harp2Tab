@@ -915,7 +915,15 @@ call site to remember.
   document.** They are per-user state, not per-device, and the type comments already treat
   them as part of the record.
 
-## 7-10 · The sync engine — **7b, after Phase 8**
+## 7-10 · The sync engine — **built 2026-08-14; full plan in [phase-07b-sync.md](phase-07b-sync.md)**
+
+> **Superseded as a schedule, kept as a design record.** The "after Phase 8" ordering below was
+> overtaken the next day by the release sequence (`README.md` — monetization ships last), and
+> its premise had already been removed by two decisions taken the same day as it: accounts are
+> offered voluntarily anywhere, and free accounts get sync, so signup never waited on billing.
+> 7b was built on 2026-08-14. The design in this section survived contact with the code; what
+> it left implicit — where tombstones come from, the `schemaVersion` skip rule, the watermark —
+> is in `phase-07b-sync.md`.
 
 ```
 src/sync/
@@ -969,7 +977,7 @@ them means a laptop inheriting a phone's calibration. Sync `themeOverride`,
 flags local. `isPurchased` and `totalRecordingsUsed` are governed by the entitlement
 decision above, not by this list.
 
-## 7-11 · First sign-in: adopt, never replace — and the second-account trap — **7b, after Phase 8**
+## 7-11 · First sign-in: adopt, never replace — and the second-account trap — **built 2026-08-14**
 
 The obvious case is easy: user has a local library, signs in, cloud is empty → upload
 everything. Ids are `rec-${Date.now()}-${random}` (`sessionSnapshot.ts:38`), so cross-device
@@ -1133,7 +1141,7 @@ is no account until payment).
    sends people into the account flow — it should land when that flow is finished and worth
    arriving at.
 
-### 7b — sync (after Phase 8)
+### 7b — sync (built 2026-08-14, ahead of Phase 8 — see [phase-07b-sync.md](phase-07b-sync.md))
 
 9. **7-10 `merge.ts` + `verify-sync.ts`, with no network at all.** The riskiest logic in the
    roadmap, built where it is cheapest to get wrong.

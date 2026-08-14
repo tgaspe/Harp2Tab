@@ -50,10 +50,12 @@ export type AuthStatus = 'resolving' | 'signedOut' | 'signedIn';
 /**
  * What the sync row on `/profile` is reporting.
  *
- * `'unavailable'` is the honest 7a state and the only one a real build may show until the
- * sync engine exists (7b, after Phase 8). Showing `'idle'` — a green "Synced" tick — with no
- * engine behind it would invite the user to trust a backup that is not there, which is the
- * one thing in this slice that could cost someone real work.
+ * **No state may be shown that is not true.** `'idle'` — the green tick — means a pull and a
+ * push both completed; anything less is `'offline'`, `'error'` or `'unavailable'`. A green tick
+ * with nothing behind it invites the user to trust a backup that is not there, which is the one
+ * thing here that could cost someone real work. That rule is why 7a shipped `'unavailable'`
+ * pinned, and it outlives 7a: the state still exists for every case where the engine is
+ * deliberately not running.
  */
 export type SyncState =
   | 'unavailable'
@@ -61,7 +63,21 @@ export type SyncState =
   | 'syncing'
   | 'offline'
   | 'error'
-  | 'discarded';
+  | 'discarded'
+  /** Waiting on the user to say whose library this device holds — 7-11's second-account case.
+   *  Deliberately not `'error'`: nothing failed, and calling it a failure would push someone
+   *  towards "retry" when the only way out is a decision. */
+  | 'needsChoice';
+
+/** Why the engine is not running, for the `'unavailable'` row's second line. */
+export type SyncUnavailableReason =
+  /** Signed out. The library is local and complete, which is worth saying rather than implying
+   *  something is broken. */
+  | 'signedOut'
+  /** Signed in, address not confirmed — 7-4's decision, enforced in `firestore.rules` too. */
+  | 'unverified'
+  /** `SYNC_ENABLED` is off, or Firebase is not configured in this build. */
+  | 'disabled';
 
 export interface SyncStatus {
   state:         SyncState;
@@ -69,6 +85,8 @@ export interface SyncStatus {
   lastSyncedAt?: number;
   /** Local writes waiting to be pushed. Present for `offline`. */
   pendingCount?: number;
+  /** Present for `unavailable`. */
+  reason?:       SyncUnavailableReason;
   /**
    * What last-write-wins replaced, for `discarded`.
    *

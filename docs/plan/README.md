@@ -1,7 +1,11 @@
 # Harp2Tab — Full Roadmap Implementation Plan
 
-Status as of 2026-08-13: Phases 0–6, 7a, 8a, 11, 13 and 14 are implemented on `web_version`.
-Phases 9, 10, 12, 15, 7b and 8b/8c are still just this plan.
+Status as of 2026-08-14: Phases 0–6, 7a, 7b, 8a, 11, 13 and 14 are implemented on
+`web_version`. Phases 9, 10, 12, 15 and 8b/8c are still just this plan.
+
+**7b ships behind `SYNC_ENABLED = false`** (`src/sync/syncEngine.ts`) until the two-browser
+pass, the stored-document size check and the privacy-policy update are done — see the Status
+section of [`phase-07b-sync.md`](phase-07b-sync.md).
 
 ## Release sequence (decided 2026-08-13)
 
@@ -38,12 +42,18 @@ existed, so the command would have failed. No phase owned this; it is now step 2
 - [x] [Phase 5](phase-00-05-foundation.md) — Audio upload (5a decode/pipeline, 5b auto key detection); 5c native
       compressed-audio decode deferred
 - [x] [Phase 6](phase-06-midi-import.md) — MIDI upload → tab conversion
-- [~] [Phase 7](phase-07-accounts.md) — **7a shipped** (commits `07f84f9`…`a455556`): Firebase Auth with
+- [x] [Phase 7](phase-07-accounts.md) — **7a shipped** (commits `07f84f9`…`a455556`): Firebase Auth with
       Google + email/password, `/profile`, the verify banner, reauth/set-password, account
       deletion (client + the `onAccountDeleted` function), Firestore rules +
-      `verify-firestore-rules.ts`. **7b, the sync engine, is not built** — `SyncStatusRow`
-      renders `unavailable`, which is the honest 7a state. Free accounts were promised sync,
-      so 7b is a commitment outstanding, not a dropped idea.
+      `verify-firestore-rules.ts`. **7b shipped 2026-08-14** — the sync engine, planned in full
+      in [`phase-07b-sync.md`](phase-07b-sync.md): pure merge + 58-case harness, tombstone log,
+      timestamp-preserving store writes, first-sign-in adoption with the second-account guard,
+      synced settings subset, real sync row. Behind `SYNC_ENABLED = false` pending two manual
+      checks and the privacy-policy update. This closes the "free accounts get sync" promise.
+      **Built ahead of Phase 8, not after it** — the ordering note below was written 2026-08-12
+      and was overtaken the next day by the release sequence above (monetization last); its
+      premise, that nobody has an account until billing exists, had already been removed by the
+      same day's decisions to offer accounts voluntarily and give free accounts sync.
       Original plan below. User accounts (Firebase Auth) + cloud sync. Detailed plan written
       2026-08-12. **Now split: 7a (accounts) ships here, 7b (the sync engine) ships after
       Phase 8** — under the subscribe-time signup model there is nobody with an account to
@@ -218,7 +228,8 @@ they're the design record, not a changelog. Notable deviations from the original
 |---|---|
 | [`phase-00-05-foundation.md`](phase-00-05-foundation.md) | Recording sessions, home-as-library, frame retention + Frame Inspector, playback, piano-roll editor, audio upload (5a/5b/5c) |
 | [`phase-06-midi-import.md`](phase-06-midi-import.md) | MIDI upload → tab conversion |
-| [`phase-07-accounts.md`](phase-07-accounts.md) | Firebase Auth, `/profile`, Firestore rules, account deletion, the 7a-UI mock-first slice, and the 7b sync engine |
+| [`phase-07-accounts.md`](phase-07-accounts.md) | Firebase Auth, `/profile`, Firestore rules, account deletion, the 7a-UI mock-first slice, and 7-10/7-11's outline of the sync engine |
+| [`phase-07b-sync.md`](phase-07b-sync.md) | 7b in full — wire format, the pure merge, tombstone sourcing, orchestration, first-sign-in adoption, settings subset |
 | [`phase-08-monetization.md`](phase-08-monetization.md) | Stripe Managed Payments behind RevenueCat, the entitlement writer, revocable `isPurchased`, the free-tier flip |
 | [`phase-09-10-ios-and-web-polish.md`](phase-09-10-ios-and-web-polish.md) | iOS version; web UI polish incl. modal focus management |
 | [`phase-11-midi-studio.md`](phase-11-midi-studio.md) | MIDI Studio (multi-track DAW) |

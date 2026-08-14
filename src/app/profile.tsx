@@ -32,6 +32,7 @@ import { EditNameModal } from '@/components/EditNameModal';
 import { ReauthModal } from '@/components/ReauthModal';
 import { SetPasswordModal } from '@/components/SetPasswordModal';
 import { SyncStatusRow } from '@/components/SyncStatusRow';
+import { syncNow } from '@/sync/syncEngine';
 import { VerifyBanner } from '@/components/VerifyBanner';
 import {
   Button, DangerHeading, DangerZone, FieldRow, Section,
@@ -493,9 +494,18 @@ export default function ProfileScreen() {
             title="Sync"
             description="Keeping the same library on every device you sign in from."
           >
-            {/* No `onSyncNow` in 7a — there is no engine to ask, so no button is offered
-                rather than one that does nothing. */}
-            <SyncStatusRow sync={auth.sync} />
+            {/* `onSyncNow` is withheld while the row is `'unavailable'` or waiting on the
+                adoption choice: in both cases the engine is deliberately not running, and a
+                button that silently does nothing is worse than no button. `syncNow` self-gates
+                anyway — this is about not offering an action that cannot help. */}
+            <SyncStatusRow
+              sync={auth.sync}
+              onSyncNow={
+                auth.sync.state === 'unavailable' || auth.sync.state === 'needsChoice'
+                  ? undefined
+                  : () => { void syncNow(); }
+              }
+            />
           </Section>
 
           <Section

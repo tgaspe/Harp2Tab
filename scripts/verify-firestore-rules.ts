@@ -100,8 +100,12 @@ async function main() {
     assertSucceeds(setDoc(doc(alice, 'users/alice/projects/p1'), { title: 'Take 1' })));
   await check('write own settings',
     assertSucceeds(setDoc(doc(alice, 'users/alice/settings/current'), { gate: 40 })));
+  // The shape 7b's engine actually writes, not a placeholder — a rules test that passes for a
+  // document the app never sends is testing the emulator, not the app.
   await check('write own tombstone',
-    assertSucceeds(setDoc(doc(alice, 'users/alice/deleted/t9'), { at: 1 })));
+    assertSucceeds(setDoc(doc(alice, 'users/alice/deleted/t9'), { deletedAt: 1, kind: 'tab' })));
+  await check('read own tombstone',
+    assertSucceeds(getDoc(doc(alice, 'users/alice/deleted/t9'))));
 
   section('Nobody else can touch it — the property the whole file exists for');
   await check('another user cannot read my tab',
@@ -112,6 +116,13 @@ async function main() {
     assertFails(getDoc(doc(mallory, 'users/alice/projects/p1'))));
   await check('another user cannot read my settings',
     assertFails(getDoc(doc(mallory, 'users/alice/settings/current'))));
+  // Tombstones are as sensitive as the documents they describe: the id and the time say what
+  // someone had and when they got rid of it, and a writable one is a way to delete another
+  // user's library from their next sync.
+  await check('another user cannot read my tombstones',
+    assertFails(getDoc(doc(mallory, 'users/alice/deleted/t9'))));
+  await check('another user cannot plant a tombstone in my library',
+    assertFails(setDoc(doc(mallory, 'users/alice/deleted/t1'), { deletedAt: 2, kind: 'tab' })));
   await check('signed-out cannot read a tab',
     assertFails(getDoc(doc(anon, 'users/alice/tabs/t1'))));
   await check('signed-out cannot write a tab',
@@ -122,6 +133,8 @@ async function main() {
     assertFails(setDoc(doc(unverified, 'users/unver/tabs/t1'), { title: 'x' })));
   await check('unverified cannot read their own tab',
     assertFails(getDoc(doc(unverified, 'users/unver/tabs/t1'))));
+  await check('unverified cannot write their own tombstone',
+    assertFails(setDoc(doc(unverified, 'users/unver/deleted/t1'), { deletedAt: 1, kind: 'tab' })));
 
   section('A Google identity counts as confirmed even when email_verified is false');
   // The regression test for 2026-08-13. Without the `google.com` clause in `confirmed()`,

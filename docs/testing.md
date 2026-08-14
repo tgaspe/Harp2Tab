@@ -20,6 +20,7 @@ written that way. Read that before changing one.
 | `verify-midi-studio.ts` | 81 | Studio foundations: the tempo/meter map, SMF write/read, project serialization and its per-track sidecar |
 | `verify-export.ts` | 16 | Multi-track export across all five formats, asserting single-track output hardest — every file a user has ever exported looks like that |
 | `verify-recordings-migration.ts` | 18 | Persisted-schema migrations for the recordings store, driven with hand-authored old payloads |
+| `verify-sync-merge.ts` | 58 | The sync merge (7b) — every row of its decision table, tombstone expiry either side of the boundary, two devices disagreeing about a deletion, plan idempotence — plus the wire round trip and the v4 migration. No network, no emulator |
 | `verify-entitlement.ts` | 54 | The entitlement resolver — RevenueCat event → document → access — with an injected clock, so renewals and expiries don't take a month to test |
 | `verify-firestore-rules.ts` | 24 | `firestore.rules` against the emulator. **Needs a second terminal**, see below |
 | `verify-spectral-pitch.ts` | — | Calibration harness for the spectral engine. A measurement tool, not a regression gate — see below |

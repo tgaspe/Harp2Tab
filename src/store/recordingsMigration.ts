@@ -7,12 +7,13 @@
  * real user's device is a migration nobody can test before it ships.
  */
 
-import type { RecordingSource, TabNote, TabRecording, VelocitySource } from '@/types';
+import type { RecordingSource, TabNote, TabRecording, Tombstone, VelocitySource } from '@/types';
 
 /** Bumped when the persisted shape changes. v1 renamed `TabNote.breathForce` → `velocity`
  *  and added `velocitySource`. v2 re-spelled the hole 8-10 blow bends. v3 added
- *  `TabRecording.updatedAt`. Payloads written before versioning existed arrive as 0. */
-export const RECORDINGS_SCHEMA_VERSION = 3;
+ *  `TabRecording.updatedAt`. v4 added the `deletedIds` tombstone log. Payloads written before
+ *  versioning existed arrive as 0. */
+export const RECORDINGS_SCHEMA_VERSION = 4;
 
 /**
  * What a recording's velocities must have come from, given how the tab was made.
@@ -45,8 +46,8 @@ export function inferVelocitySource(source: RecordingSource | undefined): Veloci
 export function migrateRecordings(
   persisted: unknown,
   fromVersion: number,
-): { recordings: TabRecording[] } {
-  const state = (persisted ?? {}) as { recordings?: unknown };
+): { recordings: TabRecording[]; deletedIds: Tombstone[] } {
+  const state = (persisted ?? {}) as { recordings?: unknown; deletedIds?: unknown };
   let recordings: unknown[] = Array.isArray(state.recordings) ? state.recordings : [];
 
   // One guarded step per version rather than a single early return over the lot. The old
@@ -57,7 +58,35 @@ export function migrateRecordings(
   if (fromVersion < 2) recordings = migrateNotesToV2(recordings);
   if (fromVersion < 3) recordings = migrateToV3(recordings);
 
-  return { recordings: recordings as TabRecording[] };
+  return {
+    recordings: recordings as TabRecording[],
+    // v3 → v4 in full: the log starts empty. There is nothing to seed it from — a deletion
+    // that happened before this field existed left no trace anywhere, which is precisely the
+    // gap 7b-3 exists to close going forward. Returned unconditionally rather than under a
+    // `fromVersion < 4` guard because zustand's `migrate` *replaces* the persisted state, so
+    // an existing log has to be carried through every migration or a v3 payload would silently
+    // drop the tombstones a v4 install had already accumulated.
+    deletedIds: sanitizeTombstones(state.deletedIds),
+  };
+}
+
+/**
+ * Tombstones survive a hostile payload the same way recordings do: individually.
+ *
+ * One malformed entry — a hand-edited `localStorage`, a half-written value — must not take the
+ * log down with it, because an empty log reads as "nothing was ever deleted" and that is the
+ * input that resurrects a deleted tab on the next sync.
+ */
+function sanitizeTombstones(value: unknown): Tombstone[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is Tombstone => {
+    const tomb = entry as Partial<Tombstone> | null;
+    return !!tomb
+      && typeof tomb.id === 'string'
+      && typeof tomb.deletedAt === 'number'
+      && Number.isFinite(tomb.deletedAt)
+      && (tomb.kind === 'tab' || tomb.kind === 'project');
+  });
 }
 
 function migrateNotesToV2(recordings: unknown[]): unknown[] {

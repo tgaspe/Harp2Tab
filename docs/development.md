@@ -76,6 +76,40 @@ npx firebase deploy --only functions
 
 `functions/.secret.local` holds emulator secrets and is never committed.
 
+### Cloud sync (7b)
+
+**Off by default.** `SYNC_ENABLED` in `src/sync/syncEngine.ts` gates the whole engine, so a dev
+session cannot write a library into the real project by accident. The merge logic needs neither
+the flag nor the emulator to be exercised — `npx tsx scripts/verify-sync-merge.ts` drives all 58
+cases as a pure function.
+
+**To watch it actually write documents, use the emulator — not the flag:**
+
+```bash
+echo 'EXPO_PUBLIC_FIREBASE_EMULATOR=1' >> .env
+
+export JAVA_HOME=$(/usr/libexec/java_home -v 21)
+export PATH="$JAVA_HOME/bin:$PATH"
+npx firebase emulators:start --only firestore    # terminal 1
+
+npx expo start --web --clear                     # terminal 2 — --clear, or the old env is cached
+```
+
+Then sign in and save a tab. Documents appear at <http://localhost:4000/firestore> under
+`users/{uid}/tabs`. The console logs `[sync] Firestore → emulator …` on the first call, because
+a build silently talking to an emulator looks exactly like a build whose sync is broken.
+
+`EXPO_PUBLIC_FIREBASE_EMULATOR=1` **enables the engine on its own**, so `SYNC_ENABLED` stays
+`false` while you develop. That is deliberate: if emulator work required flipping the production
+switch, the switch would spend its life in the wrong position, and the day someone unsets the
+emulator variable without putting it back is the day a dev session writes into the real project.
+Auth still points at the real project, so Google sign-in works — the Firestore emulator decodes
+a genuine ID token without verifying it, which is enough for the rules to be exercised properly.
+
+Turning `SYNC_ENABLED` on means real documents: read the Status section of
+[`plan/phase-07b-sync.md`](plan/phase-07b-sync.md) first, which lists what must happen before the
+flip (including a privacy-policy edit that is a release blocker, not a follow-up).
+
 Two functions are deployed:
 
 | Function | Trigger | Does |
@@ -196,6 +230,7 @@ Builds on Expo's servers — multi-architecture (~76MB AAB vs ~35MB local arm64-
 | App store | `src/store/useAppStore.ts` |
 | Firestore rules | `firestore.rules` |
 | Cloud Functions | `functions/src/` |
+| Cloud sync | `src/sync/` — `SYNC_ENABLED` in `syncEngine.ts` is the on/off switch |
 | Firebase web config | `.env` *(gitignored, see `.env.example`)* |
 
 ---

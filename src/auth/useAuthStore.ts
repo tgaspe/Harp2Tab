@@ -12,19 +12,11 @@ import { persist } from 'zustand/middleware';
 import { onAuthChange, reloadUser as reloadFromSdk } from './auth';
 import { isFirebaseConfigured } from './firebase';
 import { authStorage } from '@/store/storage';
-import type { AuthStatus, AuthUser, SyncStatus } from './types';
-
-/**
- * 7a has no sync engine, so this is the only honest value — and the one thing in this phase
- * that could cost a user real work if faked. A green "Synced" tick with nothing behind it
- * invites someone to trust a backup that does not exist. 7b replaces this with real state.
- */
-const NO_SYNC: SyncStatus = { state: 'unavailable' };
+import type { AuthStatus, AuthUser } from './types';
 
 interface AuthStoreState {
   status: AuthStatus;
   user:   AuthUser | null;
-  sync:   SyncStatus;
   /**
    * The last uid seen on this device, kept across sign-out.
    *
@@ -36,8 +28,23 @@ interface AuthStoreState {
    */
   lastUid: string | null;
 
-  setUser: (user: AuthUser | null) => void;
-  reload:  () => Promise<void>;
+  /**
+   * Accounts whose library this device's local documents already belong to (7-11).
+   *
+   * The guard against the case that corrupts data: sign in as A, sign out, sign in as B. A
+   * naive adoption pushes A's entire library into B's account, which on a shared laptop is a
+   * privacy incident rather than a bug. A uid in here means "this device's tabs are already
+   * this account's, adopt freely"; a uid absent from it, on a device that holds documents and
+   * has seen someone else, means ask first.
+   *
+   * Unlike `lastUid` this one *can* be created empty without losing anything — the worst it
+   * costs is one extra prompt — which is why 7a persisted `lastUid` and left this to 7b.
+   */
+  adoptedUids: string[];
+
+  setUser:     (user: AuthUser | null) => void;
+  reload:      () => Promise<void>;
+  markAdopted: (uid: string) => void;
 }
 
 export const useAuthStore = create<AuthStoreState>()(
@@ -47,10 +54,10 @@ export const useAuthStore = create<AuthStoreState>()(
       // at the answer we hope is wrong would render the signed-out UI for a frame and then
       // swap — returning users watching their own account flicker into existence on every
       // load. Every consumer treats `'resolving'` as "render neither yet".
-      status:  'resolving',
-      user:    null,
-      sync:    NO_SYNC,
-      lastUid: null,
+      status:      'resolving',
+      user:        null,
+      lastUid:     null,
+      adoptedUids: [],
 
       setUser: (user) =>
         set((s) => ({
@@ -67,15 +74,21 @@ export const useAuthStore = create<AuthStoreState>()(
         // correct before that.
         if (user) set({ user, status: 'signedIn' });
       },
+
+      markAdopted: (uid) =>
+        set((s) => (s.adoptedUids.includes(uid)
+          ? s
+          : { adoptedUids: [...s.adoptedUids, uid] })),
     }),
     {
       name:    'harp2tab-auth',
       storage: authStorage,
-      // Only `lastUid`. Persisting `user` or `status` would mean the app trusts its own copy
-      // of who is signed in over Firebase's — so a revoked, deleted or expired session would
-      // still render as signed-in until the SDK got around to contradicting it. The SDK
+      // Only `lastUid` and `adoptedUids` — both facts about *this device's history*, which
+      // nothing else records. Persisting `user` or `status` would mean the app trusts its own
+      // copy of who is signed in over Firebase's — so a revoked, deleted or expired session
+      // would still render as signed-in until the SDK got around to contradicting it. The SDK
       // already persists the real session; this store must not keep a second opinion.
-      partialize: (s) => ({ lastUid: s.lastUid }),
+      partialize: (s) => ({ lastUid: s.lastUid, adoptedUids: s.adoptedUids }),
     },
   ),
 );

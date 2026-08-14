@@ -138,6 +138,31 @@ export interface TabRecording {
   sourceTrackId?:   string;
 }
 
+/** Which library a document belongs to. Tabs and projects share one `deleted` collection in
+ *  Firestore, so a tombstone has to say which store it applies to — the document it refers to
+ *  is, by definition, no longer there to be asked. */
+export type SyncKind = 'tab' | 'project';
+
+/**
+ * A record that something was deleted, kept after the thing itself is gone (7b-3).
+ *
+ * **Deletion is the one library change that leaves no trace to sync.** An id present in the
+ * cloud and absent locally is indistinguishable from "deleted here" and "not pulled yet", and
+ * guessing wrong either resurrects a deleted tab or silently drops a new one. So each store
+ * appends one of these inside its own delete action, where the write is atomic with the
+ * deletion — a log kept anywhere else could be lost to a tab closed in between, which is the
+ * exact failure tombstones exist to prevent.
+ *
+ * Garbage-collected after `TOMBSTONE_TTL_MS`. A device offline longer than that can resurrect
+ * a deleted item; the alternative is a log that only ever grows.
+ */
+export interface Tombstone {
+  id:        string;
+  /** Epoch ms. */
+  deletedAt: number;
+  kind:      SyncKind;
+}
+
 export type RecordingSource = 'recording' | 'audioUpload' | 'midiUpload' | 'midiStudio';
 
 // ── MIDI Studio (Phase 11) ────────────────────────────────────────────────────

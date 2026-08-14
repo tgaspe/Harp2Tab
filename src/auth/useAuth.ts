@@ -62,6 +62,7 @@ import {
 } from './auth';
 import { resolveMockState } from './mockStates';
 import { useAuthStore } from './useAuthStore';
+import { useSyncStore } from '@/sync/useSyncStore';
 import type { AuthState, AuthUser } from './types';
 
 export interface AuthActions {
@@ -161,7 +162,10 @@ export function useAuth(): UseAuthResult {
   // re-render every consumer on every unrelated store write.
   const status = useAuthStore((s) => s.status);
   const user   = useAuthStore((s) => s.user);
-  const sync   = useAuthStore((s) => s.sync);
+  // From the sync store, not the auth store: 7a pinned this to `'unavailable'` beside the user
+  // because there was no engine, and keeping it there once there is one would give two modules
+  // an opinion about whether a backup happened.
+  const sync   = useSyncStore((s) => s.status);
   const reload = useAuthStore((s) => s.reload);
 
   const doSignInWithGoogle = useCallback(async () => {

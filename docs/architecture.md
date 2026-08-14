@@ -96,6 +96,16 @@ Data is **local-first**: everything works signed-out, and the cloud is a mirror 
 the source of truth. `useAppStore` holds the working session; `useRecordingsStore` the
 library; `useMidiProjectsStore` the Studio.
 
+**Cloud sync (`src/sync/`, 7b)** reconciles the two library stores against
+`/users/{uid}/…` when signed in with a confirmed address. The rule that keeps it cheap: **no
+screen ever reads Firestore.** `syncEngine.ts` is the only module that awaits the network and
+it writes into the same stores every screen already reads, so no component gains a loading or
+error state. `merge.ts` is pure — whole-document last-write-wins on `updatedAt`, with
+tombstones under `/users/{uid}/deleted` so a delete on one device is not undone by another —
+and `firestore.ts` / `firestore.web.ts` is the platform-split façade, so nothing outside it
+holds a Firebase type. Bodies travel as one opaque JSON string, never expanded maps: Firestore
+charges per field name per array element. Gated by `SYNC_ENABLED` in `syncEngine.ts`.
+
 `useHeaderActionStore` is a one-slot register that lets a screen drive a button in the global
 `TopBar`, which renders in the root layout outside any screen's tree. Screens must clear the
 slot on unmount or the button follows them to the next route.
@@ -110,7 +120,8 @@ regardless of where the user paid.
 - **Web** — Stripe Managed Payments behind RevenueCat, with Stripe as merchant of record.
   The webhook → Cloud Function entitlement writer lives in `functions/`.
 
-Details and the decision record: [plan/phase-07-accounts.md](plan/phase-07-accounts.md) and
+Details and the decision record: [plan/phase-07-accounts.md](plan/phase-07-accounts.md),
+[plan/phase-07b-sync.md](plan/phase-07b-sync.md) and
 [plan/phase-08-monetization.md](plan/phase-08-monetization.md).
 
 ## Conventions
