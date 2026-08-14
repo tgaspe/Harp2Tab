@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Generate the landing page's image assets (12-3): the hero photograph and the header logo.
+"""Generate the landing page's image assets (12-3): its photographs and the header logo.
 
     python3 scripts/build-landing-images.py
 
-Reads `assets/landing/hero-source.jpg` and `assets/images/harp2tab-icon.png`, and writes into
-`public/hero/` and `public/logo/`, which Expo copies to the site root during
+Reads the two sources in `assets/landing/` and `assets/images/harp2tab-icon.png`, and writes
+into `public/hero/`, `public/closer/` and `public/logo/`, which Expo copies to the site root during
 `expo export -p web`. The landing page is plain DOM rather than react-native-web, so it cannot
 `require()` an asset the way the app does — it references these by URL, which is why they are
 emitted as real files instead of being bundled.
@@ -26,6 +26,16 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "assets" / "landing" / "hero-source.jpg"
 OUT_DIR = ROOT / "public" / "hero"
+
+# The closing CTA band's photograph — harmonica resting on a guitar neck, backlit window.
+#
+# Same treatment as the hero, different budget: this one is the last thing on the page, is
+# lazily loaded, and sits under a heavier scrim than the hero does, so it is compressed
+# harder. It is never the LCP element, which is the whole reason it can afford to be.
+CLOSER_SOURCE = ROOT / "assets" / "landing" / "closer-source.jpg"
+CLOSER_OUT_DIR = ROOT / "public" / "closer"
+CLOSER_WEBP_QUALITY = {960: 68, 1440: 60, 1920: 54}
+CLOSER_JPEG_QUALITY = {960: 72, 1440: 66, 1920: 60}
 
 # The app icon, reused as the header mark. Already cyan on transparent, so it needs no
 # recolouring to sit on the dark page — only shrinking: the source is 512px for launcher use,
@@ -51,15 +61,16 @@ WEBP_QUALITY = {960: 74, 1440: 68, 1920: 60}
 JPEG_QUALITY = {960: 78, 1440: 74, 1920: 68}
 
 
-def main() -> None:
-    if not SOURCE.exists():
-        raise SystemExit(f"missing source image: {SOURCE}")
+def render_photo(source: Path, out_dir: Path, stem: str, webp_q: dict, jpeg_q: dict) -> None:
+    """Emit the WebP/JPEG ladder for one photograph, and report the sizes."""
+    if not source.exists():
+        raise SystemExit(f"missing source image: {source}")
 
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    src = Image.open(SOURCE).convert("RGB")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    src = Image.open(source).convert("RGB")
     src_w, src_h = src.size
-    print(f"source  {SOURCE.relative_to(ROOT)}  {src_w}x{src_h}  "
-          f"{SOURCE.stat().st_size / 1024:.0f} KB\n")
+    print(f"source  {source.relative_to(ROOT)}  {src_w}x{src_h}  "
+          f"{source.stat().st_size / 1024:.0f} KB\n")
 
     for width in WIDTHS:
         height = round(width * src_h / src_w)
@@ -67,17 +78,23 @@ def main() -> None:
             (width, height), Image.Resampling.LANCZOS)
 
         for ext, params in (
-            ("webp", {"quality": WEBP_QUALITY[width], "method": 6}),
+            ("webp", {"quality": webp_q[width], "method": 6}),
             # `progressive` so the fallback degrades gracefully on a slow connection rather
             # than painting top-to-bottom; `optimize` runs a second Huffman pass.
-            ("jpg", {"quality": JPEG_QUALITY[width], "progressive": True, "optimize": True}),
+            ("jpg", {"quality": jpeg_q[width], "progressive": True, "optimize": True}),
         ):
-            path = OUT_DIR / f"harmonicas-{width}.{ext}"
+            path = out_dir / f"{stem}-{width}.{ext}"
             resized.save(path, **params)
             print(f"  {path.relative_to(ROOT)}  {width}x{height}  "
                   f"{path.stat().st_size / 1024:.0f} KB")
 
-    print(f"\nintrinsic aspect ratio: {src_w}/{src_h} — use these in width/height attributes")
+    print(f"\nintrinsic aspect ratio: {src_w}/{src_h} — use these in width/height attributes\n")
+
+
+def main() -> None:
+    render_photo(SOURCE, OUT_DIR, "harmonicas", WEBP_QUALITY, JPEG_QUALITY)
+    render_photo(CLOSER_SOURCE, CLOSER_OUT_DIR, "harp-on-guitar",
+                 CLOSER_WEBP_QUALITY, CLOSER_JPEG_QUALITY)
 
     if not LOGO_SOURCE.exists():
         raise SystemExit(f"missing logo source: {LOGO_SOURCE}")

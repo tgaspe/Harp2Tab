@@ -65,6 +65,18 @@ export const MOCK_WEB_PLANS: WebPlan[] = [
  */
 export const DEFAULT_PLAN_ID: WebPlanId = 'yearly';
 
+/**
+ * What the free plan will include once web checkout opens: this many transcriptions, counted
+ * across all three sources — microphone, audio upload and MIDI import.
+ *
+ * **Nothing enforces this yet.** `FREE_TIER_ENABLED` in `useSettingsStore.ts` is false on web
+ * and everything is unlimited during the beta; this constant exists because the landing page
+ * *publishes* the number, and a promise printed on the marketing page must not drift from the
+ * gate that will later have to honour it. When that gate is built, it reads this — not its own
+ * literal, and not `RECORDING_LIMIT`, which is the separate, tighter Play-app allowance.
+ */
+export const FREE_TIER_TRANSCRIPTIONS = 10;
+
 /** What every plan includes. One list — the plans differ in price, not in what they unlock. */
 export const PLAN_PERKS = [
   'Unlimited recordings',

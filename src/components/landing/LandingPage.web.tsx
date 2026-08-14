@@ -23,7 +23,7 @@
 import Head from 'expo-router/head';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
-import { MOCK_WEB_PLANS, PLAN_PERKS } from '@/billing/plans';
+import { FREE_TIER_TRANSCRIPTIONS, MOCK_WEB_PLANS, PLAN_PERKS } from '@/billing/plans';
 import { EXPORT_FORMATS, EXPORT_FORMAT_META } from '@/constants/keys';
 
 import type { HarmonicaKey } from '@/types';
@@ -31,7 +31,7 @@ import type { HarmonicaKey } from '@/types';
 import { KEY_LAB_CSS, KeyLab } from './KeyLab.web';
 import { LANDING_CSS } from './landingStyles';
 import { SAMPLE_DEMO_CSS, SampleDemo } from './SampleDemo.web';
-import { HERO_INTRINSIC, PLAY_STORE_URL } from './tokens';
+import { CLOSER_INTRINSIC, HERO_INTRINSIC, PLAY_STORE_URL } from './tokens';
 
 /**
  * What the demo clip actually transcribes to, used to seed the key lab before anyone presses
@@ -65,6 +65,13 @@ const HERO_SRCSET_WEBP =
 const HERO_SRCSET_JPEG =
   '/hero/harmonicas-960.jpg 960w, /hero/harmonicas-1440.jpg 1440w, /hero/harmonicas-1920.jpg 1920w';
 
+const CLOSER_SRCSET_WEBP =
+  '/closer/harp-on-guitar-960.webp 960w, /closer/harp-on-guitar-1440.webp 1440w, '
+  + '/closer/harp-on-guitar-1920.webp 1920w';
+const CLOSER_SRCSET_JPEG =
+  '/closer/harp-on-guitar-960.jpg 960w, /closer/harp-on-guitar-1440.jpg 1440w, '
+  + '/closer/harp-on-guitar-1920.jpg 1920w';
+
 /** Rich-result eligibility for the pricing table. Prices track `src/billing/plans.ts`. */
 const JSON_LD = {
   '@context': 'https://schema.org',
@@ -82,37 +89,6 @@ const JSON_LD = {
     category: plan.cadence === 'one time' ? 'one-time' : 'subscription',
   })),
 };
-
-const FAQ = [
-  {
-    q: 'Do I need to install anything?',
-    a: 'No. Harp2Tab runs in your browser — open the app and start playing. There is also an '
-      + 'Android app on Google Play if you would rather have it on your phone.',
-  },
-  {
-    q: 'Does my audio leave my device?',
-    a: 'No. Recording, transcription and editing all happen locally in your browser. Your '
-      + 'audio is never uploaded to a server, which is also why the transcription works '
-      + 'offline once the page has loaded.',
-  },
-  {
-    q: 'Which harmonicas are supported?',
-    a: 'Ten-hole diatonic in all 12 keys, including bends, overblows and overdraws, and the '
-      + '12-hole chromatic with slide notation. You choose the harp before you start. When you '
-      + 'upload audio the diatonic key is detected automatically; for MIDI you pick the harp '
-      + 'and Harp2Tab flags the notes that need a bend or an overblow so you can simplify them.',
-  },
-  {
-    q: 'What can I export?',
-    a: 'Plain text tab, CSV, MIDI, MusicXML and JSON — so your transcription can go into a '
-      + 'DAW, a notation program, a spreadsheet or your own tooling.',
-  },
-  {
-    q: 'Do I need an account?',
-    a: 'No. You can record, transcribe, edit and export without signing in. An account is '
-      + 'optional and exists so your work can follow you between devices later.',
-  },
-];
 
 export function LandingPage() {
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -182,7 +158,6 @@ export function LandingPage() {
               <a href="#how">How it works</a>
               <a href="#editing">Editing</a>
               <a href="#pricing">Pricing</a>
-              <a href="#faq">FAQ</a>
             </nav>
             <a className="lp-btn lp-btn--primary lp-btn--sm" href="/app">Open the app</a>
           </div>
@@ -210,23 +185,28 @@ export function LandingPage() {
           <div className="lp-hero__body">
             <div className="lp-wrap">
               <div className="lp-hero__content">
-                <h1>Play it.<br />Get the tab.</h1>
+                {/* No hard break: at 560px this wraps to two lines on its own, and where it
+                    breaks depends on the viewport. `text-wrap: balance` on .lp-hero h1 keeps
+                    the two lines even instead of leaving "tab" alone on the second. */}
+                <h1>Your songs, in harmonica tab</h1>
                 <p className="lp-hero__sub">
-                  Harp2Tab turns harmonica playing into harmonica tab — the hole and breath
-                  for every note, bends and overblows included. Record from your microphone, or
-                  upload an audio or MIDI file.
+                  See exactly how to play every note, with hole, breath direction, bends, and
+                  overblows. Record through your microphone, or upload an audio or MIDI file.
                 </p>
                 <div className="lp-tabline" aria-label="Example harmonica tab: 4, minus 4, minus 3 bend, 4 overblow">
                   <span>4</span><span>-4</span><span>-3&apos;</span><span>4o</span><span>5</span><span>-5</span>
                 </div>
                 <div className="lp-hero__actions">
-                  <a className="lp-btn lp-btn--primary" href="/app">Open the app — free, no account</a>
+                  <a className="lp-btn lp-btn--primary" href="/app">Start transcribing</a>
                   <a className="lp-btn lp-btn--ghost" href={PLAY_STORE_URL} target="_blank" rel="noreferrer">
                     Get it on Google Play
                   </a>
                 </div>
+                {/* Where the button's qualifiers went. "Free, no account" was doing subtitle
+                    work inside a call to action; here it reads as reassurance instead of
+                    hedging, and the button is left saying one thing. */}
                 <p className="lp-hero__note">
-                  Runs in your browser. Nothing to install, and your audio never leaves your device.
+                  Runs in your browser. Nothing to install, no account needed.
                 </p>
               </div>
             </div>
@@ -240,9 +220,9 @@ export function LandingPage() {
               <span className="lp-eyebrow">Hear it work</span>
               <h2>A real harmonica transcription, right here</h2>
               <p className="lp-section__lead">
-                Press play. A real harmonica recording is transcribed to tab here in your
-                browser — no upload, no account. Then move that same take onto any other harp
-                and see what it costs to play.
+                Press play. A real harmonica recording is transcribed to tab right here, no
+                account needed. Then move that same take onto any other harp and see what it
+                costs to play.
               </p>
             </div>
 
@@ -271,7 +251,7 @@ export function LandingPage() {
 
             <div className="lp-row">
               <div>
-                <h3>Record straight from the microphone</h3>
+                <h3>Record straight from the <span className="lp-hi">microphone</span></h3>
                 <p>
                   Pick your harp&apos;s key and play. Pitch detection runs live, so the tab
                   builds up as you go and you can see whether that bend landed where you
@@ -287,7 +267,7 @@ export function LandingPage() {
 
             <div className="lp-row lp-row--flip">
               <div>
-                <h3>Turn an audio file into harmonica tab</h3>
+                <h3>Turn an <span className="lp-hi">audio file</span> into harmonica tab</h3>
                 <p>
                   Upload a WAV, MP3 or M4A and Harp2Tab transcribes it, detecting the
                   harmonica key automatically. For the voice memo you recorded months ago and
@@ -302,7 +282,7 @@ export function LandingPage() {
 
             <div className="lp-row">
               <div>
-                <h3>Convert MIDI to harmonica tab</h3>
+                <h3>Convert <span className="lp-hi">MIDI</span> to harmonica tab</h3>
                 <p>
                   Import a MIDI file, choose the harp you want to play it on, and Harp2Tab maps
                   every note to a hole and breath — flagging the ones that need a bend or an
@@ -457,34 +437,58 @@ export function LandingPage() {
                 <strong>Everything is free while Harp2Tab is in beta</strong> — open the app and
                 use it, no card and no account. Web checkout is coming soon.
               </p>
+              {/* Stated as a plan, not as a limit: nothing meters transcriptions today, and
+                  saying otherwise would advertise a wall nobody can currently pay to pass. The
+                  number comes from `FREE_TIER_TRANSCRIPTIONS` so this promise and the gate that
+                  will eventually keep it cannot drift apart. */}
+              <p style={{ marginTop: 12 }}>
+                When checkout does open there will still be a free plan:{' '}
+                <strong>{FREE_TIER_TRANSCRIPTIONS} transcriptions</strong>, from the microphone,
+                an audio file or a MIDI import — with editing and every export format included.
+              </p>
               <p style={{ marginTop: 12 }}>
                 <strong>Bought Harp2Tab on Google Play? You keep lifetime access.</strong> That
                 purchase stays honoured; you will never be asked to pay again for what you
                 already own.
               </p>
-              <p style={{ marginTop: 20 }}>
-                <a className="lp-btn lp-btn--primary" href="/app">Open the app — free while in beta</a>
-              </p>
             </div>
           </div>
         </section>
 
-        {/* ------------------------------------------------------------ faq */}
-        <section className="lp-section lp-section--alt" id="faq">
-          <div className="lp-wrap">
-            <div className="lp-section__head">
-              <h2>Harmonica tab questions</h2>
-            </div>
-            <div className="lp-faq">
-              {FAQ.map((item) => (
-                // `open` by default so the answers are in the static HTML as visible text —
-                // a crawler should not have to simulate a click to read them.
-                <details key={item.q} open>
-                  <summary>{item.q}</summary>
-                  <p>{item.a}</p>
-                </details>
-              ))}
-            </div>
+        {/* ------------------------------------------------- closing call to action */}
+        {/* The second half of the hero's bookend: same rehearsal-room photograph family, the
+            headline repeated as a promise now that it has been demonstrated, and the one
+            button. Nothing opaque sits on top of it, which is why the photograph belongs here
+            rather than behind a section whose cards would cover it. */}
+        <section className="lp-closer">
+          <div className="lp-closer__media">
+            <picture>
+              <source type="image/webp" srcSet={CLOSER_SRCSET_WEBP} sizes="100vw" />
+              <img
+                src="/closer/harp-on-guitar-1440.jpg"
+                srcSet={CLOSER_SRCSET_JPEG}
+                sizes="100vw"
+                width={CLOSER_INTRINSIC.width}
+                height={CLOSER_INTRINSIC.height}
+                alt=""
+                /* Decorative, and the last thing on the page — unlike the hero it must never
+                   compete with anything above it for bandwidth. */
+                loading="lazy"
+                decoding="async"
+              />
+            </picture>
+          </div>
+          <div className="lp-closer__scrim" />
+          <div className="lp-wrap lp-closer__body">
+            <h2>Your songs, in harmonica tab</h2>
+            <p>Free while Harp2Tab is in beta.</p>
+            {/* The page's one oversized button, and the last thing on it. Everything the old
+                three-clause sentence said is already established by the six sections above,
+                so the band is down to a claim, a price and the action. */}
+            <a className="lp-btn lp-btn--primary lp-btn--lg" href="/app">
+              Start transcribing
+              <span className="lp-btn__arrow" aria-hidden="true">→</span>
+            </a>
           </div>
         </section>
 

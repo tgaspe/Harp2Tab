@@ -145,7 +145,7 @@ export function KeyLab({ notes, sourceKey }: KeyLabProps) {
           rows would drift apart as soon as a tab widened to "-6'" — and the whole point of
           showing both is that you can read them against each other. */}
       <div className="lp-lab__out">
-        <span className="lp-lab__label">Tab, and what it sounds like</span>
+        <span className="lp-lab__label">Tab and pitch</span>
         <ol className="lp-lab__cells">
           {tabs.map((t, i) => (
             <li className="lp-lab__cell" key={i}>
@@ -237,8 +237,12 @@ export const KEY_LAB_CSS = `
   border-top: 1px solid ${C.border};
   display: flex; flex-direction: column; gap: 14px;
 }
+/* Centred, unlike the labels above it: this is the read-out the section is about, and a
+   fifteen-cell row that starts at the left edge and stops two thirds across reads as a list
+   that ran out rather than as a phrase. The label stays left-aligned with every other label
+   on the page. */
 .lp-lab__cells {
-  display: flex; flex-wrap: wrap; gap: 6px;
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 6px;
   margin: 0; padding: 0; list-style: none;
 }
 .lp-lab__cell {

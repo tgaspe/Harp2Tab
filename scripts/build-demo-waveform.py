@@ -25,9 +25,10 @@ ROOT = Path(__file__).resolve().parent.parent
 CLIP = ROOT / "public" / "demo" / "sample.mp3"
 OUT = ROOT / "src" / "components" / "landing" / "demoWaveform.ts"
 
-# Enough bars to read as a waveform, few enough that each stays a comfortable click target
-# and the array stays small in the bundle.
-BARS = 56
+# Fine enough to read as an envelope rather than a row of ticks, coarse enough that each bar
+# is still more than a hairline at the demo's narrowest layout — and that the array stays
+# small in the bundle. See the width note beside `.lp-demo__wave span` in SampleDemo.web.tsx.
+BARS = 112
 
 # Peaks, not RMS: RMS of a harmonica line is fairly flat and draws a brick. The peak envelope
 # keeps the phrasing visible — you can see where the notes are.

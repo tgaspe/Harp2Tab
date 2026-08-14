@@ -124,6 +124,27 @@ export const LANDING_CSS = `
   color: ${C.text};
 }
 .lp-root .lp-btn--ghost:hover { background: rgba(255,255,255,0.12); }
+
+/* The closing band's button, and the only one on the page at this size — which is the point:
+   after the pricing CTA was removed there is exactly one place the page asks, so it is allowed
+   to be the loudest thing on it. Fully rounded rather than the 10px the others use, because at
+   58px tall a 10px radius reads as a slab; and lifted on an accent-tinted shadow, which the
+   smaller buttons cannot afford against the page's flat sections but works here over a
+   photograph. */
+.lp-root .lp-btn--lg {
+  padding: 20px 44px;
+  font-size: 19px;
+  border-radius: 999px;
+  box-shadow: 0 12px 34px rgba(12,192,223,0.26);
+}
+.lp-root .lp-btn--lg:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 18px 44px rgba(12,192,223,0.34);
+}
+/* Separate from the label so it can move on its own — the whole button shifting looks like a
+   nudge, the arrow pulling ahead of the text reads as direction. */
+.lp-btn__arrow { transition: transform 160ms ease; }
+.lp-root .lp-btn--lg:hover .lp-btn__arrow { transform: translateX(4px); }
 .lp-btn--sm { padding: 10px 18px; font-size: 15px; }
 
 /* ---------------------------------------------------------------- hero */
@@ -170,6 +191,11 @@ export const LANDING_CSS = `
 .lp-hero h1 {
   font-size: clamp(38px, 6.4vw, 64px);
   margin-bottom: 20px;
+  /* The headline is a single sentence that does not fit on one line at any viewport this
+     column is wide enough for, so the break is the browser's to choose. Balanced, it splits
+     evenly; unsupported (pre-121 Firefox), it falls back to a normal greedy wrap, which is
+     what the headline would have done anyway. */
+  text-wrap: balance;
 }
 .lp-hero__sub {
   font-size: clamp(17px, 2.1vw, 20px);
@@ -217,6 +243,10 @@ export const LANDING_CSS = `
 .lp-row + .lp-row { border-top: 1px solid ${C.border}; }
 .lp-row--flip .lp-row__media { order: -1; }
 .lp-row h3 { font-size: 26px; margin-bottom: 14px; }
+/* The one word in each heading that says which of the three inputs this row is about —
+   "microphone", "audio file", "MIDI". Colour only: the weight and size stay the heading's, so
+   the three rows scan as one list with the input picked out, not as three different headings. */
+.lp-row h3 .lp-hi { color: ${C.accent}; }
 .lp-row p { color: ${C.textSub}; }
 .lp-row__media {
   background: ${C.card};
@@ -309,11 +339,14 @@ export const LANDING_CSS = `
   border-radius: 14px;
   padding: 22px;
 }
+/* Accent, like the highlighted input word in each .lp-row h3: the format name is the thing
+   being named on the card, and the grey description below carries the explanation. */
 .lp-format__name {
   font-family: ${F.display};
   font-size: 18px;
   margin-bottom: 8px;
   display: block;
+  color: ${C.accent};
 }
 .lp-format__desc { font-size: 14px; color: ${C.textMuted}; line-height: 1.5; }
 
@@ -355,27 +388,59 @@ export const LANDING_CSS = `
 }
 .lp-pricing__foot strong { color: ${C.text}; font-family: ${F.bodyBold}; font-weight: 400; }
 
-/* ---------------------------------------------------------------- faq */
-
-.lp-faq { display: grid; gap: 16px; max-width: 820px; }
-.lp-faq details {
-  background: ${C.card};
-  border: 1px solid ${C.border};
-  border-radius: 14px;
-  padding: 22px 26px;
-}
-.lp-faq summary {
-  font-family: ${F.bodyBold};
-  font-size: 18px;
-  cursor: pointer;
-  list-style: none;
-}
-.lp-faq summary::-webkit-details-marker { display: none; }
-.lp-faq summary::after { content: '＋'; float: right; color: ${C.accent}; }
-.lp-faq details[open] summary::after { content: '−'; }
-.lp-faq p { margin-top: 14px !important; color: ${C.textSub}; font-size: 16px; }
-
 /* ---------------------------------------------------------------- footer */
+
+/* ---------------------------------------------------------------- closing CTA */
+
+.lp-closer {
+  position: relative;
+  /* Same reason as .lp-hero: the scrim and body stack with positive indices, so this element
+     has to be the stacking context's root or a negative index would drop the photograph
+     behind .lp-root's opaque background. */
+  isolation: isolate;
+  padding: clamp(80px, 11vw, 132px) 0;
+  text-align: center;
+  overflow: hidden;
+}
+.lp-closer__media { position: absolute; inset: 0; z-index: 0; }
+.lp-closer__media img {
+  width: 100%; height: 100%; object-fit: cover;
+  /* Crops to the lower band of the photograph — the harmonica and the fretboard — and away
+     from the windows across its top, which sit at 0.95 relative luminance and would need a
+     95% scrim to carry text. */
+  object-position: 50% 70%;
+  display: block;
+}
+/* Flat, unlike the hero's directional pair, and that is measured rather than chosen: across
+   the crop this band actually shows, mean luminance is 0.082 but the 95th percentile is 0.474,
+   and those highlights are the guitar strings — scattered evenly across the full width instead
+   of banked on one side. There is no dark half to put the copy over, so the whole frame is
+   held down instead. At 0.90 the brightest 5% of pixels still leave .lp-closer p (#B0B0BA) at
+   4.5:1 and the heading at 8.6:1; at 0.82 that sub-text falls to 3.6:1 and fails.
+
+   The two vertical fades end on different colours because the band's neighbours are different
+   colours: #pricing above is a plain .lp-section on C.bg, the footer below is C.surface. One
+   shared value would draw a seam at whichever end it did not match. If a section is ever
+   inserted or removed next to this band, these two stops are what has to follow it. */
+.lp-closer__scrim {
+  position: absolute; inset: 0; z-index: 1;
+  background:
+    linear-gradient(180deg,
+      ${C.bg} 0%, transparent 22%, transparent 78%, ${C.surface} 100%),
+    rgba(26,26,30,0.90);
+}
+.lp-closer__body { position: relative; z-index: 2; }
+.lp-closer h2 {
+  font-size: clamp(30px, 4.4vw, 44px);
+  text-wrap: balance;
+}
+.lp-closer p {
+  margin: 18px auto 0 !important;
+  max-width: 46ch;
+  font-size: clamp(16px, 2vw, 18px);
+  color: ${C.textSub};
+}
+.lp-closer .lp-btn { margin-top: 36px; }
 
 .lp-footer {
   background: ${C.surface};
@@ -429,5 +494,7 @@ export const LANDING_CSS = `
     scroll-behavior: auto !important;
   }
   .lp-btn:hover { transform: none; }
+  .lp-root .lp-btn--lg:hover { transform: none; }
+  .lp-root .lp-btn--lg:hover .lp-btn__arrow { transform: none; }
 }
 `;

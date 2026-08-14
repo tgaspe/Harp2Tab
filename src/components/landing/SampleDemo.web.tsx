@@ -3,8 +3,7 @@
  *
  * This runs the **real** pipeline — the same `decodeAudioFile` → `runTranscription` →
  * `notesToTabs` path the app itself uses, with Basic Pitch as the engine — rather than
- * replaying a pre-baked result. That is the whole point: it proves the product works, and it
- * demonstrates in passing that the audio never leaves the browser.
+ * replaying a pre-baked result. That is the whole point: it proves the product works.
  *
  * ## Every import of `@/audio` here must stay dynamic
  *
@@ -286,14 +285,17 @@ export const SAMPLE_DEMO_CSS = `
 
 .lp-demo__wave {
   flex: 1;
-  display: flex; align-items: center; gap: 3px;
+  display: flex; align-items: center; gap: 2px;
   height: 64px;
 }
 .lp-demo__wave span {
   flex: 1;
-  min-width: 2px;
+  /* A hairline, not a bar — the shape is carried by the count now, not the individual widths.
+     1px is the floor: below it sub-pixel bars alias against the gaps and the envelope reads
+     as noise. BARS in scripts/build-demo-waveform.py is the other half of this trade. */
+  min-width: 1px;
   background: rgba(255,255,255,0.16);
-  border-radius: 2px;
+  border-radius: 1px;
   /* Short, because each bar lights individually as the playhead reaches it — a long fade
      would smear the playhead into a gradient instead of a position. */
   transition: background-color 120ms ease;
@@ -321,7 +323,10 @@ export const SAMPLE_DEMO_CSS = `
 .lp-demo__hint { color: ${LANDING_COLORS.textMuted}; font-size: 15px; }
 .lp-demo__hint--error { color: #F59E0B; }
 
-.lp-demo__tabs { display: flex; flex-wrap: wrap; gap: 14px; padding: 0; list-style: none; }
+.lp-demo__tabs {
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 14px;
+  padding: 0; list-style: none;
+}
 .lp-demo__tab {
   font-size: 26px;
   letter-spacing: 0.06em;
@@ -338,7 +343,11 @@ export const SAMPLE_DEMO_CSS = `
   .lp-demo { padding: 20px; }
   .lp-demo__stage { min-height: 0; }
   .lp-demo__bar { flex-wrap: wrap; }
-  .lp-demo__wave { height: 48px; }
+  .lp-demo__wave { height: 48px; gap: 1px; }
+  /* 112 hairlines plus their gaps need ~330px, which a phone does not have left over once the
+     play button has taken its share. Rather than let the browser squeeze them past 1px into a
+     solid block, drop every other bar: half the resolution, but still the same envelope. */
+  .lp-demo__wave span:nth-child(even) { display: none; }
   .lp-demo__key { order: 3; width: 100%; text-align: center; }
 }
 

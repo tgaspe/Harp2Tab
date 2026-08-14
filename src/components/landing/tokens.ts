@@ -45,7 +45,9 @@ export const PLAY_STORE_URL =
   'https://play.google.com/store/apps/details?id=com.chewpacastudios.harp2tab';
 
 /**
- * The hero photograph's intrinsic size, used for the `width`/`height` attributes that hold
- * cumulative layout shift at zero. Regenerate the files with `scripts/build-hero-images.py`.
+ * The photographs' intrinsic sizes, used for the `width`/`height` attributes that hold
+ * cumulative layout shift at zero. Regenerate the files with `scripts/build-landing-images.py`,
+ * which prints each source's real ratio — these two differ by a pixel and are not swappable.
  */
 export const HERO_INTRINSIC = { width: 1920, height: 1277 } as const;
+export const CLOSER_INTRINSIC = { width: 1920, height: 1278 } as const;
