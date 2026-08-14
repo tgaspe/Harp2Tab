@@ -185,7 +185,7 @@ export default function RecordingScreen() {
       startRecording();
     } else {
       discardSession();
-      router.replace('/');
+      router.replace('/app');
     }
   }, [abandoning, isRecording]);
 

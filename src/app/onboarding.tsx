@@ -56,7 +56,7 @@ export default function OnboardingScreen() {
   // ── Guard: returning users can only reach this via Settings ──────────────
   useEffect(() => {
     if (hasCompletedOnboarding && skipPermission !== 'true') {
-      router.replace('/');
+      router.replace('/app');
     } else if (skipPermission === 'true') {
       beginSilenceMeasurement();
     }
@@ -218,13 +218,13 @@ export default function OnboardingScreen() {
   function finish() {
     setMicSensitivity(calibratedValue);
     setHasCompletedOnboarding(true);
-    router.replace('/');
+    router.replace('/app');
   }
 
   // ── Step: denied — skip with defaults ────────────────────────────────────
   function skip() {
     setHasCompletedOnboarding(true);
-    router.replace('/');
+    router.replace('/app');
   }
 
   // ── Meter color ───────────────────────────────────────────────────────────

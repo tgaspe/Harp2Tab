@@ -356,7 +356,7 @@ export default function EditScreen() {
     // Unconditional: the session is gone either way, and leaving its notes in the store
     // would let the next screen reopen a tab the user just discarded.
     resetSession();
-    router.replace('/');
+    router.replace('/app');
   }, [deleteRecording, resetSession, router]);
 
   const setHeaderActions   = useHeaderActionStore((s) => s.setHeaderActions);

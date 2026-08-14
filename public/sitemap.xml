@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Only the landing page is listed. The app's routes are deliberately excluded — see the
+  reasoning in robots.txt. The host is provisional until the domain is registered; change it
+  here and in robots.txt and `SITE_URL` in src/components/landing/LandingPage.web.tsx together.
+-->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://harp2tab.com/</loc>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+  </url>
+</urlset>

@@ -1,0 +1,25 @@
+# Harp2Tab — https://harp2tab.com
+# The host is provisional until the domain is registered (step 1 of the release sequence in
+# docs/plan/README.md). Update it here and in public/sitemap.xml together.
+
+User-agent: *
+Allow: /
+
+# The app's own routes are a single-page application behind the landing page. They hold no
+# indexable prose and several of them render nothing without client state, so crawl budget is
+# better spent on /.
+Disallow: /edit
+Disallow: /export
+Disallow: /import
+Disallow: /recording
+Disallow: /studio
+Disallow: /paywall
+Disallow: /profile
+Disallow: /settings
+Disallow: /onboarding
+Disallow: /frame-inspector
+Disallow: /auth/
+Disallow: /_sitemap
+Disallow: /_expo/
+
+Sitemap: https://harp2tab.com/sitemap.xml

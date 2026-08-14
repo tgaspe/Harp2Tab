@@ -16,7 +16,7 @@ import type { Theme } from '@/theme';
 // Routes that had their own gear->settings shortcut before TopBar existed.
 // `/profile` is here and `/settings` deliberately is not: the two screens are each other's
 // counterpart, so each shows the way to the other and neither shows the way to itself.
-const GEAR_ROUTES = ['/', '/recording', '/edit', '/export', '/studio', '/profile'];
+const GEAR_ROUTES = ['/app', '/recording', '/edit', '/export', '/studio', '/profile'];
 // Same rule in the other direction — the account control is pointless on the page it opens.
 const ACCOUNT_HIDDEN_ROUTES = ['/profile'];
 // Only the two routes that already had a back arrow before TopBar existed —
@@ -24,8 +24,10 @@ const ACCOUNT_HIDDEN_ROUTES = ['/profile'];
 // mid-recording" affordance that didn't exist before.
 const BACK_ROUTES = ['/settings', '/export'];
 // Focused conversion/setup flows — no nav chrome, matches their existing
-// lack of a back button.
-const HIDDEN_ROUTES = ['/paywall', '/onboarding', '/import'];
+// lack of a back button. `/` is here for a different reason: it is the marketing landing
+// page (12-3), which carries its own header with marketing nav and an "Open the app" CTA,
+// so the in-app bar would be a second, contradictory one.
+const HIDDEN_ROUTES = ['/', '/paywall', '/onboarding', '/import'];
 // The List/Piano-Roll toggle only makes sense on the editor — shown next to the app
 // title here (rather than in edit.tsx's own toolbar) since it needs to stay visible
 // and drivable from this globally-rendered bar.
@@ -84,7 +86,7 @@ export function TopBar() {
           </Pressable>
         )}
         <Pressable
-          onPress={() => router.push('/')}
+          onPress={() => router.push('/app')}
           style={({ pressed, hovered }: any) => [
             styles.logoRow,
             (pressed || hovered) && styles.logoRowHovered,

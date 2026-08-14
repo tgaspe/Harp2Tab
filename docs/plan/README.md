@@ -1,7 +1,34 @@
 # Harp2Tab — Full Roadmap Implementation Plan
 
-Status as of 2026-08-09: Phases 0–6 and 11 are implemented on `web_version`. Phases 7–10
-and 12 are still just this plan — not started.
+Status as of 2026-08-13: Phases 0–6, 7a, 8a, 11, 13 and 14 are implemented on `web_version`.
+Phases 9, 10, 12, 15, 7b and 8b/8c are still just this plan.
+
+## Release sequence (decided 2026-08-13)
+
+The phase numbers are a dependency order, not a release order. **Monetization ships last** —
+the product is finished first, then it is monetized. The order to actually work in:
+
+1. **Domain.** ~€12, instant, and it currently gates five other things. Buying it is the
+   cheapest unblock on the list, which is why it stops being step 7 of Phase 8.
+2. **Hosting** (below — not owned by any phase before today). SEO work is not verifiable
+   until there is a live URL to verify it against, so this precedes the landing page.
+3. **Landing page + SEO** (12-3), including the `/` → `/app` routing change, which is
+   entangled with 12-5 and `HIDDEN_ROUTES`.
+4. **Legal pages** (8-9) + the privacy-policy update accounts already made necessary.
+5. **Monetization** (8b, then 8c, then the 8-8 free-tier flip).
+
+**One exception to "monetization last":** the Stripe account creation and the Managed
+Payments eligibility check (8-1.1) happen at step 1, not step 5. They are free and reversible,
+and if Belgium turns out ineligible the fallback is Paddle — which changes who the seller of
+record is, and therefore a sentence in the Terms and a line in the pricing table. Discovering
+that after steps 3 and 4 means rewriting both. Nothing else in Phase 8 moves.
+
+## Hosting — unowned until 2026-08-13
+
+`firebase.json` has never contained a `hosting` block (verified against that file's full
+history), there is no CI, and no Vercel/Netlify config. **The web app has never been deployed
+anywhere.** `docs/development.md` documented `firebase deploy --only hosting` before the config
+existed, so the command would have failed. No phase owned this; it is now step 2 above.
 
 - [x] [Phase 0](phase-00-05-foundation.md) — Recording-session foundation
 - [x] [Phase 1](phase-00-05-foundation.md) — Home-as-library + recording history
@@ -11,7 +38,13 @@ and 12 are still just this plan — not started.
 - [x] [Phase 5](phase-00-05-foundation.md) — Audio upload (5a decode/pipeline, 5b auto key detection); 5c native
       compressed-audio decode deferred
 - [x] [Phase 6](phase-06-midi-import.md) — MIDI upload → tab conversion
-- [ ] [Phase 7](phase-07-accounts.md) — User accounts (Firebase Auth) + cloud sync. Detailed plan written
+- [~] [Phase 7](phase-07-accounts.md) — **7a shipped** (commits `07f84f9`…`a455556`): Firebase Auth with
+      Google + email/password, `/profile`, the verify banner, reauth/set-password, account
+      deletion (client + the `onAccountDeleted` function), Firestore rules +
+      `verify-firestore-rules.ts`. **7b, the sync engine, is not built** — `SyncStatusRow`
+      renders `unavailable`, which is the honest 7a state. Free accounts were promised sync,
+      so 7b is a commitment outstanding, not a dropped idea.
+      Original plan below. User accounts (Firebase Auth) + cloud sync. Detailed plan written
       2026-08-12. **Now split: 7a (accounts) ships here, 7b (the sync engine) ships after
       Phase 8** — under the subscribe-time signup model there is nobody with an account to
       sync until billing exists. Decisions taken by the user the same day: local-first
@@ -23,7 +56,17 @@ and 12 are still just this plan — not started.
       email/password surface, `/profile` and the merge engine are the work. Account
       deletion + a privacy-policy/Data-safety update are release blockers the moment
       accounts exist. Three separate pieces of work block on buying the custom domain.
-- [ ] [Phase 8](phase-08-monetization.md) — Better monetization + remaining web billing. Detailed plan written
+- [~] [Phase 8](phase-08-monetization.md) — **8a shipped** (commits `7e24aba`, `e8e110f`): the revocable
+      entitlement store, the RevenueCat webhook → Cloud Function entitlement writer, the
+      three-plan paywall on mock offerings, `/profile`'s plan block, and
+      `verify-entitlement.ts`. **8b and 8c are not started** — `useIAP.web.ts` is still the
+      "Purchases on the web are coming soon" stub and `FREE_TIER_ENABLED` is still `false`.
+      Two corrections to the plan below, from vendor docs checked 2026-08-13: RevenueCat's
+      Stripe purchase flows **do** support one-time flat-rate prices, which answers open
+      question 1 in the lifetime product's favour; and 8b is **not** quite free — the webhook
+      needs a public HTTPS endpoint, so either Blaze (a card, ~$0 at this volume) or a tunnel
+      to the emulator. Setup runbook for 8-1 written 2026-08-13.
+      Original plan below. Better monetization + remaining web billing. Detailed plan written
       2026-08-13. Five decisions taken by the user the same day: **Stripe Managed Payments
       behind RevenueCat**, making Stripe the merchant of record (the July "RevenueCat +
       Stripe" decision has since split into three products that differ in who owes each
@@ -53,11 +96,18 @@ and 12 are still just this plan — not started.
 - [ ] [Phase 12](phase-12-ux-pass.md) — UX pass: home naming/sidebar, landing page + SEO, profile page,
       calibration timing, MIDI Studio fixes, first-run tutorials (added 2026-08-09).
       Not dependent on 7–10 except 12-3's pricing (Phase 8) and 12-4 (Phase 7).
-- [ ] [Phase 13](phase-13-record-transcribe.md) — Record → transcribe → Studio: retain the take's PCM, pick an engine and
+- [x] [Phase 13](phase-13-record-transcribe.md) — **Shipped.** PCM retention (`takeRetainedPcm`), the engine picker
+      (`TranscriptionEngineModal`, hosted by both the recording and import screens), and
+      per-engine parameter tuning (`TranscriptionParamsRail`) over the two-phase
+      `prepare`/`resegment` split in `src/audio/algorithms/index.ts`.
+      Record → transcribe → Studio: retain the take's PCM, pick an engine and
       tune its params after Finish, land in the Studio as a draft (added 2026-08-10).
       Independent of 7–10. Carries one monetization decision (where the free-tier session
       is consumed) — see Decisions under the phase.
-- [ ] [Phase 14](phase-14-spectral.md) — Spectral polyphonic transcription (FFT): a third engine that hears chords
+- [x] [Phase 14](phase-14-spectral.md) — **Shipped.** `spectralAlgorithm` is registered and `available: true`,
+      backed by `src/audio/dsp/` (fft, stft, harmonicSalience) and `src/audio/segmenters/`,
+      with `verify-spectral-pitch.ts` as its harness. The measurement step did not cancel it.
+      Spectral polyphonic transcription (FFT): a third engine that hears chords
       offline, with no download and no TensorFlow (added 2026-08-10). **Its stated goal is
       the lowest octave-error rate of the three**, not maximum polyphony; polyphony is the
       capability, octave accuracy is the objective. Pure TypeScript, so it is also the

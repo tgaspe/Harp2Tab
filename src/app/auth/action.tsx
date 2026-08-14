@@ -137,7 +137,7 @@ export default function AuthActionScreen() {
     } finally { setBusy(false); }
   }
 
-  const goHome = () => router.replace('/');
+  const goHome = () => router.replace('/app');
 
   return (
     <SafeAreaView style={styles.safe}>

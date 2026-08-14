@@ -304,7 +304,7 @@ export default function ImportScreen() {
 
       const entry = getPendingImport();
       if (!entry || !selectedKey) {
-        router.replace('/');
+        router.replace('/app');
         return;
       }
       void begin(entry);
@@ -606,7 +606,7 @@ export default function ImportScreen() {
 
     if (code === 'cancelled') {
       clearPendingImport();
-      router.replace('/');
+      router.replace('/app');
       return;
     }
     setPhase({ kind: 'error', code, message });
@@ -741,7 +741,7 @@ export default function ImportScreen() {
     releasePrepared();
     audioRef.current = null;
     clearPendingImport();
-    router.replace('/');
+    router.replace('/app');
   }
 
   /** The escape that costs nothing, because pMPM ran live throughout the take: the notes are
@@ -1340,7 +1340,7 @@ export default function ImportScreen() {
             </Pressable>
 
             <Pressable
-              onPress={() => { clearPendingImport(); router.replace('/'); }}
+              onPress={() => { clearPendingImport(); router.replace('/app'); }}
               style={({ pressed, hovered }: any) => [
                 styles.secondaryBtn,
                 (pressed || hovered) && styles.secondaryBtnPressed,

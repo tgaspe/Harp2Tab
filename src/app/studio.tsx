@@ -360,7 +360,7 @@ export default function StudioScreen() {
     deleteProject(project.id);
     // replace, not push: the project this screen is looking at no longer exists, so leaving
     // it on the back stack would return the user to a "No project open" husk.
-    router.replace('/');
+    router.replace('/app');
   }, [project, deleteProject]);
 
   /**
@@ -539,7 +539,7 @@ export default function StudioScreen() {
         <View style={styles.empty}>
           <Text style={styles.emptyTitle}>No project open</Text>
           <Text style={styles.emptyBody}>Import a MIDI file to start a Studio project.</Text>
-          <Pressable style={styles.emptyBtn} onPress={() => router.replace('/')}>
+          <Pressable style={styles.emptyBtn} onPress={() => router.replace('/app')}>
             <Text style={styles.emptyBtnText}>Back to library</Text>
           </Pressable>
         </View>
