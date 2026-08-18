@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
 import { usePlayback } from '@/hooks/usePlayback';
 import { PLAYBACK_RATES, barDurationMs, type TempoMap } from '@/audio/tempo';
 import type { TabNote } from '@/types';
@@ -189,6 +190,24 @@ export function useRollTransport({
     staleWhilePausedRef.current = false;
     stop();
   }, [cancelReschedule, stop]);
+
+  /**
+   * Leaving the screen stops the audio.
+   *
+   * `usePlayback` only tears the engine down on *unmount*, and these screens are pushed
+   * over rather than replaced — converting a track pushes `/edit`, the tab editor pushes
+   * `/export` and `/frame-inspector` — so the roll screen stays mounted behind the new one
+   * and its unmount cleanup never runs. The sequence is committed to the audio engine up
+   * front (a graph of scheduled oscillators on web, a pre-rendered WAV on native), so it
+   * kept playing under a screen with no transport to stop it with. Blur is the event that
+   * actually happens; the header-action effects in both screens are keyed off it for the
+   * same reason.
+   *
+   * Through a ref so the effect stays keyed on focus alone — re-running it because a
+   * callback changed identity mid-playback would run this cleanup and stop the audio.
+   */
+  const onStopRef = useRef(onStop); onStopRef.current = onStop;
+  useFocusEffect(useCallback(() => () => onStopRef.current(), []));
 
   const onCycleRate = useCallback(() => {
     const i = PLAYBACK_RATES.indexOf(playbackRate as (typeof PLAYBACK_RATES)[number]);

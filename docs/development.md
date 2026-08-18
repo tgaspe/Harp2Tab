@@ -50,10 +50,60 @@ Serves at `localhost:8081`.
 
 ### Static web build
 
+`npx expo export --platform web` writes `dist/`. **Do not run it bare to produce a deploy** —
+see [Deploying](#deploying) for the env prefix that keeps the emulator out of the bundle.
+
+---
+
+## Deploying
+
+Live at <https://harp2tab.web.app>. The custom domain `harp2tab.com` is bought (Namecheap) but
+not yet attached.
+
+### The web app
+
 ```bash
-npx expo export --platform web     # → dist/
+rm -rf dist                                                   # stale routes survive otherwise
+EXPO_PUBLIC_FIREBASE_EMULATOR=0 npx expo export --platform web
+grep -rl "localhost:8080" dist/ || echo "clean"               # MUST print: clean
 npx firebase deploy --only hosting
 ```
+
+> **The `EXPO_PUBLIC_FIREBASE_EMULATOR=0` prefix is not optional.** `EXPO_PUBLIC_*` values are
+> inlined into the bundle at export time, so a `.env` left at `=1` from a dev session ships a
+> production site that talks to `localhost:8080`. It loads perfectly on the machine that built
+> it — the emulator is right there — and fails for every real visitor. A real process env var
+> takes precedence over the `.env` file, so the prefix overrides without editing `.env` and
+> without breaking your emulator loop. The `grep` is the proof; run it before every deploy.
+
+**Verify a deploy with an asset, never only a route.** Every HTML route can return 200 while the
+site renders unstyled with no icons:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://harp2tab.web.app/settings          # cleanUrls
+curl -s -o /dev/null -w '%{http_code}\n' "https://harp2tab.web.app$(cd dist && \
+  find assets -name 'Ionicons.*.ttf' | head -1 | sed 's|^|/|')"                     # fonts
+```
+
+> **Never put `**/node_modules/**` in `hosting.ignore`.** It is in Firebase's `init` template
+> and it is wrong here: Expo emits every bundled font and icon under `dist/assets/node_modules/`,
+> so that one glob silently drops ~60 files and ships a site with no typography. The deploy log
+> is the tell — compare its file count against `find dist -type f | wc -l`.
+
+### Rules, indexes, functions
+
+```bash
+npx firebase deploy --only firestore:rules,firestore:indexes
+npx firebase deploy --only functions          # requires the Blaze plan
+npx firebase deploy                           # everything at once
+```
+
+`firestore:rules` is idempotent — "already up to date, skipping upload" means production already
+matches the working copy, which is also the quickest way to check what is live, since the CLI has
+no command to read deployed rules back.
+
+Cloud Functions need **Blaze**; on Spark the deploy fails and Secret Manager is unreachable, so
+`functions:secrets:*` errors before it can tell you anything useful.
 
 ---
 
@@ -78,8 +128,11 @@ npx firebase deploy --only functions
 
 ### Cloud sync (7b)
 
-**Off by default.** `SYNC_ENABLED` in `src/sync/syncEngine.ts` gates the whole engine, so a dev
-session cannot write a library into the real project by accident. The merge logic needs neither
+**On since 2026-08-18** (`SYNC_ENABLED = true`, `src/sync/syncEngine.ts`). It shipped `false`,
+which meant the deployed site wrote nothing to Firestore at all: the gate at `syncEngine.ts:113`
+is `(!SYNC_ENABLED && !isEmulator())`, and with the emulator off in a production build both
+halves were false. An empty Firestore console looks identical to a permissions failure — check
+this flag before suspecting rules. The merge logic needs neither
 the flag nor the emulator to be exercised — `npx tsx scripts/verify-sync-merge.ts` drives all 58
 cases as a pure function.
 
@@ -99,10 +152,10 @@ Then sign in and save a tab. Documents appear at <http://localhost:4000/firestor
 `users/{uid}/tabs`. The console logs `[sync] Firestore → emulator …` on the first call, because
 a build silently talking to an emulator looks exactly like a build whose sync is broken.
 
-`EXPO_PUBLIC_FIREBASE_EMULATOR=1` **enables the engine on its own**, so `SYNC_ENABLED` stays
-`false` while you develop. That is deliberate: if emulator work required flipping the production
-switch, the switch would spend its life in the wrong position, and the day someone unsets the
-emulator variable without putting it back is the day a dev session writes into the real project.
+`EXPO_PUBLIC_FIREBASE_EMULATOR=1` **enables the engine on its own**, independently of
+`SYNC_ENABLED`. That is why emulator work never required flipping the production switch — and
+why, now that the switch is on, the emulator variable is the only thing keeping a dev session
+out of the real project. Unset it and your local writes land in production.
 Auth still points at the real project, so Google sign-in works — the Firestore emulator decodes
 a genuine ID token without verifying it, which is enough for the rules to be exercised properly.
 

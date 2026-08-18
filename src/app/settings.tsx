@@ -1,8 +1,10 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { AuthModal } from '@/components/AuthModal';
+import { FeedbackModal } from '@/components/FeedbackModal';
 import { SliderInput } from '@/components/SliderInput';
 import { Toggle } from '@/components/Toggle';
 import { useAuth } from '@/auth/useAuth';
@@ -42,6 +44,21 @@ export default function SettingsScreen() {
   const auth               = useAuth();
 
   const engines = useMemo(() => availableAlgorithms(), []);
+
+  const [showFeedback, setShowFeedback] = useState(false);
+  const [showAuth,     setShowAuth]     = useState(false);
+
+  /**
+   * Signed-out users are sent to sign-in rather than shown the box.
+   *
+   * Not a gate for its own sake: `firestore.rules` requires the submitting uid to match the
+   * caller, so a report from nobody cannot be written at all. Asking first is the honest
+   * version of a write that would otherwise be refused after they had typed a paragraph.
+   */
+  function handleFeedback() {
+    if (auth.user) setShowFeedback(true);
+    else           setShowAuth(true);
+  }
 
   async function handleRate() {
     const pkg = 'com.chewpacastudios.harp2tab';
@@ -335,11 +352,37 @@ export default function SettingsScreen() {
               </View>
             </View>
 
-            {/* SUPPORT — Play Store rating only makes sense on Android */}
-            {Platform.OS !== 'web' && (
-              <View style={styles.sectionBlock}>
-                <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>SUPPORT</Text>
-                <View style={styles.card}>
+            {/* SUPPORT — the section shows on both platforms; each row picks its own.
+                Rating is a Play Store deeplink and means nothing on web. Feedback is the
+                mirror image: it writes to Firestore as a signed-in user, and native has
+                neither accounts nor Firestore until Phase 15 (`sync/feedback.ts`). Neither
+                row is a stub on the platform it skips — it is simply absent there. */}
+            <View style={styles.sectionBlock}>
+              <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>SUPPORT</Text>
+              <View style={styles.card}>
+
+                {Platform.OS === 'web' && (
+                  <Pressable
+                    onPress={handleFeedback}
+                    style={({ pressed, hovered }: any) => [
+                      styles.cardRow,
+                      styles.cardRowCursor,
+                      hovered && styles.cardRowHover,
+                      pressed && { opacity: 0.6 },
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Send feedback, report a bug, or suggest a feature"
+                  >
+                    <Ionicons name="chatbubble-ellipses-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
+                    <View style={styles.rowBody}>
+                      <Text style={styles.rowLabel}>Send Feedback</Text>
+                      <Text style={styles.rowDesc}>Report a bug or suggest a feature — it goes straight to the developer.</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={16} color={theme.textMuted} />
+                  </Pressable>
+                )}
+
+                {Platform.OS !== 'web' && (
                   <Pressable
                     onPress={handleRate}
                     style={({ pressed }) => [styles.cardRow, pressed && { opacity: 0.6 }]}
@@ -353,9 +396,10 @@ export default function SettingsScreen() {
                     </View>
                     <Ionicons name="chevron-forward" size={16} color={theme.textMuted} />
                   </Pressable>
-                </View>
+                )}
+
               </View>
-            )}
+            </View>
 
             {/* LEGAL */}
             <View style={styles.sectionBlock}>
@@ -386,6 +430,24 @@ export default function SettingsScreen() {
 
         </ScrollView>
       </View>
+
+      {/* Guarded on `auth.user` rather than mounted always: the modal takes a non-null user
+          because a submission without one cannot be written. The guard is the type, not a
+          defensive check. */}
+      {auth.user && (
+        <FeedbackModal
+          visible={showFeedback}
+          user={auth.user}
+          onClose={() => setShowFeedback(false)}
+        />
+      )}
+
+      <AuthModal
+        visible={showAuth}
+        initialMode="signIn"
+        reason="Sign in so we can reply to your feedback and follow up on bug reports."
+        onClose={() => setShowAuth(false)}
+      />
     </SafeAreaView>
   );
 }

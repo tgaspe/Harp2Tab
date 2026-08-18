@@ -19,7 +19,7 @@ import {
   initializeTestEnvironment,
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { deleteDoc, doc, getDoc, setDoc } from 'firebase/firestore';
 
 const PROJECT_ID = 'harp2tab-rules-test';
 const HOST = '127.0.0.1';
@@ -167,6 +167,51 @@ async function main() {
   // something they already paid for.
   await check('unverified owner CAN still read their entitlement',
     assertSucceeds(getDoc(doc(unverified, 'entitlements/unver'))));
+
+  section('Feedback is write-only, and only about yourself');
+  // The suggestion box writes here and nothing reads it back — submissions are read in the
+  // Firebase console. The size and enum bounds are in the rules rather than only in the modal
+  // because the modal is not what stands between this collection and someone with a REST
+  // client and an account.
+  const feedback = (over: Record<string, unknown> = {}) => ({
+    uid:        'alice',
+    email:      'a@example.com',
+    type:       'bug',
+    message:    'The tab drifts a semitone flat after the third bend.',
+    appVersion: '1.4.0',
+    platform:   'web',
+    ...over,
+  });
+
+  await check('signed-in user can submit feedback',
+    assertSucceeds(setDoc(doc(alice, 'feedback/f1'), feedback())));
+  await check('suggestion and other are accepted types',
+    assertSucceeds(setDoc(doc(alice, 'feedback/f2'), feedback({ type: 'suggestion' }))));
+  // Deliberate asymmetry with sync: someone who cannot get past the confirmation email is
+  // exactly the person with a bug worth hearing about.
+  await check('unverified user CAN still submit feedback',
+    assertSucceeds(setDoc(doc(unverified, 'feedback/f3'), feedback({ uid: 'unver' }))));
+
+  await check('signed-out cannot submit feedback',
+    assertFails(setDoc(doc(anon, 'feedback/f4'), feedback({ uid: 'alice' }))));
+  await check('cannot submit feedback under another user\'s uid',
+    assertFails(setDoc(doc(mallory, 'feedback/f5'), feedback({ uid: 'alice' }))));
+  await check('cannot submit an empty message',
+    assertFails(setDoc(doc(alice, 'feedback/f6'), feedback({ message: '' }))));
+  await check('cannot submit an oversized message',
+    assertFails(setDoc(doc(alice, 'feedback/f7'), feedback({ message: 'x'.repeat(1001) }))));
+  await check('cannot submit an unknown type',
+    assertFails(setDoc(doc(alice, 'feedback/f8'), feedback({ type: 'refund' }))));
+
+  await check('nobody can read feedback back, not even its author',
+    assertFails(getDoc(doc(alice, 'feedback/f1'))));
+  await check('another user cannot read my feedback',
+    assertFails(getDoc(doc(mallory, 'feedback/f1'))));
+  // `setDoc` on an existing id is an update, which is how an edit-after-the-fact would arrive.
+  await check('feedback cannot be edited once submitted',
+    assertFails(setDoc(doc(alice, 'feedback/f1'), feedback({ message: 'never mind' }))));
+  await check('feedback cannot be deleted by its author',
+    assertFails(deleteDoc(doc(alice, 'feedback/f1'))));
 
   section('Unmatched paths are closed');
   await check('cannot write an arbitrary collection',

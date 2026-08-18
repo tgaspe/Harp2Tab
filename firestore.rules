@@ -86,6 +86,38 @@ service cloud.firestore {
     }
 
     /**
+     * Feedback — the in-app suggestion box (bugs, suggestions, anything else).
+     *
+     * **Create-only, and unreadable by every client including its author.** Submissions are
+     * read in the Firebase console, so no client ever needs `get` or `list`; granting read
+     * here would publish every user's bug report — often containing what they were working on
+     * — to anyone who can guess a document id. `update` and `delete` are denied for the same
+     * reason the collection is append-only: a submitted report is a record, not a draft.
+     *
+     * **Top level, disjoint from `/users/{uid}/`,** for the reason spelled out on
+     * `entitlements` above: rules are a permissive union, and nesting this under a path that
+     * grants write elsewhere would quietly undo the deny.
+     *
+     * **Shape is validated here, not only in the modal.** The client-side cap is a courtesy
+     * to the user; this is what stands between the collection and someone with an account and
+     * a REST client. `uid` must match the caller so a submission cannot be attributed to
+     * somebody else, and the 1000-char bound keeps a single write from being used as free
+     * storage.
+     *
+     * **No `confirmed()`, deliberately.** Someone stuck behind a verification email is
+     * exactly the person with a bug worth hearing about.
+     */
+    match /feedback/{docId} {
+      allow create: if signedIn()
+                    && request.resource.data.uid == request.auth.uid
+                    && request.resource.data.type in ['bug', 'suggestion', 'other']
+                    && request.resource.data.message is string
+                    && request.resource.data.message.size() > 0
+                    && request.resource.data.message.size() <= 1000;
+      allow read, update, delete: if false;
+    }
+
+    /**
      * Everything else is denied.
      *
      * Explicit rather than implicit. Firestore already denies unmatched paths, but writing it

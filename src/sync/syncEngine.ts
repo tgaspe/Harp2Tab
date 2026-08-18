@@ -77,7 +77,7 @@ import type { MidiProject, TabRecording } from '@/types';
  * its life in the wrong position, and the day someone unsets the emulator variable without
  * putting it back is the day a dev session writes into the real project.
  */
-export const SYNC_ENABLED = false;
+export const SYNC_ENABLED = true;
 
 /** Debounce after a local write. Long enough that renaming a tab is one sync, not fifteen. */
 const WRITE_DEBOUNCE_MS = 2000;
