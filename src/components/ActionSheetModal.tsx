@@ -12,6 +12,10 @@ import type { Theme } from '@/theme';
 
 export interface ActionSheetOption {
   label:    string;
+  /** A second line under the label, for a choice whose consequence the label can't carry on
+   *  its own. Optional because most sheets here are confirmations, where a description would
+   *  only repeat the title. */
+  description?: string;
   style?:   'default' | 'destructive';
   onPress?: () => void;
 }
@@ -60,11 +64,16 @@ export function ActionSheetModal({ visible, title, options, onClose }: Props) {
                 pressed && styles.optionPressed,
               ]}
               accessibilityRole="button"
-              accessibilityLabel={opt.label}
+              // The description is part of what the row means, so it belongs in the label
+              // rather than being left for a screen reader to find as separate text.
+              accessibilityLabel={opt.description ? `${opt.label}. ${opt.description}` : opt.label}
             >
               <Text style={[styles.optionText, opt.style === 'destructive' && styles.optionTextDestructive]}>
                 {opt.label}
               </Text>
+              {opt.description && (
+                <Text style={styles.optionDescription}>{opt.description}</Text>
+              )}
             </Pressable>
           ))}
 
@@ -124,6 +133,14 @@ function createStyles(t: Theme) {
       color:      t.accent,
     },
     optionTextDestructive: { color: t.record },
+    optionDescription: {
+      fontSize:          FONT.sm,
+      fontFamily:        Poppins.regular,
+      color:             t.textSub,
+      textAlign:         'center',
+      marginTop:         3,
+      paddingHorizontal: 20,
+    },
     cancelOption: {
       borderTopWidth: 8,
       borderTopColor: t.surfaceAlt,
