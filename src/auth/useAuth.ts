@@ -13,36 +13,40 @@
  */
 
 /* ────────────────────────────────────────────────────────────────────────────
- * TODO(domain) — the custom domain is deferred; everything else gets built first.
+ * TODO(domain) — the domain landed 2026-08-18. Item 1 below is done; 2 and 3 are not.
  *
  * **User decision, 2026-08-13.** Phase 7's plan recommended buying the domain *before*
- * the phase started. That is reversed: build all of 7a against Firebase's default
+ * the phase started. That was reversed: build all of 7a against Firebase's default
  * `harp2tab.firebaseapp.com`, buy the domain later, then do the three fix-ups below in
  * one pass. Every `TODO(domain)` in the tree is part of that pass —
  * `grep -rn "TODO(domain)" src/` is the checklist.
  *
- * The three things that actually need it, and what to do when it lands:
+ * The three things that actually need it, and where each now stands:
  *
- * 1. **`authDomain`** (7-1, now read from `.env` by `firebase.web.ts`). Point it at the
- *    app's own domain and add Firebase Hosting's `__/auth` rewrite. Until then, browsers
- *    that partition third-party storage — Safari ITP, Firefox ETP, Chrome's
- *    third-party-cookie work — can break sign-in that round-trips through
- *    `*.firebaseapp.com`, and the Google popup shows a Firebase subdomain instead of the
- *    app's name.
+ * 1. **`authDomain`** (7-1, read from `.env` by `firebase.web.ts`). **Done 2026-08-19** — it
+ *    is `harp2tab.com`, so the Google popup shows the app's own domain and sign-in no longer
+ *    round-trips through `*.firebaseapp.com`, which is what browsers partitioning third-party
+ *    storage (Safari ITP, Firefox ETP, Chrome's third-party-cookie work) could break. No
+ *    Hosting rewrite was needed — the reserved `/__/` paths already serve on a custom domain.
+ *    What *was* needed and is easy to miss: the hostname on Auth's authorized-domains list,
+ *    and `https://harp2tab.com/__/auth/handler` registered as a redirect URI on the Google
+ *    OAuth client (console-only; without it Google answers `redirect_uri_mismatch`).
  * 2. **The action-handler origin** (7-4, `src/app/auth/action.tsx`). Verification and
  *    reset links are minted against `authDomain`, so they change origin with it.
  * 3. **The email sender domain** (7-4, SPF/DKIM). Until it is verified, mail comes from
  *    `noreply@<project>.firebaseapp.com` with Firebase's own wording.
  *
- * **What this costs while deferred, so it is a known risk and not a surprise:**
- * - `signInWithPopup` (7-3's choice) is the *least* affected path — it is same-origin to
- *   the opener and is why popup beats redirect here. Do not switch to redirect while the
- *   domain is deferred; that is the combination that actually breaks.
- * - Links already in someone's inbox are invalidated by the eventual switch, and verified
- *   addresses may need re-verifying. **That is the reason to keep real signups off this
- *   build until the domain lands** — dev and internal testing only.
- * - The default sender lands in spam materially more often. Do not read anything into
- *   deliverability numbers measured before the switch.
+ * **What is still open, so it is a known risk and not a surprise:**
+ * - `signInWithPopup` (7-3's choice) was picked *because* the domain was deferred: popup is
+ *   same-origin to the opener and survives the `*.firebaseapp.com` round-trip that redirect
+ *   does not. That premise has now expired, so redirect is viable again — treat switching as
+ *   a fresh decision rather than a blocked one.
+ * - Mail still comes from `noreply@<project>.firebaseapp.com` (item 3), which lands in spam
+ *   materially more often. Do not read anything into deliverability numbers until the sender
+ *   domain is verified.
+ * - Action links minted before the switch point at `harp2tab.firebaseapp.com`. That host is
+ *   still live and still an authorized domain, so those links keep working; the earlier note
+ *   here said the switch invalidates them, which overstated it.
  * ──────────────────────────────────────────────────────────────────────────── */
 
 import { useCallback } from 'react';

@@ -44,10 +44,15 @@ const firebaseConfig = {
   appId:             process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
 };
 
-/* TODO(domain): `authDomain` currently resolves to `harp2tab.firebaseapp.com` from `.env`.
- * When the custom domain is bought, change it there and add Firebase Hosting's `__/auth`
- * rewrite — no code change is needed here, which is the point of reading it from env. See
- * the deferral block in `useAuth.ts`. */
+/* `authDomain` resolves to `harp2tab.com` from `.env` (switched 2026-08-19, when the custom
+ * domain landed). No code change was needed here, which is the point of reading it from env.
+ *
+ * Two things had to be true first, neither of them in this file: the hostname must be on Auth's
+ * **authorized domains** list, and `https://harp2tab.com/__/auth/handler` must be a registered
+ * **redirect URI** on the Google OAuth client — that one is console-only, and without it Google
+ * answers `redirect_uri_mismatch` and sign-in dies outright. Firebase Hosting serves the
+ * reserved `/__/` paths on a custom domain automatically, so no `firebase.json` rewrite is
+ * involved, contrary to what this comment used to claim. */
 
 /**
  * Missing config fails loudly at the first call rather than quietly at sign-in.
