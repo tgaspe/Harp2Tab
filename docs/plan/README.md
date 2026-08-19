@@ -1,7 +1,12 @@
 # Harp2Tab — Full Roadmap Implementation Plan
 
 Status as of 2026-08-19: Phases 0–6, 7a, 7b, 8a, 8b, 11, 13 and 14 are implemented on
-`web_version`. Phases 9, 10, 12 (partly), 15 and 8c are still just this plan.
+`web_version`. Phases 9, 10, 12 (partly), 15, 16 and 8c are still just this plan.
+
+**Phase 16 supersedes Phase 14** (planned 2026-08-19): the spectral engine is replaced
+wholesale by the CQT-based HSA v2 detector, plus pMPM's amplitude-envelope re-attack
+detector so repeated notes stop being written as one long note. Phase 14's write-up stays as
+the design record for what it built.
 
 **7b's `SYNC_ENABLED` is now `true`** and the web app is deployed to Firebase Hosting at
 `harp2tab.web.app` and `harp2tab.com` (commit `facbc3e`). **The two manual 7b checks — the
@@ -148,6 +153,17 @@ existed, so the command would have failed. No phase owned this; it is now step 2
       it has one known dead end: the Studio's Export lives in a `TopBar` that is `null`
       on native. **This phase does not license hedging web work**; the rule in
       `feedback_web_first_no_mobile_hedging` still stands.
+- [ ] [Phase 16](phase-16-hsa-engine.md) — **HSA v2 replaces the spectral engine, with re-attack
+      segmentation** (planned 2026-08-19). Ports `HSA_v2_polyphonic.ipynb` — CQT harmonic
+      summation with iterative cancellation — into `src/audio/`, deletes Phase 14's engine
+      and its octave machinery, and gives the result the amplitude-envelope re-attack
+      detector that today only `NoteDetector` has, so a tongued repeat stops being written as
+      one long note. The CQT is **vendored** (`cqt-web`, MIT) rather than written, after
+      measuring that its `HybridCQT` reproduces the notebook's detected pitch sets exactly at
+      ~25× the speed of its accurate variant. Two consequences to hold onto: the engine
+      becomes **web-only** (WASM under Hermes), leaving native with pMPM alone, and the
+      re-attack constants must be re-tuned before the port, because pMPM's were calibrated at
+      46.4ms frames and HSA v2 runs at 11.61ms.
 
 **Phase 11 — what shipped, against what was planned**
 - 11-1…11-5, 11-8…11-10 complete. End-to-end: import MIDI → Open in Studio → edit →
@@ -253,6 +269,7 @@ they're the design record, not a changelog. Notable deviations from the original
 | [`phase-13-record-transcribe.md`](phase-13-record-transcribe.md) | Record → transcribe → Studio; PCM retention, engine picker, per-engine params |
 | [`phase-14-spectral.md`](phase-14-spectral.md) | Spectral polyphonic transcription (FFT) as a third engine |
 | [`phase-15-native-scope.md`](phase-15-native-scope.md) | Native port scope — a held decision, not scheduled work |
+| [`phase-16-hsa-engine.md`](phase-16-hsa-engine.md) | HSA v2 (vendored CQT) replaces the spectral engine; global re-attack segmentation |
 
 ## Context
 
