@@ -10,7 +10,7 @@
  *
  * What each path still has to ask differs, and that is what the phases below are:
  *
- *  - **Audio** asks which engine (`choosing`, file uploads only — a take was asked on
+ *  - **Audio** decodes and transcribes straight away (a take arrives already decoded on
  *    Finish), then offers to tune it (`tune`) before handing the result to the Studio. The
  *    harp is deliberately not asked here; it is chosen at conversion, where it decides
  *    something.
@@ -29,14 +29,12 @@ import { FONT } from '@/constants/keys';
 import { WEB_CONTENT_WIDTH, webMaxWidth } from '@/constants/layout';
 import { useTheme } from '@/hooks/useTheme';
 import { AudioImportError, type DecodedAudio, type ImportErrorCode } from '@/audio/audioImport';
-import { ActionSheetModal } from '@/components/ActionSheetModal';
 import { CandidateList, CandidateRow } from '@/components/CandidateRow';
 import { KeyCandidateList, positionLabel, techniqueSuffix } from '@/components/KeyCandidateList';
 import { PianoRoll } from '@/components/PianoRoll';
-import { TranscriptionEngineModal } from '@/components/TranscriptionEngineModal';
 import { TranscriptionParamsRail } from '@/components/TranscriptionParamsRail';
 import {
-  availableAlgorithms, getAlgorithm, withDefaults,
+  getAlgorithm, withDefaults, TRANSCRIBE_ALGORITHM_ID,
   type ParamValues, type Prepared, type TranscriptionAlgorithmId, type TranscriptionOutput,
 } from '@/audio/algorithms';
 import { pushFrames } from '@/audio/frameBuffer';
@@ -89,9 +87,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 type TrackSelection = number | 'all';
 
 /**
- * Neither of the two audio phases is a new route: `choosing` renders the shared engine modal
- * over a quiet backdrop, and `tune` is a phase for the same reason `midiConfirm` is — the
- * screen already owns the transcription it is about.
+ * `tune` is a phase for the same reason `midiConfirm` is, rather than a route of its own —
+ * the screen already owns the transcription it is about.
  *
  * `tune` deliberately carries no data. Its inputs (the prepared matrices, the parameter
  * values, the current result) live in refs and state beside it, because a phase object
@@ -99,7 +96,6 @@ type TrackSelection = number | 'all';
  * each one.
  */
 type Phase =
-  | { kind: 'choosing' }
   | { kind: 'working'; stage: ImportStage; fraction: number }
   | { kind: 'tune' }
   | { kind: 'midiConfirm'; parsed: MidiImportResult; selection: TrackSelection; chosenKey: HarmonicaKey }
@@ -207,16 +203,14 @@ export default function ImportScreen() {
   const incrementRecordingCount = useSettingsStore((s) => s.incrementRecordingCount);
   const saveProject             = useMidiProjectsStore((s) => s.saveProject);
   const tabNotes                = useAppStore((s) => s.tabNotes);
-  const defaultAlgorithm        = useSettingsStore((s) => s.defaultAlgorithm);
   const savedParams             = useSettingsStore((s) => s.transcriptionParams);
-  const setDefaultAlgorithm     = useSettingsStore((s) => s.setDefaultAlgorithm);
   const setTranscriptionParams  = useSettingsStore((s) => s.setTranscriptionParams);
 
   const [phase, setPhase] = useState<Phase>({ kind: 'working', stage: 'decoding', fraction: 0 });
   const [fileName, setFileName] = useState(() => pendingImportName(getPendingImport()));
 
   // ── Audio tuning state ──────────────────────────────────────────────────────
-  const [algorithmId, setAlgorithmId] = useState<TranscriptionAlgorithmId>(defaultAlgorithm);
+  const [algorithmId, setAlgorithmId] = useState<TranscriptionAlgorithmId>(TRANSCRIBE_ALGORITHM_ID);
   /** What the sliders show — staged, not necessarily in the preview. */
   const [params, setParams]           = useState<ParamValues>({});
   /**
@@ -233,21 +227,8 @@ export default function ImportScreen() {
    *  the two things only a take has: a live transcription to fall back to, and a retention
    *  cap it may have hit. */
   const [isFromRecording, setIsFromRecording] = useState(false);
-  /**
-   * True when the picker was reached by "Change engine" rather than by arriving here.
-   *
-   * The difference is what backing out costs. On the way in nothing has been spent, so
-   * cancelling is free; from the tune step a decode and a full expensive pass are already
-   * behind the user — and `handleBackToChoosing` has released both — so the same gesture
-   * ends the import for good and is worth asking about.
-   */
-  const [reChoosingEngine, setReChoosingEngine] = useState(false);
-  /** The "are you sure" over the picker. Not a phase: the picker is still the screen, and
-   *  answering no returns to it exactly as it was. */
-  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [truncated, setTruncated] = useState(false);
 
-  const engines = useMemo(() => availableAlgorithms(), []);
   const engine  = useMemo(() => getAlgorithm(algorithmId), [algorithmId]);
   /** Which parameters are ahead of the preview. Derived rather than tracked, so it can't
    *  drift from the two values it's a statement about — dragging a slider back to where it
@@ -342,10 +323,10 @@ export default function ImportScreen() {
   /**
    * Entry point for whatever landed in the hand-off slot.
    *
-   * The two audio variants differ in exactly one thing — whether the engine has already been
-   * chosen. A take was asked on Finish, while it was still the thing in front of the user, so
-   * asking again here would be asking twice; a file has had no earlier moment, so it opens
-   * on the picker.
+   * The two audio variants now differ in one thing only — whether the samples are already in
+   * hand. A take arrives decoded from the recording screen; a file has to be read off disk
+   * first. Neither is asked which engine to use: there is one worth offering, so the question
+   * was costing a decision and buying nothing (see `SELECTABLE_ALGORITHM_IDS`).
    */
   async function begin(entry: PendingImport) {
     if (isMidi) { await parseMidi(); return; }
@@ -362,10 +343,7 @@ export default function ImportScreen() {
       return;
     }
 
-    // No compute yet, which is the whole point of asking first: picking the engine late
-    // would mean throwing away a pass that had already run.
-    setAlgorithmId(defaultAlgorithm);
-    setPhase({ kind: 'choosing' });
+    await transcribeFile();
   }
 
   /** MIDI's whole "working" stage: read the bytes, parse them. Milliseconds, so the
@@ -402,23 +380,16 @@ export default function ImportScreen() {
   }
 
   /**
-   * The engine picker's confirm.
+   * Read an uploaded audio file off disk and transcribe it.
    *
-   * Serves both ways in: a file still has to be decoded, while a take (or a second pass
-   * after "Back") already has its audio in hand and goes straight to the expensive pass.
+   * The take path never comes through here — it arrives with its samples already decoded and
+   * goes straight to `prepare` from `begin`.
    */
-  async function handleChooseEngine() {
+  async function transcribeFile() {
     if (!selectedKey) return;
-    // Whatever brought the user to the picker, going forward from it spends a fresh pass —
-    // so the next time they back out, there is again something to lose.
-    setReChoosingEngine(false);
-    setDefaultAlgorithm(algorithmId);
-    const initial = withDefaults(engine, savedParams[algorithmId]);
-
-    if (audioRef.current) {
-      await prepare(audioRef.current, algorithmId, initial, title());
-      return;
-    }
+    const algorithm = TRANSCRIBE_ALGORITHM_ID;
+    const initial   = withDefaults(getAlgorithm(algorithm), savedParams[algorithm]);
+    setAlgorithmId(algorithm);
 
     const entry = getPendingImport();
     if (entry?.kind !== 'file') return;
@@ -436,7 +407,7 @@ export default function ImportScreen() {
       const audio = await decodeAudioFile(picked);
       if (cancelledRef.current) return;
       audioRef.current = audio;
-      await prepare(audio, algorithmId, initial, title());
+      await prepare(audio, algorithm, initial, title());
     } catch (err) {
       showImportError(err, picked.name, `"${picked.name}" couldn't be transcribed.`);
     }
@@ -570,31 +541,6 @@ export default function ImportScreen() {
     const next = withDefaults(engine);
     setParams(next);
     void applyParams(next);
-  }
-
-  /** Back to the picker. Releases the matrices immediately rather than holding them while
-   *  the user reconsiders — the audio is still here, so changing your mind costs one pass,
-   *  and holding both engines' output at once would be the worst moment to be carrying
-   *  90MB. */
-  function handleBackToChoosing() {
-    releasePrepared();
-    setResult(null);
-    setRecomputing(false);
-    setReChoosingEngine(true);
-    setPhase({ kind: 'choosing' });
-  }
-
-  /**
-   * Backing out of the picker — the button, the backdrop and Escape all land here.
-   *
-   * Free on the way in, and a dead end on the way back: the matrices are gone, so there is
-   * no tune step left to return to and the only thing "no" can mean is the picker itself.
-   * Asked rather than assumed, because the gesture that gets here is the same small one
-   * either way while what it costs is not.
-   */
-  function handlePickerClose() {
-    if (reChoosingEngine) { setConfirmDiscard(true); return; }
-    handleCancel();
   }
 
   /** One place that turns a thrown import failure into either a bounce back to Home (the
@@ -771,7 +717,7 @@ export default function ImportScreen() {
       setPendingImport(picked);
       setFileName(picked.name);
       if (isMidi) { void parseMidi(); return; }
-      setPhase({ kind: 'choosing' });
+      void transcribeFile();
     } catch (err) {
       const isImportError = err instanceof AudioImportError;
       setPhase({
@@ -1037,57 +983,6 @@ export default function ImportScreen() {
     );
   }
 
-  if (phase.kind === 'choosing') {
-    return (
-      <SafeAreaView style={styles.safe}>
-        {/* A quiet backdrop rather than a blank one: dismissing the modal returns here, and
-            a screen with nothing on it would read as a failure rather than as a question
-            waiting to be answered. */}
-        <View style={styles.container}>
-          <View style={styles.iconCircle}>
-            <Ionicons name="musical-notes-outline" size={30} color={theme.accent} />
-          </View>
-          <Text style={styles.title}>Ready to transcribe</Text>
-          <Text style={styles.fileName} numberOfLines={1}>{fileName}</Text>
-        </View>
-
-        <TranscriptionEngineModal
-          visible
-          algorithms={engines}
-          selectedId={algorithmId}
-          onSelect={setAlgorithmId}
-          onConfirm={() => void handleChooseEngine()}
-          // Backing out of the picker is not a third answer about how to transcribe — it is
-          // leaving, which is exactly what cancelling an import already does.
-          onClose={handlePickerClose}
-          subtitle={fileName}
-          liveNoteCount={isFromRecording ? tabNotes.length : undefined}
-          secondaryLabel={isFromRecording ? 'Use the live version' : undefined}
-          onSecondary={isFromRecording ? handleUseLiveTranscription : undefined}
-          // The backdrop behind this modal is deliberately bare, so without this the only
-          // ways out are Escape and a backdrop tap — neither of them drawn anywhere.
-          cancelLabel="Cancel"
-        />
-
-        {/* Rendered after the picker so it stacks above it, and only ever over it — the
-            question is about the press the user just made there. Says what going ahead
-            costs, since from here the file has to be uploaded and analysed again. */}
-        <ActionSheetModal
-          visible={confirmDiscard}
-          // Short enough to survive the sheet's two-line clamp at this font size.
-          title="Discard this import? You'd have to upload the file again."
-          options={[
-            { label: 'Discard import', style: 'destructive', onPress: handleCancel },
-            // Named rather than left to the sheet's own "Cancel" row, which over a modal
-            // about cancelling could only be read as cancelling that.
-            { label: 'Keep choosing an engine' },
-          ]}
-          onClose={() => setConfirmDiscard(false)}
-        />
-      </SafeAreaView>
-    );
-  }
-
   if (phase.kind === 'tune' && result) {
     const noteCount  = result.notes.length;
     const empty      = noteCount === 0;
@@ -1264,21 +1159,6 @@ export default function ImportScreen() {
                   >
                     <Text style={styles.goBtnText}>Open in Studio</Text>
                     <Ionicons name="arrow-forward" size={18} color="#fff" />
-                  </Pressable>
-
-                  {/* What "Back" always did — it returns to the engine picker with the audio
-                      still decoded — said as the thing it does rather than as a direction. */}
-                  <Pressable
-                    onPress={handleBackToChoosing}
-                    style={({ pressed, hovered }: any) => [
-                      styles.railSecondaryBtn,
-                      (pressed || hovered) && styles.secondaryBtnPressed,
-                    ]}
-                    accessibilityRole="button"
-                    accessibilityLabel="Go back and choose a different transcription engine"
-                  >
-                    <Ionicons name="swap-horizontal-outline" size={15} color={theme.textSub} />
-                    <Text style={styles.secondaryBtnText}>Change engine</Text>
                   </Pressable>
 
                   {isFromRecording && tabNotes.length > 0 && (

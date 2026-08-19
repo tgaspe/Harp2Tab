@@ -2,12 +2,11 @@ import { PulsingIndicator } from '@/components/PulsingIndicator';
 import { TabCard } from '@/components/TabCard';
 import { LiveAnalysisPanel } from '@/components/LiveAnalysisPanel';
 import { ActionSheetModal } from '@/components/ActionSheetModal';
-import { TranscriptionEngineModal } from '@/components/TranscriptionEngineModal';
 import { FONT } from '@/constants/keys';
 import { Poppins } from '@/constants/fonts';
 import { useTheme } from '@/hooks/useTheme';
 import { useAudioCapture } from '@/hooks/useAudioCapture';
-import { availableAlgorithms, getAlgorithm, withDefaults, type TranscriptionAlgorithmId } from '@/audio/algorithms';
+import { getAlgorithm, withDefaults, TRANSCRIBE_ALGORITHM_ID } from '@/audio/algorithms';
 import { setPendingDecodedImport } from '@/audio/pendingImport';
 import { clearFrames } from '@/audio/frameBuffer';
 import { clearRetainedPcm, getMaxTakeMs, isRetentionTruncated, takeRetainedPcm } from '@/native/AudioCapture';
@@ -51,9 +50,7 @@ export default function RecordingScreen() {
   const discardSession         = useAppStore((s) => s.discardSession);
   const pauseRecording         = useAppStore((s) => s.pauseRecording);
   const resumeRecording        = useAppStore((s) => s.resumeRecording);
-  const defaultAlgorithm       = useSettingsStore((s) => s.defaultAlgorithm);
   const savedParams            = useSettingsStore((s) => s.transcriptionParams);
-  const setDefaultAlgorithm    = useSettingsStore((s) => s.setDefaultAlgorithm);
 
   const listRef       = useRef<FlatList>(null);
   const startMsRef    = useRef(0);
@@ -65,7 +62,6 @@ export default function RecordingScreen() {
   /** Set by Finish, read by the effect below — see `handleStop` for why the take can only
    *  be collected one commit later. */
   const [finishing, setFinishing] = useState(false);
-  /** The retained take, once collected. Its presence is what puts the engine picker up. */
   /**
    * The finished take, held here from Finish until it is spent or thrown away.
    *
@@ -74,16 +70,15 @@ export default function RecordingScreen() {
    */
   const [take, setTake] = useState<(DecodedAudio & { truncated: boolean }) | null>(null);
   /**
-   * Whether the engine picker is up — deliberately not `take !== null`.
+   * Whether the Finish sheet is up — deliberately not `take !== null`.
    *
-   * They were the same flag until dismissing the picker was found to destroy the take: the
+   * They were the same flag until dismissing the sheet was found to destroy the take: the
    * only way to close it was to clear the thing it was about, and the next Finish then found
    * an empty buffer and fell through to the editor with the live transcription. Separate,
-   * "cancel" means what the picker always claimed it meant — back to the take, press Finish
-   * again when ready.
+   * "cancel" means what it always claimed it meant — back to the take, press Finish again
+   * when ready.
    */
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [algorithmId, setAlgorithmId] = useState<TranscriptionAlgorithmId>(defaultAlgorithm);
   /** Whether retention has stopped because the cap was reached. Recording itself carries
    *  on, which is exactly what the notice has to say. */
   const [retentionStopped, setRetentionStopped] = useState(false);
@@ -93,7 +88,6 @@ export default function RecordingScreen() {
   /** Which abandon is waiting on a yes. Null when no dialog is up. */
   const [confirming, setConfirming] = useState<'restart' | 'discard' | null>(null);
 
-  const engines  = useMemo(() => availableAlgorithms(), []);
   const maxTakeMs = useMemo(() => getMaxTakeMs(), []);
 
   useKeepAwake();
@@ -266,13 +260,13 @@ export default function RecordingScreen() {
    *  screen doesn't ask a second time. */
   function handleTranscribe() {
     if (!take) return;
-    setDefaultAlgorithm(algorithmId);
     setPendingDecodedImport({
       audio:     { samples: take.samples, sampleRate: take.sampleRate, durationMs: take.durationMs },
       title:     getDefaultRecordingTitle(),
       truncated: take.truncated,
-      algorithm: algorithmId,
-      params:    withDefaults(getAlgorithm(algorithmId), savedParams[algorithmId]),
+      algorithm: TRANSCRIBE_ALGORITHM_ID,
+      params:    withDefaults(
+        getAlgorithm(TRANSCRIBE_ALGORITHM_ID), savedParams[TRANSCRIBE_ALGORITHM_ID]),
     });
     setTake(null);
     setPickerOpen(false);
@@ -516,23 +510,31 @@ export default function RecordingScreen() {
       </View>
 
       {/* Asked here, on Finish, rather than on the screen the take is about to go to: the
-          user is still with the performance they just gave, and the live note count below
-          is the evidence that makes the choice answerable. Dismissing returns to the take —
-          nothing is lost, the PCM is still held and Finish can be pressed again. */}
-      <TranscriptionEngineModal
+          user is still with the performance they just gave, and the live note count is the
+          evidence that makes the choice answerable. Dismissing returns to the take — nothing
+          is lost, the PCM is still held and Finish can be pressed again.
+
+          Two answers rather than a list of engines. There is one offline engine worth
+          offering (see `SELECTABLE_ALGORITHM_IDS`), and the real question on this screen was
+          never which one — it is whether to spend a slow pass at all when a live pass has
+          already written something usable. */}
+      <ActionSheetModal
         visible={pickerOpen}
-        algorithms={engines}
-        selectedId={algorithmId}
-        onSelect={setAlgorithmId}
-        onConfirm={handleTranscribe}
+        title={`${getDefaultRecordingTitle()} · ${clock(take?.durationMs ?? 0)}`}
+        options={[
+          {
+            label:       'Transcribe the take',
+            description: 'Slower — hears chords and double-stops.',
+            onPress:     handleTranscribe,
+          },
+          {
+            label:       'Use the live version',
+            description: `Keep the ${tabNotes.length} note${tabNotes.length === 1 ? '' : 's'} `
+                         + 'already written, as they are.',
+            onPress:     handleUseLive,
+          },
+        ]}
         onClose={() => setPickerOpen(false)}
-        subtitle={`${getDefaultRecordingTitle()} · ${clock(take?.durationMs ?? 0)}`}
-        liveNoteCount={tabNotes.length}
-        secondaryLabel="Use the live version"
-        onSecondary={handleUseLive}
-        // Dismissing returns to the take, which is still here — nothing is lost, so it
-        // needs naming rather than confirming.
-        cancelLabel="Cancel"
       />
 
       {/* Says what is lost, in the unit the user has been watching go up all take — a note

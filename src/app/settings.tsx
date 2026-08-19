@@ -10,7 +10,7 @@ import { Toggle } from '@/components/Toggle';
 import { useAuth } from '@/auth/useAuth';
 import { useTheme } from '@/hooks/useTheme';
 import { usePremium } from '@/hooks/usePremium';
-import { availableAlgorithms } from '@/audio/algorithms';
+import { selectableAlgorithms } from '@/audio/algorithms';
 import {
   FREE_TIER_ENABLED, MAX_TAKE_MINUTES, MIN_TAKE_MINUTES, useSettingsStore, type ThemeOverride,
 } from '@/store/useSettingsStore';
@@ -43,7 +43,7 @@ export default function SettingsScreen() {
   const resetTranscriptionParams = useSettingsStore((s) => s.resetTranscriptionParams);
   const auth               = useAuth();
 
-  const engines = useMemo(() => availableAlgorithms(), []);
+  const engines = useMemo(() => selectableAlgorithms(), []);
 
   const [showFeedback, setShowFeedback] = useState(false);
   const [showAuth,     setShowAuth]     = useState(false);
@@ -204,6 +204,11 @@ export default function SettingsScreen() {
               <View style={styles.sectionBlock}>
                 <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>TRANSCRIPTION</Text>
                 <View style={styles.card}>
+                  {/* Only when there is a choice to make. One selectable engine means this
+                      row is a radio group of one — a control that cannot change anything,
+                      which reads as broken rather than as settled. It comes back on its own
+                      the moment `SELECTABLE_ALGORITHM_IDS` widens. */}
+                  {engines.length > 1 && (<>
                   <View style={styles.cardRow}>
                     <Ionicons name="sparkles-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
                     <View style={styles.rowBody}>
@@ -240,6 +245,7 @@ export default function SettingsScreen() {
                   </View>
 
                   <View style={styles.separator} />
+                  </>)}
 
                   <View style={styles.cardRow}>
                     <Ionicons name="timer-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
