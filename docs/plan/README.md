@@ -18,8 +18,29 @@ outstanding**, and sync is live regardless; see the Status section of
 end to end, with 8-4/8-5/8-6 shipped. Untested: the lifetime purchase (which answers 8-1.6),
 declined cards and 3-D Secure. See [`../stripe-setup.md`](../stripe-setup.md) Part 4.
 
-**`www.harp2tab.com` returns Firebase's "Site Not Found"** — the CNAME exists but the hostname
-has not been added to the Hosting site, so any inbound `www` link is dead.
+**Both hostnames served Firebase's "Site Not Found" on their bare root; fixed 2026-08-19 by a
+redeploy.** The cause was not configuration. Each domain got that page cached in a regional
+Fastly shield during its provisioning window on 2026-08-18 (apex 16:56 UTC, `www` 17:44 UTC),
+under exactly one cache key apiece: the root with no query string. `/app`, `/edit` and
+`/?anything=1` were served correctly the whole time — only `/` was poisoned. It outlived the
+response's `max-age=0` because that header governs browsers, while Fastly follows
+`Surrogate-Control`, and Firebase sets a long surrogate TTL on that page. Because the poison
+sits in a *regional* shield, which hostname looked broken depended on where you were: the apex
+was dead from one region while serving fine from another (the `www` root and the apex root
+were poisoned at different POPs), and a first-ever visit on a new device hit it just the
+same — the cache is shared per POP, not per client.
+
+**If it recurs, the fix is `firebase deploy --only hosting`** — Firebase's release-time CDN
+invalidation does reach these host-level objects (confirmed by a `x-cache: MISS` on the first
+request afterwards). Deleting and re-adding the custom domain does **not**: it was tried on
+`www` first, as a rehearsal precisely so the live apex was not taken down for nothing, and the
+root stayed poisoned through a full delete/re-create cycle. The domain resource lifecycle and
+the CDN cache are independent.
+
+**Still open:** `www.harp2tab.com` is a `CNAME` to `harp2tab.web.app` rather than the A records
+Firebase provisions (`199.36.158.100` / `199.36.158.101`). It resolves to the same edge and
+works, but it is not what Firebase asks for, and it is why `www` has an AAAA record the apex
+lacks.
 
 ## Release sequence (decided 2026-08-13)
 

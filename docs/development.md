@@ -57,8 +57,24 @@ see [Deploying](#deploying) for the env prefix that keeps the emulator out of th
 
 ## Deploying
 
-Live at <https://harp2tab.web.app>. The custom domain `harp2tab.com` is bought (Namecheap) but
-not yet attached.
+Live at <https://harp2tab.com> (attached 2026-08-18; `harp2tab.web.app` still works and is the
+same site). `www.harp2tab.com` redirects to the apex.
+
+> **A new hostname needs adding to Firebase Auth's authorized domains, or Google sign-in
+> breaks on it.** `harp2tab.com` shipped without this and sign-in failed there for a day
+> while working fine on `harp2tab.web.app`, because only the `web.app` and `firebaseapp.com`
+> defaults were on the list. The app reports it clearly — `src/auth/auth.web.ts:246` turns
+> `auth/unauthorized-domain` into a message naming the console page — so trust that error
+> rather than debugging the sign-in code. Read the list with:
+>
+> ```bash
+> curl -sS -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+>   -H 'x-goog-user-project: harp2tab' \
+>   https://identitytoolkit.googleapis.com/admin/v2/projects/harp2tab/config
+> ```
+>
+> A `PATCH` to the same URL with `?updateMask=authorizedDomains` writes it; the body
+> replaces the whole list, so include the existing entries.
 
 ### The web app
 
