@@ -21,6 +21,8 @@ import { readFileSync } from 'node:fs';
 import { CqtAnalyzer, HSA_CQT_CONFIG } from '../src/audio/dsp/cqt';
 import { analyzePoly, MAX_VOICES } from '../src/audio/dsp/hsaPoly';
 import { detectReattacks, DEFAULT_REATTACK_CONFIG } from '../src/audio/segmenters/reattack';
+import { analyzeHsa } from '../src/audio/algorithms/hsa.web';
+import { hsaToNotes, DEFAULT_HSA_SEGMENT_CONFIG } from '../src/audio/segmenters/hsaToNotes';
 
 const FIXTURES = `${__dirname}/fixtures/hsa`;
 const SAMPLE_RATE = 44100;
@@ -183,6 +185,92 @@ async function main(): Promise<void> {
     ]);
     check('four articulations give three splits', hits(four).length === 3,
           `${hits(four).length} split(s) at [${hits(four)}]`);
+  }
+
+  console.log('\n=== 4. Expensive pass: framing and gating ===\n');
+  {
+    const raw = readFileSync(`${FIXTURES}/34blow.f32`);
+    const pcm = new Float32Array(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
+    const expected = JSON.parse(readFileSync(`${FIXTURES}/34blow.json`, 'utf8')) as {
+      voiced: boolean[]; frameCount: number;
+    };
+    const analysis = await analyzeHsa({
+      samples: pcm, sampleRate: SAMPLE_RATE, durationMs: (pcm.length / SAMPLE_RATE) * 1000,
+    });
+
+    check('frame count matches the Python reference',
+          analysis.frameCount === expected.frameCount,
+          `${analysis.frameCount} vs ${expected.frameCount}`);
+
+    let agree = 0;
+    for (let f = 0; f < expected.frameCount; f++) {
+      if ((analysis.voiced[f] === 1) === expected.voiced[f]) agree++;
+    }
+    check('voicing gate matches librosa',
+          agree === expected.frameCount,
+          `${agree}/${expected.frameCount} frames agree`);
+  }
+
+  console.log('\n=== 5. Segmentation ===\n');
+  {
+    const raw = readFileSync(`${FIXTURES}/34blow.f32`);
+    const pcm = new Float32Array(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
+    const analysis = await analyzeHsa({
+      samples: pcm, sampleRate: SAMPLE_RATE, durationMs: (pcm.length / SAMPLE_RATE) * 1000,
+    });
+
+    const first  = hsaToNotes(analysis, DEFAULT_HSA_SEGMENT_CONFIG);
+    const second = hsaToNotes(analysis, DEFAULT_HSA_SEGMENT_CONFIG);
+    check('resegment is pure', JSON.stringify(first) === JSON.stringify(second),
+          `${first.length} notes, identical across two runs`);
+
+    check('notes are in onset order',
+          first.every((n, i) => i === 0 || n.timeMs >= first[i - 1].timeMs),
+          'everything downstream assumes this');
+
+    // 34Blow.wav is holes 3+4 blown on a C harp: G4 (67) and C5 (72).
+    const hit = (midi: number) => first.filter((n) => n.midi === midi).length;
+    check('finds both expected pitches of the double stop',
+          hit(67) > 0 && hit(72) > 0,
+          `G4 x${hit(67)}, C5 x${hit(72)}, ${first.length} notes total`);
+
+    // Four articulations of one pitch that never reach silence — the case this feature
+    // exists for. The dip bottoms out at 25% amplitude and lasts 60ms, which is *under*
+    // bridgeMs, so the row never gates off and bridging would happily merge all four into
+    // one note. Only the envelope detector can split them. A fixture whose gaps reach
+    // silence passes whether or not the detector runs at all, which is not a test.
+    const repeatPcm = (() => {
+      const n = SAMPLE_RATE * 3;
+      const y = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        const t = i / SAMPLE_RATE;
+        if (t < 0.3) continue;
+        let env = 1;
+        for (let k = 1; k < 4; k++) {
+          const centre = 0.3 + k * 0.6;
+          const d = Math.abs(t - centre);
+          if (d < 0.03) env = 0.25 + 0.75 * (d / 0.03);   // 60ms V-shaped dip to 25%
+        }
+        let s = 0;
+        for (let h = 1; h <= 8; h++) s += Math.pow(h, -0.6) * Math.sin(2 * Math.PI * 523.25 * h * t);
+        y[i] = env * s;
+      }
+      let p = 0; for (const v of y) p = Math.max(p, Math.abs(v));
+      for (let i = 0; i < n; i++) y[i] = (0.9 * y[i]) / p;
+      return y;
+    })();
+    const repeatAnalysis = await analyzeHsa({
+      samples: repeatPcm, sampleRate: SAMPLE_RATE, durationMs: 3000,
+    });
+    const split  = hsaToNotes(repeatAnalysis, DEFAULT_HSA_SEGMENT_CONFIG);
+    const merged = hsaToNotes(repeatAnalysis, { ...DEFAULT_HSA_SEGMENT_CONFIG, splitRepeats: false });
+    const nSplit  = split.filter((n) => n.midi === 72).length;
+    const nMerged = merged.filter((n) => n.midi === 72).length;
+    check('a repeat that never reaches silence still splits', nSplit === 4,
+          `${nSplit} C5 notes with splitRepeats on`);
+    // The control. Without this the test above passes whether or not the detector ran.
+    check('...and would not have, without the detector', nMerged === 1,
+          `${nMerged} C5 note(s) with splitRepeats off`);
   }
 
   console.log('');

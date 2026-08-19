@@ -16,7 +16,8 @@
  * harnesses cannot run at all. See `vendor/PROVENANCE.md`.
  */
 
-// @ts-expect-error — vendored Emscripten glue, no types shipped.
+// Vendored Emscripten glue. It ships no types and `allowJs` resolves it as `any`, which is
+// what the wrapper below exists to contain.
 import createCQTModule from './vendor/cqt.js';
 import { CQT_WASM_BASE64 } from './vendor/cqtWasm';
 
@@ -85,22 +86,33 @@ function decodeWasm(): Uint8Array {
 function loadModule(): Promise<any> {
   if (modulePromise) return modulePromise;
   modulePromise = (async () => {
-    // The vendored build refuses to initialise when it detects Node. Under `tsx` (the
-    // verification harnesses) that assert fires before any of our code runs, so the
-    // environment is disguised for the duration of instantiation only. In a browser all
-    // three lines are no-ops.
+    // The vendored build refuses to initialise when it detects Node: it computes
+    // `ENVIRONMENT_IS_NODE` from `process.versions?.node` and asserts against it. Under
+    // `tsx` (the verification harnesses) that assert fires before any of our code runs, so
+    // the environment is disguised for the duration of instantiation only.
+    //
+    // Scoped narrowly on purpose. An earlier version deleted `globalThis.process` outright,
+    // which is a hazard in the browser: instantiation is asynchronous, and any code that
+    // read `process.env` during that window would have thrown. Only `versions` is masked, so
+    // everything else on `process` keeps working, and the browser — where Metro defines no
+    // `process.versions` at all — takes neither branch.
     const g = globalThis as any;
     const hadWindow   = 'window' in g;
     const realProcess = g.process;
+    const disguise    = Boolean(realProcess?.versions?.node);
     if (!hadWindow) g.window = g;
-    if (realProcess) delete g.process;
+    if (disguise) {
+      g.process = new Proxy(realProcess, {
+        get: (target, key) => (key === 'versions' ? {} : Reflect.get(target, key)),
+      });
+    }
     try {
       // `wasmBinary` given explicitly, so Emscripten never runs its own fetch path — which
       // has no working answer under `tsx` and would need an asset rule plus a CSP allowance
       // in the browser. See `vendor/cqtWasm.ts`.
       return await createCQTModule({ wasmBinary: decodeWasm() });
     } finally {
-      if (realProcess) g.process = realProcess;
+      if (disguise) g.process = realProcess;
       if (!hadWindow) delete g.window;
     }
   })();

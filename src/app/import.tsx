@@ -604,6 +604,12 @@ export default function ImportScreen() {
     const code    = isImportError ? err.code : 'decodeFailed';
     const message = isImportError ? err.message : fallbackMessage;
 
+    // An `AudioImportError` is a failure this pipeline anticipated and phrased for a player.
+    // Anything else is a bug, and the generic message deliberately says nothing about it —
+    // so without this line the only evidence of what actually went wrong is discarded, and
+    // a real exception looks identical to an unsupported file. Learned the hard way.
+    if (!isImportError) console.error('[import] unexpected transcription failure', err);
+
     if (code === 'cancelled') {
       clearPendingImport();
       router.replace('/app');
