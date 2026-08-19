@@ -37,10 +37,28 @@ request afterwards). Deleting and re-adding the custom domain does **not**: it w
 root stayed poisoned through a full delete/re-create cycle. The domain resource lifecycle and
 the CDN cache are independent.
 
-**Still open:** `www.harp2tab.com` is a `CNAME` to `harp2tab.web.app` rather than the A records
-Firebase provisions (`199.36.158.100` / `199.36.158.101`). It resolves to the same edge and
-works, but it is not what Firebase asks for, and it is why `www` has an AAAA record the apex
-lacks.
+**The DNS is correct as it stands — do not "fix" it.** The records at Namecheap are `A @ →
+199.36.158.100`, `CNAME www → harp2tab.web.app.` and `TXT @ → hosting-site=harp2tab`. The
+`www` CNAME looks wrong next to the A-record pair Firebase's docs show, and it was written up
+here as an open item on that basis. Checking rather than assuming reversed it:
+
+- Firebase reports `requiredDnsUpdates: none` and `issues: none` for both custom domains, with
+  both `HOST_ACTIVE`. That field is how Firebase asks for record changes; it is empty, so
+  nothing is being asked for.
+- **`199.36.158.101` resets the TLS handshake** (`tcp/443` opens, then `Connection reset by
+  peer`). Adding it as a second A record would point roughly half of all clients at an
+  endpoint that drops them mid-handshake — the "fix" would cause the outage.
+- `www` already answers over IPv6 (`curl -6` → `301` to the apex). The AAAA that comes with
+  the CNAME is a bonus, not a defect: Firebase publishes no AAAA for custom domains, so the
+  apex has no IPv6 at all.
+
+Check `requiredDnsUpdates` before changing any record here:
+
+```bash
+curl -sS -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  -H 'x-goog-user-project: harp2tab' \
+  https://firebasehosting.googleapis.com/v1beta1/projects/harp2tab/sites/harp2tab/customDomains
+```
 
 ## Release sequence (decided 2026-08-13)
 
