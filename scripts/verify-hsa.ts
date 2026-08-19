@@ -20,6 +20,7 @@
 import { readFileSync } from 'node:fs';
 import { CqtAnalyzer, HSA_CQT_CONFIG } from '../src/audio/dsp/cqt';
 import { analyzePoly, MAX_VOICES } from '../src/audio/dsp/hsaPoly';
+import { detectReattacks, DEFAULT_REATTACK_CONFIG } from '../src/audio/segmenters/reattack';
 
 const FIXTURES = `${__dirname}/fixtures/hsa`;
 const SAMPLE_RATE = 44100;
@@ -121,6 +122,67 @@ async function main(): Promise<void> {
             `${same}/${total} frames identical` +
             (firstBad >= 0 ? `, first mismatch at frame ${firstBad}` : ''));
     }
+  }
+
+  console.log('\n=== 3. Re-attack detection ===\n');
+  {
+    const HOP_MS = (1000 * HSA_CQT_CONFIG.hop) / HSA_CQT_CONFIG.sampleRate;
+    const frames = (ms: number) => Math.round(ms / HOP_MS);
+
+    /** Envelopes built directly — this tests the state machine, not the DSP. */
+    const envelope = (spec: { level: number; ms: number }[]): Float32Array => {
+      const out: number[] = [];
+      for (const { level, ms } of spec) for (let i = 0; i < frames(ms); i++) out.push(level);
+      return Float32Array.from(out);
+    };
+    const allVoiced = (n: number) => Uint8Array.from({ length: n }, () => 1);
+    const hits = (e: Float32Array, v = allVoiced(e.length)) =>
+      detectReattacks(e, v, HOP_MS, DEFAULT_REATTACK_CONFIG);
+
+    const clean = envelope([
+      { level: 0.5, ms: 300 }, { level: 0.02, ms: 120 }, { level: 0.5, ms: 300 },
+    ]);
+    check('a clean repeat splits exactly once', hits(clean).length === 1,
+          `${hits(clean).length} split(s) at frame(s) [${hits(clean)}]`);
+
+    const shallow = envelope([
+      { level: 0.5, ms: 300 }, { level: 0.45, ms: 120 }, { level: 0.5, ms: 300 },
+    ]);
+    check('a shallow dip does not split', hits(shallow).length === 0,
+          'dip never reaches dipRatio 0.35');
+
+    const brief = envelope([
+      { level: 0.5, ms: 300 }, { level: 0.02, ms: 8 }, { level: 0.5, ms: 300 },
+    ]);
+    check('a dip shorter than minDipMs does not split', hits(brief).length === 0,
+          '8ms dip, under one frame');
+
+    // The case that moved the constants: 5Hz at 50% depth has a 100ms half-period, well past
+    // minDipMs, and a depth well past pMPM's old dipRatio of 0.5.
+    const n = frames(3000);
+    const vibrato = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const phase = 2 * Math.PI * 5 * ((i * HOP_MS) / 1000);
+      vibrato[i] = 0.5 * (1 - 0.5 * 0.5 * (1 - Math.cos(phase)));
+    }
+    check('5Hz vibrato at 50% depth produces no splits', hits(vibrato).length === 0,
+          `${hits(vibrato).length} split(s)`);
+
+    const quiet = envelope([
+      { level: 0.0005, ms: 300 }, { level: 0.00002, ms: 120 }, { level: 0.0005, ms: 300 },
+    ]);
+    check('below the noise floor, nothing splits',
+          detectReattacks(quiet, new Uint8Array(quiet.length), HOP_MS, DEFAULT_REATTACK_CONFIG).length === 0,
+          'peak never clears minPeakRmsFloor');
+
+    const four = envelope([
+      { level: 0.5, ms: 250 }, { level: 0.02, ms: 120 },
+      { level: 0.5, ms: 250 }, { level: 0.02, ms: 120 },
+      { level: 0.5, ms: 250 }, { level: 0.02, ms: 120 },
+      { level: 0.5, ms: 250 },
+    ]);
+    check('four articulations give three splits', hits(four).length === 3,
+          `${hits(four).length} split(s) at [${hits(four)}]`);
   }
 
   console.log('');
