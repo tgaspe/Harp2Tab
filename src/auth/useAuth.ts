@@ -31,8 +31,10 @@
  *    What *was* needed and is easy to miss: the hostname on Auth's authorized-domains list,
  *    and `https://harp2tab.com/__/auth/handler` registered as a redirect URI on the Google
  *    OAuth client (console-only; without it Google answers `redirect_uri_mismatch`).
- * 2. **The action-handler origin** (7-4, `src/app/auth/action.tsx`). Verification and
- *    reset links are minted against `authDomain`, so they change origin with it.
+ * 2. **The action-handler origin** (7-4, `src/app/auth/action.tsx`). **Still open** — and it
+ *    is not automatic: the action URL is its own console setting, unchanged by the
+ *    `authDomain` switch, still pointing at `harp2tab.firebaseapp.com/__/auth/action`. The
+ *    admin API rejects writing it (`EMAIL_TEMPLATE_UPDATE_NOT_ALLOWED`), so it is console-only.
  * 3. **The email sender domain** (7-4, SPF/DKIM). Until it is verified, mail comes from
  *    `noreply@<project>.firebaseapp.com` with Firebase's own wording.
  *

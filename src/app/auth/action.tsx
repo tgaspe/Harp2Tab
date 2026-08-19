@@ -15,23 +15,35 @@
  *
  * **It must be a real exported route.** `web.output: "static"` (app.json) means no server
  * rewrites unknown paths, so a client-only redirect target does not exist as HTML and a cold
- * load 404s. A Firebase Hosting rewrite is needed alongside it.
+ * load 404s. It is one: the export emits `dist/auth/action.html`, and `cleanUrls` in
+ * `firebase.json` serves it at `/auth/action`. No Hosting rewrite is involved — this comment
+ * used to claim one was needed, and it is not.
  *
- * TODO(domain): **this page is not what Firebase's emails currently link to.** Two separate
- * things have to change when the domain lands, and missing the second is easy:
+ * TODO(domain): **this page is not what Firebase's emails link to.** Of the two things that
+ * had to change, the first is done and the second is the easy one to miss:
  *
- *  1. `authDomain` in `.env`, plus the Hosting `__/auth` rewrite described above.
- *  2. **The action URL on each email template** — Firebase console → Authentication →
- *     Templates → the pencil beside "action URL". It defaults to
- *     `https://harp2tab.firebaseapp.com/__/auth/action`, which is Firebase's own generic
- *     handler page, so until it is repointed here every verification and reset link lands
- *     there instead. The flow *works* — the address really is confirmed — it just happens on
- *     a page that is not ours.
+ *  1. ~~`authDomain` in `.env`~~ — done 2026-08-19, it is `harp2tab.com`.
+ *  2. **The action URL** — Firebase console → Authentication → Templates → the pencil beside
+ *     "action URL", set to `https://harp2tab.com/auth/action`. It defaults to
+ *     `https://harp2tab.firebaseapp.com/__/auth/action`, Firebase's own generic handler page,
+ *     so until it is repointed here every verification and reset link lands there instead.
+ *     The flow *works* — the address really is confirmed — it just happens on a page that is
+ *     not ours.
  *
- * Switching also invalidates any link already sitting in someone's inbox. To exercise this
- * page before then, take the `oobCode` out of a real email's link and open
+ * **This one cannot be scripted.** `notification.sendEmail.callbackUri` is readable through
+ * the Identity Toolkit admin API but a `PATCH` is rejected with
+ * `EMAIL_TEMPLATE_UPDATE_NOT_ALLOWED` on a standard Firebase Auth project, so the console is
+ * the only route short of an Identity Platform upgrade. Read the current value with:
+ *
+ *   curl -sS -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+ *     -H 'x-goog-user-project: harp2tab' \
+ *     https://identitytoolkit.googleapis.com/admin/v2/projects/harp2tab/config
+ *
+ * Switching does **not** invalidate links already sitting in someone's inbox —
+ * `harp2tab.firebaseapp.com` stays live and stays an authorized domain, so old links keep
+ * resolving to the old page. An earlier version of this comment said otherwise. To exercise
+ * this page before the switch, take the `oobCode` out of a real email's link and open
  * `/auth/action?mode=verifyEmail&oobCode=…` here: the code is valid whichever page spends it.
- * See the block in `src/auth/useAuth.ts` for the full deferral.
  *
  * Wired at 7-4. The `oobCode` in the URL is consumed for real; `?state=` survives as a
  * dev-only override so the expired and success panels stay reviewable without having to let
