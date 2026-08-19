@@ -1,12 +1,41 @@
+/**
+ * `/settings` — what belongs to the *device*. `/profile` keeps what belongs to the *user*.
+ *
+ * Built on `SettingsSurface`'s primitives, same as `/profile`. It used to run the mobile
+ * grouped-card language — a rounded card per group, an icon on every row, a chevron on rows
+ * with nothing to drill into — laid out on web as a `flexWrap` grid of `flexBasis: 440`
+ * columns. Two things went wrong with that and both are visible at a glance on a desktop
+ * display: the cards have wildly different heights, so a five-row Transcription block ends
+ * up beside a one-row Legal block over a column of dead space; and the whole thing reads as
+ * a phone screen someone stretched, which is exactly what the note at the top of
+ * `SettingsSurface.tsx` was written about.
+ *
+ * Now it is one column of ruled sections, prose on the left and controls on the right, and
+ * the two account pages are the same page. Native gets the stacked version of the same
+ * primitives — see `SettingsSurface`.
+ *
+ * It also mounts `AppSidebar`, which it previously did not. Home and `/profile` both carry
+ * the rail, so reaching Settings from the gear used to make it disappear and then reappear
+ * one click later on Profile — chrome that comes and goes reads as the page jumping rather
+ * than as a route change. Web only, same as everywhere else the rail is used.
+ *
+ * The controls themselves did not change. Only two things about them did: every row's
+ * explanation moved from a `rowDesc` under the label into `FieldRow`'s `hint`, and the
+ * rows that were Pressables ending in a chevron (Recalibrate, Reset, Privacy, Profile) are
+ * now a named button on the right — the chevron was promising a sub-page that never existed.
+ */
+
 import React, { useMemo, useState } from 'react';
 import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { AppSidebar } from '@/components/AppSidebar';
 import { AuthModal } from '@/components/AuthModal';
 import { FeedbackModal } from '@/components/FeedbackModal';
 import { SliderInput } from '@/components/SliderInput';
 import { Toggle } from '@/components/Toggle';
+import { FieldRow, Section } from '@/components/SettingsSurface';
 import { useAuth } from '@/auth/useAuth';
 import { useTheme } from '@/hooks/useTheme';
 import { usePremium } from '@/hooks/usePremium';
@@ -71,152 +100,130 @@ export default function SettingsScreen() {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <View style={styles.container}>
+      <View style={styles.shell}>
+        {Platform.OS === 'web' && <AppSidebar />}
+        {/* `minWidth: 0` so the content column can actually shrink beside the fixed-width
+            rail instead of pushing the row wider than the viewport. */}
+        <View style={styles.shellMain}>
+          <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+            <View style={styles.container}>
 
-        {/* Nav — TopBar's back chevron covers this on web */}
-        {Platform.OS !== 'web' && (
-          <Pressable
-            onPress={() => router.back()}
-            style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.6 }]}
-            accessibilityRole="button"
-            accessibilityLabel="Go back"
-          >
-            <Ionicons name="arrow-back" size={28} color={theme.accent} />
-          </Pressable>
-        )}
-
-        {/* Title */}
-        <Text style={styles.title}>Settings</Text>
-
-        <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-        >
-
-          {/* No limit is being enforced, so there is nothing to upgrade past. */}
-          {FREE_TIER_ENABLED && !premium && (
-            <Pressable
-              onPress={() => router.push('/paywall')}
-              style={({ pressed, hovered }: any) => [
-                styles.premiumBanner,
-                (pressed || (Platform.OS === 'web' && hovered)) && { opacity: 0.85 },
-              ]}
-              accessibilityRole="button"
-              accessibilityLabel="Upgrade to Premium"
-            >
-              <Ionicons name="flash" size={24} color="#fff" />
-              <View style={styles.premiumBody}>
-                <Text style={styles.premiumTitle}>Upgrade to Premium</Text>
-                <Text style={styles.premiumDesc}>Unlock unlimited recordings and every export format</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color="#fff" />
-            </Pressable>
-          )}
-
-          <View style={styles.sectionsGrid}>
-
-            {/* ACCOUNT — the entry point to /profile.
-                Required, not a convenience: TopBar returns null on native (TopBar.tsx), so
-                without this row /profile is unreachable there. The split is deliberate —
-                /profile holds what belongs to the user, this screen holds what belongs to
-                the device. */}
-            <View style={styles.sectionBlock}>
-              <Text style={styles.sectionLabel}>ACCOUNT</Text>
-              <View style={styles.card}>
+              {/* Nav — TopBar carries the back arrow on web (see `BACK_ROUTES`), so this is
+                  native's only way out of the screen. */}
+              {Platform.OS !== 'web' && (
                 <Pressable
-                  onPress={() => router.push('/profile')}
+                  onPress={() => router.back()}
+                  style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.6 }]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Go back"
+                >
+                  <Ionicons name="arrow-back" size={28} color={theme.textSub} />
+                </Pressable>
+              )}
+
+              {/* Page header, matching `/profile`'s: name of the page, then the one thing a
+                  person needs to know before they change anything on it. */}
+              <View style={styles.pageHeader}>
+                <Text style={styles.pageTitle} accessibilityRole="header">Settings</Text>
+                <Text style={styles.pageMeta}>
+                  Everything here applies to this device only. Your account, plan and library
+                  live in your profile.
+                </Text>
+              </View>
+
+              {/* No limit is being enforced, so there is nothing to upgrade past. */}
+              {FREE_TIER_ENABLED && !premium && (
+                <Pressable
+                  onPress={() => router.push('/paywall')}
                   style={({ pressed, hovered }: any) => [
-                    styles.cardRow,
-                    styles.cardRowCursor,
-                    Platform.OS === 'web' && hovered && styles.cardRowHover,
-                    pressed && { opacity: 0.6 },
+                    styles.premiumBanner,
+                    (pressed || (Platform.OS === 'web' && hovered)) && styles.premiumBannerHover,
                   ]}
                   accessibilityRole="button"
-                  accessibilityLabel={auth.user ? 'Open your profile' : 'Sign in or create an account'}
+                  accessibilityLabel="Upgrade to Premium"
                 >
-                  <Ionicons
-                    name={auth.user ? 'person-circle-outline' : 'log-in-outline'}
-                    size={20}
-                    color={theme.textSub}
-                    style={styles.rowIcon}
-                  />
-                  <View style={styles.rowBody}>
-                    <Text style={styles.rowLabel}>{auth.user ? 'Profile' : 'Sign in'}</Text>
-                    <Text style={styles.rowDesc}>
-                      {auth.user
-                        ? auth.user.email
-                        : 'Keep your tabs and open them on any device you play on.'}
+                  <Ionicons name="flash" size={20} color={theme.accentDeep} />
+                  <View style={styles.premiumBody}>
+                    <Text style={styles.premiumTitle}>Upgrade to Premium</Text>
+                    <Text style={styles.premiumDesc}>
+                      Unlimited recordings and every export format.
                     </Text>
                   </View>
-                  <Ionicons name="chevron-forward" size={16} color={theme.textMuted} />
+                  <Text style={styles.premiumCta}>See plans</Text>
                 </Pressable>
-              </View>
-            </View>
+              )}
 
-            {/* AUDIO */}
-            <View style={styles.sectionBlock}>
-              <Text style={styles.sectionLabel}>AUDIO</Text>
-              <View style={styles.card}>
-                <View style={styles.cardRow}>
-                  <Ionicons name="mic-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
-                  <View style={styles.rowBody}>
-                    <Text style={styles.rowLabel}>Mic Sensitivity</Text>
-                    <Text style={styles.rowDesc}>Set how sensitive the mic is to your playing. Turn up to ignore ambient noise, turn down to catch quieter notes.</Text>
-                    <View style={styles.sliderWrapper}>
-                      <SliderInput
-                        value={micSensitivity}
-                        min={0}
-                        max={100}
-                        step={1}
-                        onChange={setMicSensitivity}
-                        formatLabel={(v) => `${v}%`}
-                      />
-                    </View>
-                  </View>
-                </View>
-                <View style={styles.separator} />
-                <Pressable
-                  onPress={() => router.push('/onboarding?skipPermission=true')}
-                  style={({ pressed, hovered }: any) => [
-                    styles.cardRow,
-                    styles.cardRowCursor,
-                    Platform.OS === 'web' && hovered && styles.cardRowHover,
-                    pressed && { opacity: 0.6 },
-                  ]}
-                  accessibilityRole="button"
-                  accessibilityLabel="Recalibrate microphone"
+              {/* ACCOUNT — the entry point to /profile.
+                  Required, not a convenience: TopBar returns null on native (TopBar.tsx), so
+                  without this row /profile is unreachable there. The split is deliberate —
+                  /profile holds what belongs to the user, this screen holds what belongs to
+                  the device. */}
+              <Section
+                first
+                title="Account"
+                description="Signing in keeps your tabs on every device you play on."
+              >
+                <FieldRow
+                  first
+                  label="Signed in"
+                  value={auth.user ? auth.user.email : 'Not signed in'}
+                  action={{
+                    label:   auth.user ? 'Open profile' : 'Sign in',
+                    onPress: () => router.push('/profile'),
+                  }}
+                />
+              </Section>
+
+              <Section
+                title="Microphone"
+                description="How Harp2Tab hears you. Set these once for the room you usually play in."
+              >
+                <FieldRow
+                  first
+                  label="Sensitivity"
+                  hint="Turn it up to ignore ambient noise, down to catch quieter notes."
                 >
-                  <Ionicons name="options-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
-                  <View style={styles.rowBody}>
-                    <Text style={styles.rowLabel}>Recalibrate Mic</Text>
-                    <Text style={styles.rowDesc}>Redo the microphone setup to match your current environment.</Text>
+                  <View style={styles.sliderSlot}>
+                    <SliderInput
+                      value={micSensitivity}
+                      min={0}
+                      max={100}
+                      step={1}
+                      onChange={setMicSensitivity}
+                      formatLabel={(v) => `${v}%`}
+                      accessibilityLabel="Microphone sensitivity"
+                    />
                   </View>
-                  <Ionicons name="chevron-forward" size={16} color={theme.textMuted} />
-                </Pressable>
-              </View>
-            </View>
+                </FieldRow>
 
-            {/* TRANSCRIPTION — web only, and not as a hedge: take retention and the neural
-                engine are both web-only today, so on native every control here would either
-                do nothing or offer a choice of one. */}
-            {Platform.OS === 'web' && (
-              <View style={styles.sectionBlock}>
-                <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>TRANSCRIPTION</Text>
-                <View style={styles.card}>
+                <FieldRow
+                  label="Calibration"
+                  hint="Redo the microphone setup to match your current environment."
+                  action={{
+                    label:   'Recalibrate',
+                    onPress: () => router.push('/onboarding?skipPermission=true'),
+                  }}
+                />
+              </Section>
+
+              {/* TRANSCRIPTION — web only, and not as a hedge: take retention and the neural
+                  engine are both web-only today, so on native every control here would either
+                  do nothing or offer a choice of one. */}
+              {Platform.OS === 'web' && (
+                <Section
+                  title="Transcription"
+                  description="How much of each take is kept in memory, and what turns it into tab."
+                >
                   {/* Only when there is a choice to make. One selectable engine means this
                       row is a radio group of one — a control that cannot change anything,
                       which reads as broken rather than as settled. It comes back on its own
                       the moment `SELECTABLE_ALGORITHM_IDS` widens. */}
-                  {engines.length > 1 && (<>
-                  <View style={styles.cardRow}>
-                    <Ionicons name="sparkles-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
-                    <View style={styles.rowBody}>
-                      <Text style={styles.rowLabel}>Default Engine</Text>
-                      <Text style={styles.rowDesc}>
-                        Which engine the picker opens on. You are still asked every time, so
-                        this is a starting point rather than a lock.
-                      </Text>
+                  {engines.length > 1 && (
+                    <FieldRow
+                      first
+                      label="Engine"
+                      hint="Which engine the picker opens on. You are still asked every time, so this is a starting point rather than a lock."
+                    >
                       {/* Segmented rather than the descriptive row list the picker uses —
                           the descriptions belong where the choice is actually being made. */}
                       <View style={styles.segmented}>
@@ -241,200 +248,131 @@ export default function SettingsScreen() {
                           );
                         })}
                       </View>
-                    </View>
-                  </View>
+                    </FieldRow>
+                  )}
 
-                  <View style={styles.separator} />
-                  </>)}
-
-                  <View style={styles.cardRow}>
-                    <Ionicons name="timer-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
-                    <View style={styles.rowBody}>
-                      <Text style={styles.rowLabel}>Maximum Take Length</Text>
-                      {/* The honest storage knob. Capture rate looks like one and is not:
-                          halving it halves the live frame rate, which pushes the detector's
-                          40ms confirm and 50ms dip windows below a single frame and degrades
-                          onset timing with nothing on screen connecting the two. Length is
-                          linear in both the audio and the model's output and changes no
-                          timing at all. */}
-                      <Text style={styles.rowDesc}>
-                        How much of a recording is kept in memory for re-transcription. Longer
-                        takes use more memory; recording itself is never cut short.
-                      </Text>
-                      <View style={styles.sliderWrapper}>
-                        <SliderInput
-                          value={maxTakeMinutes}
-                          min={MIN_TAKE_MINUTES}
-                          max={MAX_TAKE_MINUTES}
-                          step={1}
-                          onChange={setMaxTakeMinutes}
-                          formatLabel={(v) => `${v} min`}
-                          accessibilityLabel="Maximum take length in minutes"
-                        />
-                      </View>
-                    </View>
-                  </View>
-
-                  <View style={styles.separator} />
-
-                  <View style={styles.cardRow}>
-                    <Ionicons name="save-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
-                    <View style={styles.rowBody}>
-                      {/* Described as what it does for the user, never as a bit depth. This
-                          is the one control here where the framing is the whole point: it
-                          must not read as a quality setting, because it is not one — the
-                          quantization floor sits far below anything either engine reads. */}
-                      <Text style={styles.rowLabel}>Smaller Recordings In Memory</Text>
-                      <Text style={styles.rowDesc}>
-                        Keeps longer takes without using as much memory. Doesn&apos;t change
-                        how a recording sounds or how it is transcribed.
-                      </Text>
-                    </View>
-                    <Toggle
-                      value={compactTakes}
-                      onChange={setCompactTakes}
-                      accessibilityLabel="Keep recordings in memory more compactly"
-                    />
-                  </View>
-
-                  <View style={styles.separator} />
-
-                  <Pressable
-                    onPress={resetTranscriptionParams}
-                    style={({ pressed, hovered }: any) => [
-                      styles.cardRow,
-                      styles.cardRowCursor,
-                      Platform.OS === 'web' && hovered && styles.cardRowHover,
-                      pressed && { opacity: 0.6 },
-                    ]}
-                    accessibilityRole="button"
-                    accessibilityLabel="Reset transcription settings to their defaults"
+                  {/* The honest storage knob. Capture rate looks like one and is not:
+                      halving it halves the live frame rate, which pushes the detector's
+                      40ms confirm and 50ms dip windows below a single frame and degrades
+                      onset timing with nothing on screen connecting the two. Length is
+                      linear in both the audio and the model's output and changes no
+                      timing at all. */}
+                  <FieldRow
+                    first={engines.length <= 1}
+                    label="Take length"
+                    hint="How much of a recording is kept in memory for re-transcription. Longer takes use more memory; recording itself is never cut short."
                   >
-                    <Ionicons name="refresh-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
-                    <View style={styles.rowBody}>
-                      <Text style={styles.rowLabel}>Reset Transcription Settings</Text>
-                      {/* Necessary because the tuning screen saves per engine and those
-                          values persist silently across sessions — without this, someone who
-                          tuned themselves into a corner three takes ago has no way back. */}
-                      <Text style={styles.rowDesc}>
-                        Puts every engine&apos;s tuning back to its defaults.
-                      </Text>
+                    <View style={styles.sliderSlot}>
+                      <SliderInput
+                        value={maxTakeMinutes}
+                        min={MIN_TAKE_MINUTES}
+                        max={MAX_TAKE_MINUTES}
+                        step={1}
+                        onChange={setMaxTakeMinutes}
+                        formatLabel={(v) => `${v} min`}
+                        accessibilityLabel="Maximum take length in minutes"
+                      />
                     </View>
-                  </Pressable>
-                </View>
-              </View>
-            )}
+                  </FieldRow>
 
-            {/* APPEARANCE */}
-            <View style={styles.sectionBlock}>
-              <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>APPEARANCE</Text>
-              <View style={styles.card}>
-                <View style={styles.cardRow}>
-                  <Ionicons name="contrast-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
-                  <View style={styles.rowBody}>
-                    <Text style={styles.rowLabel}>Theme</Text>
-                    <Text style={styles.rowDesc}>Choose display mode or follow system</Text>
-                    <View style={styles.segmented}>
-                      {THEME_SEGMENTS.map(({ value, label }) => {
-                        const active = themeOverride === value;
-                        return (
-                          <Pressable
-                            key={value}
-                            onPress={() => setThemeOverride(value)}
-                            style={[styles.segment, active && styles.segmentActive]}
-                            accessibilityRole="radio"
-                            accessibilityState={{ checked: active }}
-                            accessibilityLabel={`${label} theme`}
-                          >
-                            <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
-                              {label}
-                            </Text>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
+                  {/* Described as what it does for the user, never as a bit depth. This is the
+                      one control here where the framing is the whole point: it must not read as
+                      a quality setting, because it is not one — the quantization floor sits far
+                      below anything either engine reads. */}
+                  <FieldRow
+                    label="Storage"
+                    hint="Keep longer takes without using as much memory. Doesn't change how a recording sounds or how it is transcribed."
+                    control={
+                      <Toggle
+                        value={compactTakes}
+                        onChange={setCompactTakes}
+                        accessibilityLabel="Keep recordings in memory more compactly"
+                      />
+                    }
+                  />
+
+                  {/* Necessary because the tuning screen saves per engine and those values
+                      persist silently across sessions — without this, someone who tuned
+                      themselves into a corner three takes ago has no way back. */}
+                  <FieldRow
+                    label="Tuning"
+                    hint="Puts every engine's tuning back to its defaults."
+                    action={{ label: 'Reset', onPress: resetTranscriptionParams }}
+                  />
+                </Section>
+              )}
+
+              <Section
+                title="Appearance"
+                description="How the app looks on this device. Themes are local, so each device you play on keeps its own."
+              >
+                <FieldRow first label="Theme">
+                  <View style={styles.segmented}>
+                    {THEME_SEGMENTS.map(({ value, label }) => {
+                      const active = themeOverride === value;
+                      return (
+                        <Pressable
+                          key={value}
+                          onPress={() => setThemeOverride(value)}
+                          style={[styles.segment, active && styles.segmentActive]}
+                          accessibilityRole="radio"
+                          accessibilityState={{ checked: active }}
+                          accessibilityLabel={`${label} theme`}
+                        >
+                          <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
+                            {label}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
                   </View>
-                </View>
-              </View>
-            </View>
+                </FieldRow>
+              </Section>
 
-            {/* SUPPORT — the section shows on both platforms; each row picks its own.
-                Rating is a Play Store deeplink and means nothing on web. Feedback is the
-                mirror image: it writes to Firestore as a signed-in user, and native has
-                neither accounts nor Firestore until Phase 15 (`sync/feedback.ts`). Neither
-                row is a stub on the platform it skips — it is simply absent there. */}
-            <View style={styles.sectionBlock}>
-              <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>SUPPORT</Text>
-              <View style={styles.card}>
-
-                {Platform.OS === 'web' && (
-                  <Pressable
-                    onPress={handleFeedback}
-                    style={({ pressed, hovered }: any) => [
-                      styles.cardRow,
-                      styles.cardRowCursor,
-                      hovered && styles.cardRowHover,
-                      pressed && { opacity: 0.6 },
-                    ]}
-                    accessibilityRole="button"
-                    accessibilityLabel="Send feedback, report a bug, or suggest a feature"
-                  >
-                    <Ionicons name="chatbubble-ellipses-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
-                    <View style={styles.rowBody}>
-                      <Text style={styles.rowLabel}>Send Feedback</Text>
-                      <Text style={styles.rowDesc}>Report a bug or suggest a feature — it goes straight to the developer.</Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={16} color={theme.textMuted} />
-                  </Pressable>
+              {/* SUPPORT — the section shows on both platforms; each row picks its own.
+                  Rating is a Play Store deeplink and means nothing on web. Feedback is the
+                  mirror image: it writes to Firestore as a signed-in user, and native has
+                  neither accounts nor Firestore until Phase 15 (`sync/feedback.ts`). Neither
+                  row is a stub on the platform it skips — it is simply absent there. */}
+              <Section
+                title="Support"
+                description="Something broken, or something missing? It reaches the developer directly."
+              >
+                {Platform.OS === 'web' ? (
+                  <FieldRow
+                    first
+                    label="Feedback"
+                    hint="Report a bug or suggest a feature."
+                    action={{ label: 'Send feedback', onPress: handleFeedback }}
+                  />
+                ) : (
+                  <FieldRow
+                    first
+                    label="Rating"
+                    hint="Enjoying Harp2Tab? Leave a review on the Play Store."
+                    action={{ label: 'Rate the app', onPress: handleRate }}
+                  />
                 )}
+              </Section>
 
-                {Platform.OS !== 'web' && (
-                  <Pressable
-                    onPress={handleRate}
-                    style={({ pressed }) => [styles.cardRow, pressed && { opacity: 0.6 }]}
-                    accessibilityRole="link"
-                    accessibilityLabel="Rate the app on the Play Store"
-                  >
-                    <Ionicons name="star-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
-                    <View style={styles.rowBody}>
-                      <Text style={styles.rowLabel}>Rate the App</Text>
-                      <Text style={styles.rowDesc}>Enjoying Harp2Tab? Leave us a review on the Play Store.</Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={16} color={theme.textMuted} />
-                  </Pressable>
-                )}
+              <Section
+                title="Legal"
+                description="What Harp2Tab collects, and what it does with it."
+              >
+                <FieldRow
+                  first
+                  label="Privacy"
+                  hint="How your recordings and account data are handled."
+                  action={{
+                    label:   'Read policy',
+                    onPress: () => Linking.openURL('https://tgaspe.github.io/harp2tab-privacy/'),
+                  }}
+                />
+              </Section>
 
-              </View>
             </View>
-
-            {/* LEGAL */}
-            <View style={styles.sectionBlock}>
-              <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>LEGAL</Text>
-              <View style={styles.card}>
-                <Pressable
-                  onPress={() => Linking.openURL('https://tgaspe.github.io/harp2tab-privacy/')}
-                  style={({ pressed, hovered }: any) => [
-                    styles.cardRow,
-                    styles.cardRowCursor,
-                    Platform.OS === 'web' && hovered && styles.cardRowHover,
-                    pressed && { opacity: 0.6 },
-                  ]}
-                  accessibilityRole="link"
-                  accessibilityLabel="Privacy Policy"
-                >
-                  <Ionicons name="shield-checkmark-outline" size={20} color={theme.textSub} style={styles.rowIcon} />
-                  <View style={styles.rowBody}>
-                    <Text style={styles.rowLabel}>Privacy Policy</Text>
-                    <Text style={styles.rowDesc}>How we handle your data</Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={16} color={theme.textMuted} />
-                </Pressable>
-              </View>
-            </View>
-
-          </View>
-
-        </ScrollView>
+          </ScrollView>
+        </View>
       </View>
 
       {/* Guarded on `auth.user` rather than mounted always: the modal takes a non-null user
@@ -459,120 +397,105 @@ export default function SettingsScreen() {
 }
 
 function createStyles(t: Theme) {
+  const isWeb = Platform.OS === 'web';
   return StyleSheet.create({
-    safe:      { flex: 1, backgroundColor: t.bg },
+    safe:   { flex: 1, backgroundColor: t.bg },
+    // Rail and page content as flex-row siblings, with only the content side scrolling, so
+    // the rail is genuinely full page height rather than as tall as its own contents. Same
+    // shell as `/profile` and Home's dashboard.
+    shell:     { flex: 1, flexDirection: 'row' },
+    shellMain: { flex: 1, minWidth: 0 },
+    scroll: { flexGrow: 1 },
     container: {
       flex: 1,
-      ...webMaxWidth(WEB_CONTENT_WIDTH.wide),
-      paddingHorizontal: 24,
-      paddingTop: Platform.OS === 'web' ? WEB_SCREEN_PADDING_TOP : 16,
-      paddingBottom: Platform.OS === 'web' ? WEB_SCREEN_PADDING_BOTTOM : 24,
-      gap: 12,
+      // `full`, not `wide` — matching `/profile`, and for the same reason: every `Section`
+      // nests a fixed 280px prose column, so the container needs that much more room than
+      // a single-column screen to leave the controls a usable width.
+      ...webMaxWidth(WEB_CONTENT_WIDTH.full),
+      paddingHorizontal: isWeb ? 40 : 24,
+      paddingTop:    isWeb ? WEB_SCREEN_PADDING_TOP : 16,
+      paddingBottom: isWeb ? WEB_SCREEN_PADDING_BOTTOM : 24,
     },
-    backBtn:  { alignSelf: 'flex-start', padding: 4 },
-    title: {
+    backBtn: { alignSelf: 'flex-start', padding: 4, marginBottom: 4 },
+
+    pageHeader: {
+      gap:               6,
+      paddingBottom:     20,
+      borderBottomWidth: 1,
+      borderBottomColor: t.border,
+    },
+    pageTitle: {
       fontSize:      FONT.xl,
       fontFamily:    SpaceGrotesk.bold,
-      color:         t.accent,
+      // `textPrimary`, not `accent`. The old cyan title was the only page heading in the app
+      // rendered in the accent, which made Settings look like a different product from the
+      // Profile page one click away.
+      color:         t.textPrimary,
       letterSpacing: -0.5,
     },
-    scroll:        { flex: 1 },
-    scrollContent: { paddingBottom: 8, gap: 6 },
-
-    sectionLabel: {
-      fontSize:      FONT.xs,
-      fontFamily:    Poppins.bold,
-      color:         t.textMuted,
-      letterSpacing: 1.4,
+    pageMeta: {
+      fontSize:   FONT.sm,
+      fontFamily: Poppins.regular,
+      color:      t.textSub,
+      lineHeight: 20,
+      maxWidth:   560,
     },
-    sectionLabelSpaced: { marginTop: 12 },
-    sectionsGrid: Platform.select({
-      web: { flexDirection: 'row', flexWrap: 'wrap', gap: 16 },
-      default: {},
-    }) as ViewStyle,
-    sectionBlock: Platform.select({
-      web: { flexBasis: 440, flexGrow: 1 },
-      default: {},
-    }) as ViewStyle,
 
+    // A tinted strip, not the solid accent slab it was. On a page whose only other filled
+    // surfaces are hairline-bordered rows, a full-bleed cyan block with white text was the
+    // loudest thing on screen by a wide margin — and it is an offer, not an alert.
     premiumBanner: {
-      flexDirection:   'row',
-      alignItems:      'center',
-      gap:             14,
-      backgroundColor: t.accent,
-      borderRadius:    14,
-      paddingVertical: 18,
-      paddingHorizontal: 18,
-      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+      flexDirection:     'row',
+      alignItems:        'center',
+      gap:               12,
+      marginTop:         20,
+      backgroundColor:   t.accentSoft,
+      borderWidth:       1,
+      borderColor:       t.accent,
+      borderRadius:      12,
+      paddingVertical:   14,
+      paddingHorizontal: 16,
+      ...(isWeb ? { cursor: 'pointer' } : null),
     } as ViewStyle,
+    premiumBannerHover: { backgroundColor: t.surfaceAlt },
     premiumBody:  { flex: 1, gap: 2 },
     premiumTitle: {
-      fontSize:   FONT.md,
-      fontFamily: Poppins.bold,
-      color:      '#fff',
+      fontSize:   FONT.sm,
+      fontFamily: Poppins.semiBold,
+      color:      t.textPrimary,
     },
     premiumDesc: {
       fontSize:   FONT.xs,
       fontFamily: Poppins.regular,
-      color:      'rgba(255,255,255,0.85)',
-      lineHeight: 16,
+      color:      t.textSub,
+      lineHeight: 17,
+    },
+    premiumCta: {
+      fontSize:   FONT.sm,
+      fontFamily: Poppins.semiBold,
+      color:      t.accentDeep,
     },
 
-    card: {
-      backgroundColor: t.surface,
-      borderRadius:    14,
-      borderWidth:     1,
-      borderColor:     t.border,
-      overflow:        'hidden',
-    },
-    cardRow: {
-      flexDirection:   'row',
-      alignItems:      'flex-start',
-      paddingVertical: 14,
-      paddingHorizontal: 16,
-      gap:             12,
-    },
-    // Only for cardRow instances that are actually Pressable (not the plain
-    // View rows like Mic Sensitivity) — keeps cursor:pointer semantically
-    // accurate.
-    cardRowCursor: Platform.OS === 'web' ? ({ cursor: 'pointer' } as ViewStyle) : {},
-    // Real hover tint on web instead of dimming with opacity — matches the edit screen's
-    // toolbar language (state = color change, not fade), and reads clearly against a row
-    // that otherwise looks static.
-    cardRowHover: { backgroundColor: t.surfaceAlt },
-    rowIcon:   { marginTop: 2 },
-    rowBody:   { flex: 1, gap: 4 },
-    rowLabel: {
-      fontSize:   FONT.base,
-      fontFamily: Poppins.semiBold,
-      color:      t.textPrimary,
-    },
-    rowLabelMuted: {
-      fontSize:   FONT.base,
-      fontFamily: Poppins.semiBold,
-      color:      t.textMuted,
-    },
-    rowDesc: {
-      fontSize:   FONT.xs,
-      fontFamily: Poppins.regular,
-      color:      t.textMuted,
-      lineHeight: 16,
-    },
-    sliderWrapper: { marginTop: 10 },
-
+    // Controls stop well short of the body column's full width. A slider stretched across
+    // 700px moves a whole percent per pixel-ish of travel and reads as a progress bar; a
+    // two-item segmented control that wide reads as a pair of buttons.
+    sliderSlot: { maxWidth: 340, alignSelf: 'stretch' },
     segmented: {
       flexDirection:   'row',
+      alignSelf:       'flex-start',
+      minWidth:        220,
       backgroundColor: t.surfaceAlt,
       borderRadius:    10,
       padding:         3,
-      marginTop:       10,
     },
     segment: {
-      flex:            1,
-      paddingVertical: 8,
-      alignItems:      'center',
-      borderRadius:    8,
-    },
+      flex:              1,
+      paddingVertical:   7,
+      paddingHorizontal: 18,
+      alignItems:        'center',
+      borderRadius:      8,
+      ...(isWeb ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
     segmentActive: { backgroundColor: t.accent },
     segmentText: {
       fontSize:   FONT.sm,
@@ -580,11 +503,5 @@ function createStyles(t: Theme) {
       color:      t.textSub,
     },
     segmentTextActive: { color: '#fff' },
-
-    separator: {
-      height:          1,
-      backgroundColor: t.separator,
-      marginLeft:      48,
-    },
   });
 }

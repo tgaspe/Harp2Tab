@@ -1,10 +1,15 @@
 /**
  * Layout primitives for account-style settings pages — the web idiom, not the mobile one.
  *
- * The distinction is deliberate and it is the whole point of this file. `settings.tsx` uses
- * the iOS grouped-table-view language: rounded cards grouping rows, an icon on every row, a
- * chevron implying a drill-down, uppercase micro-labels floating above each group. That is
- * correct on a phone and reads as a stretched phone screen on a 1440px display.
+ * The distinction is deliberate and it is the whole point of this file. The language these
+ * replace is the iOS grouped-table-view one: rounded cards grouping rows, an icon on every
+ * row, a chevron implying a drill-down, uppercase micro-labels floating above each group.
+ * That is correct on a phone and reads as a stretched phone screen on a 1440px display.
+ *
+ * `/profile` was built on these from the start. `/settings` was the holdout and was moved
+ * over on 2026-08-19 — it had been the card language poured into a two-column `flexWrap`
+ * grid, which gave a five-row Transcription card sitting beside a one-row Legal card and a
+ * column of ragged whitespace between them. Both account pages now speak one language.
  *
  * What these primitives do instead, following the Tailwind UI / Stripe settings grid:
  *
@@ -62,20 +67,53 @@ interface FieldRowProps {
   value?:  string;
   /** Rendered instead of `value` when the row needs more than text. */
   children?: React.ReactNode;
+  /**
+   * One sentence under the label saying what the control does.
+   *
+   * For rows that hold a *control* rather than a value. `/profile` is label/value data —
+   * "Email: you@example.com" needs no gloss, and the muted label beside a primary value is
+   * the right emphasis there. A slider or a toggle inverts that: the label is the thing
+   * being named and the row is meaningless without a sentence of explanation. Passing a
+   * hint switches the row to that reading, which is why it also restyles the label.
+   *
+   * Not a place to restate the label. If the sentence only expands the noun, drop it.
+   */
+  hint?:   string;
+  /**
+   * A control pinned to the right of the row — a toggle, a status chip.
+   *
+   * Separate from `children` (which sits in the value column, under the hint) because a
+   * toggle belongs at the end of the row it governs, in the same column as `action`'s
+   * button. One row never needs both.
+   */
+  control?: React.ReactNode;
   action?: { label: string; onPress: () => void; destructive?: boolean };
   /** Suppresses the hairline above. */
   first?:  boolean;
 }
 
-export function FieldRow({ label, value, children, action, first }: FieldRowProps) {
+export function FieldRow({
+  label, value, children, hint, control, action, first,
+}: FieldRowProps) {
   const theme  = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
+  // A row carrying a hint is two or three lines tall; centring it would float the label
+  // and the button against the middle of a paragraph.
+  const tall = !!hint;
   return (
-    <View style={[styles.fieldRow, !first && styles.fieldRowRuled]}>
-      <Text style={styles.fieldLabel}>{label}</Text>
+    <View style={[
+      styles.fieldRow,
+      tall && styles.fieldRowTall,
+      !first && styles.fieldRowRuled,
+    ]}>
+      <Text style={[styles.fieldLabel, tall && styles.fieldLabelLead]}>{label}</Text>
       <View style={styles.fieldValue}>
-        {children ?? <Text style={styles.fieldValueText} numberOfLines={1}>{value}</Text>}
+        {!!hint && <Text style={styles.fieldHint}>{hint}</Text>}
+        {children ?? (value !== undefined
+          ? <Text style={styles.fieldValueText} numberOfLines={1}>{value}</Text>
+          : null)}
       </View>
+      {control}
       {!!action && (
         <Button
           label={action.label}
@@ -223,6 +261,7 @@ function createStyles(t: Theme) {
       paddingVertical: 12,
     },
     fieldRowRuled: { borderTopWidth: 1, borderTopColor: t.separator },
+    fieldRowTall:  { alignItems: 'flex-start', paddingVertical: 16 },
     fieldLabel: {
       // Fixed so the value column aligns down the whole pane — the alignment is most of what
       // makes this read as a data table rather than a list of rows.
@@ -231,11 +270,28 @@ function createStyles(t: Theme) {
       fontFamily: Poppins.regular,
       color:      t.textMuted,
     },
-    fieldValue: { flex: 1, minWidth: 0 },
+    // See `hint` on FieldRowProps: on a control row the label is the primary text, because
+    // there is no value beside it to be primary instead.
+    fieldLabelLead: {
+      fontFamily: Poppins.medium,
+      color:      t.textPrimary,
+      // Optically level with the hint's first line, which sits on a 17px leading.
+      paddingTop: 1,
+    },
+    fieldValue: { flex: 1, minWidth: 0, gap: 12 },
     fieldValueText: {
       fontSize:   FONT.sm,
       fontFamily: Poppins.medium,
       color:      t.textPrimary,
+    },
+    fieldHint: {
+      fontSize:   FONT.xs,
+      fontFamily: Poppins.regular,
+      color:      t.textMuted,
+      lineHeight: 17,
+      // Same reason as `/profile`'s `note`: the body column is wide, and prose is the one
+      // thing that must not use all of it.
+      maxWidth:   560,
     },
 
     btn: {

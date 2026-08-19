@@ -1,4 +1,5 @@
 import { ActionSheetModal } from '@/components/ActionSheetModal';
+import { CardMenu } from '@/components/CardMenu';
 import { AppSidebar } from '@/components/AppSidebar';
 import { KeyGrid } from '@/components/KeyGrid';
 import { RatingModal } from '@/components/RatingModal';
@@ -152,6 +153,19 @@ function ProjectCard({ project, onOpen, onDelete, theme, styles }: {
   // Whole-card hover, for the same reason as RecordingCard's — see the note there.
   const [hovered, setHovered] = useState(false);
 
+  const deleteButton = (
+    <Pressable
+      onPress={() => setConfirming((c) => !c)}
+      style={styles.projectCardDelete}
+      hitSlop={6}
+      accessibilityRole="button"
+      accessibilityLabel={`Delete project ${project.title}`}
+      accessibilityState={{ expanded: confirming }}
+    >
+      <Ionicons name="trash-outline" size={14} color={theme.textMuted} />
+    </Pressable>
+  );
+
   return (
     <View
       style={[styles.projectCard, hovered && styles.projectCardHovered]}
@@ -165,7 +179,7 @@ function ProjectCard({ project, onOpen, onDelete, theme, styles }: {
         accessibilityLabel={`Open ${project.title} in the MIDI Studio`}
       >
         <View style={styles.projectCardIconWrap}>
-          <Ionicons name="layers-outline" size={28} color={theme.accent} />
+          <Ionicons name="layers-outline" size={28} color={theme.project} />
         </View>
         <View style={styles.projectCardText}>
           <Text style={styles.projectCardTitle} numberOfLines={1}>{project.title}</Text>
@@ -182,26 +196,41 @@ function ProjectCard({ project, onOpen, onDelete, theme, styles }: {
           </Text>
         </View>
       </Pressable>
-      <Pressable
-        onPress={() => setConfirming(true)}
-        style={styles.projectCardDelete}
-        hitSlop={6}
-        accessibilityRole="button"
-        accessibilityLabel={`Delete project ${project.title}`}
-      >
-        <Ionicons name="trash-outline" size={14} color={theme.textMuted} />
-      </Pressable>
-
-      {/* Same sheet, same wording shape as RecordingCard's delete — the two destructive
-          actions on this page should cost the same. */}
-      <ActionSheetModal
-        visible={confirming}
-        title={`Delete "${project.title}"? This can't be undone.`}
-        options={[
-          { label: 'Delete', style: 'destructive', onPress: onDelete },
-        ]}
-        onClose={() => setConfirming(false)}
-      />
+      {/* Same confirmation as RecordingCard's delete — the two destructive actions on this
+          page should cost the same. `straightToConfirm` because the trash button already
+          named the action: routing it through a one-row menu whose only row repeats the
+          icon just clicked adds a step and says nothing. The trigger sits inside CardMenu so
+          the portaled panel has a node to measure against. */}
+      {Platform.OS === 'web' ? (
+        <CardMenu
+          open={confirming}
+          onClose={() => setConfirming(false)}
+          straightToConfirm
+          items={[{
+            icon:        'trash-outline',
+            label:       'Delete',
+            destructive: true,
+            confirm: {
+              title:        'Delete this project?',
+              body:         `"${project.title}" and its tracks will be removed. This can't be undone.`,
+              confirmLabel: 'Delete',
+            },
+            onPress: onDelete,
+          }]}
+        >
+          {deleteButton}
+        </CardMenu>
+      ) : (<>
+        {deleteButton}
+        <ActionSheetModal
+          visible={confirming}
+          title={`Delete "${project.title}"? This can't be undone.`}
+          options={[
+            { label: 'Delete', style: 'destructive', onPress: onDelete },
+          ]}
+          onClose={() => setConfirming(false)}
+        />
+      </>)}
     </View>
   );
 }
@@ -719,11 +748,21 @@ export default function KeySelectionScreen() {
                   accessibilityRole="button"
                   accessibilityLabel={`Resume ${resumeTarget.kind === 'tab' ? resumeTarget.rec.title : resumeTarget.project.title}`}
                 >
+                  {/* The chip takes the colours of whichever card this points at: cyan for a
+                      recording, yellow for a MIDI project, matching `RecordingCard`'s thumb
+                      and `ProjectCard`'s tile. The glyph already said which kind it was; the
+                      colour said "recording" either way.
+
+                      The tint is a fill *inside* the chip rather than the chip's own
+                      background because `projectSoft` is translucent — set directly it would
+                      blend with the band's `accentSoft` and come out muddy green. Over an
+                      opaque `bg` chip it composites to exactly the project card's tile. */}
                   <View style={styles.resumeIconWrap}>
+                    {resumeTarget.kind === 'project' && <View style={styles.resumeIconTint} />}
                     <Ionicons
                       name={resumeTarget.kind === 'tab' ? 'musical-notes-outline' : 'layers-outline'}
                       size={18}
-                      color={theme.accent}
+                      color={resumeTarget.kind === 'tab' ? theme.accent : theme.project}
                     />
                   </View>
                   <View style={styles.resumeText}>
@@ -1078,11 +1117,15 @@ function createStyles(t: Theme) {
     // bullet point, while the *shorter* recording card carried a 56px tile. At 62 it is now
     // the larger of the two, which suits a project being the upstream object; the glyph went
     // 22 → 28 with it, since scaling the tile alone just adds padding around the same mark.
+    // Yellow, where RecordingCard's tile beside it is the accent cyan. The two objects in
+    // this library are different things — a project is a MIDI arrangement you edit, a
+    // recording is a take you played — and until now the only thing distinguishing their
+    // cards at a glance was the glyph inside an identically-tinted square.
     projectCardIconWrap: {
       width: 62,
       height: 62,
       borderRadius: RADIUS.sm,
-      backgroundColor: t.accentSoft,
+      backgroundColor: t.projectSoft,
       alignItems: 'center',
       justifyContent: 'center',
     },
@@ -1269,7 +1312,10 @@ function createStyles(t: Theme) {
     resumeIconWrap: {
       width: 38, height: 38, borderRadius: RADIUS.sm,
       backgroundColor: t.bg, alignItems: 'center', justifyContent: 'center',
+      // So the square tint below is clipped to the chip's corners.
+      overflow: 'hidden',
     },
+    resumeIconTint: { ...StyleSheet.absoluteFillObject, backgroundColor: t.projectSoft },
     resumeText:  { flex: 1, minWidth: 0, gap: 2 },
     resumeLabel: { ...GROUP_LABEL, color: t.accentDeep },
     resumeTitle: { fontSize: FONT.base, fontFamily: Poppins.semiBold, color: t.textPrimary },

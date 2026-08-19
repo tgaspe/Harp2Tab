@@ -38,6 +38,14 @@ export interface Theme {
   warning:     string;
   warningDim:  string;
   warningSoft: string;
+  /** The MIDI-project mark — the glyph in a project card's tile, and `projectSoft` the tile
+   *  behind it. A yellow of its own rather than `warning`, which is already spoken for twice
+   *  on the library page: the favourite star (`RecordingCard`) and the import alert. Sharing
+   *  the token would have put a project tile and a favourited recording's star in the same
+   *  amber a few pixels apart, and left the two impossible to retune separately. Pulled
+   *  toward yellow and away from `warning`'s orange for the same reason. */
+  project:     string;
+  projectSoft: string;
   textPrimary: string;
   textSub:     string;
   textMuted:   string;
@@ -88,6 +96,10 @@ export const darkTheme: Theme = {
   warning:     '#F59E0B',
   warningDim:  '#D97706',
   warningSoft: 'rgba(245,158,11,0.14)',
+  // Full-strength yellow-400: on a dark tile it clears 7:1, so dark mode can afford the
+  // literal yellow that light mode cannot.
+  project:     '#FACC15',
+  projectSoft: 'rgba(250,204,21,0.14)',
   textPrimary: '#F2F2F4',
   textSub:     '#B0B0BA',
   // Was #3F3F46 — only 1.7:1 on cardBg, i.e. effectively invisible. This is a
@@ -125,6 +137,16 @@ export const lightTheme: Theme = {
   warning:     '#F59E0B',
   warningDim:  '#D97706',
   warningSoft: 'rgba(245,158,11,0.08)',
+  // The same yellow-400 dark mode uses, by explicit request — the two themes render this
+  // glyph identically. Note what that costs on a white page: against `projectSoft` below it
+  // measures 1.4:1, so the mark reads as a shape in the tile's own colour rather than as an
+  // icon drawn on it. Deepening it (yellow-700 `#A16207` gets 4.7:1) or darkening the tile
+  // under it are the two ways back if the glyph turns out to be too faint to find.
+  project:     '#FACC15',
+  // Carried heavier than the other `*Soft` values here (0.18 vs 0.08). At light mode's usual
+  // weight yellow lands on #FFFDF5, which is white with a rumour of colour — the one hue in
+  // the palette that needs more of itself to register at all.
+  projectSoft: 'rgba(250,204,21,0.18)',
   textPrimary: '#09090B',
   textSub:     '#52525B',
   textMuted:   '#A1A1AA',

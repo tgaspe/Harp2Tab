@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/hooks/useTheme';
 import { FONT } from '@/constants/keys';
@@ -7,6 +7,7 @@ import { Poppins } from '@/constants/fonts';
 import { RADIUS } from '@/constants/ui';
 import { NameRecordingModal } from '@/components/NameRecordingModal';
 import { ActionSheetModal } from '@/components/ActionSheetModal';
+import { CardMenu } from '@/components/CardMenu';
 import type { Theme } from '@/theme';
 import type { TabRecording } from '@/types';
 
@@ -52,6 +53,53 @@ export function RecordingCard({
   const [hovered, setHovered] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  /** The in-progress title while renaming on web. Seeded from the recording each time the
+   *  field opens, so abandoning an edit and reopening starts from the saved name. */
+  const [draft, setDraft] = useState(recording.title);
+
+  /** Web renames in place on the card; native opens `NameRecordingModal`. */
+  const inlineRename = isWeb && renaming;
+
+  function beginRename() {
+    setDraft(recording.title);
+    setRenaming(true);
+  }
+
+  /** Empty or unchanged is a no-op rather than an error — there is nothing to tell someone
+   *  who tabbed out of a field they did not mean to open. */
+  function commitRename() {
+    const next = draft.trim();
+    if (next && next !== recording.title) onRename(recording.id, next);
+    setRenaming(false);
+  }
+
+  const menuItems = [
+    { icon: 'create-outline' as const, label: 'Rename', onPress: beginRename },
+    {
+      icon: 'trash-outline' as const,
+      label: 'Delete',
+      destructive: true,
+      confirm: {
+        title:        'Delete this recording?',
+        body:         `"${recording.title}" and its tab will be removed. This can't be undone.`,
+        confirmLabel: 'Delete',
+      },
+      onPress: () => onDelete(recording.id),
+    },
+  ];
+
+  const moreButton = (
+    <Pressable
+      onPress={() => setMenuOpen((o) => !o)}
+      style={styles.moreBtn}
+      hitSlop={8}
+      accessibilityRole="button"
+      accessibilityLabel={`More options for ${recording.title}`}
+      accessibilityState={{ expanded: menuOpen }}
+    >
+      <Ionicons name="ellipsis-horizontal" size={20} color={theme.textMuted} />
+    </Pressable>
+  );
 
   return (
     <>
@@ -76,25 +124,60 @@ export function RecordingCard({
           <Ionicons name={isPlaying ? 'pause-circle' : 'play-circle'} size={30} color={theme.accent} />
         </Pressable>
 
-        <Pressable
-          onPress={() => onPress(recording)}
-          style={({ pressed }: any) => [
-            styles.touchArea,
-            pressed && styles.cardPressed,
-          ]}
-          accessibilityRole="button"
-          accessibilityLabel={`Open recording ${recording.title}`}
-        >
-          <View style={styles.info}>
-            <Text style={styles.title} numberOfLines={1}>{recording.title}</Text>
-            <Text style={styles.meta} numberOfLines={1}>
-              {recording.harmonicaType === 'chromatic' ? '12-Chromatic' : 'Diatonic'}
-              {' · '}{formatDuration(recording.duration)}
-              {' · '}{recording.tabNotes.length} note{recording.tabNotes.length !== 1 ? 's' : ''} detected
-            </Text>
-            <Text style={styles.date} numberOfLines={1}>{formatDate(recording.createdAt)}</Text>
+        {/* Two shapes for the same block. While renaming it is a plain View: the field has
+            to sit *outside* the open-recording Pressable, because that Pressable is a real
+            <button> on web and an <input> inside a <button> is invalid HTML — the same
+            constraint the note at the top of this component describes. Dropping the wrapper
+            also stops a click meant for the text field from opening the recording. */}
+        {inlineRename ? (
+          <View style={styles.touchArea}>
+            <View style={styles.info}>
+              <TextInput
+                value={draft}
+                onChangeText={setDraft}
+                autoFocus
+                selectTextOnFocus
+                style={styles.titleInput}
+                onSubmitEditing={commitRename}
+                onBlur={commitRename}
+                // Escape abandons the edit. `onKeyPress` is the only place react-native-web
+                // surfaces it — `onSubmitEditing` covers Enter and nothing else.
+                onKeyPress={(e: any) => {
+                  if (e.nativeEvent?.key === 'Escape') setRenaming(false);
+                }}
+                accessibilityLabel={`Rename ${recording.title}`}
+                maxLength={80}
+                returnKeyType="done"
+              />
+              <Text style={styles.meta} numberOfLines={1}>
+                {recording.harmonicaType === 'chromatic' ? '12-Chromatic' : 'Diatonic'}
+                {' · '}{formatDuration(recording.duration)}
+                {' · '}{recording.tabNotes.length} note{recording.tabNotes.length !== 1 ? 's' : ''} detected
+              </Text>
+              <Text style={styles.date} numberOfLines={1}>Enter saves · Esc cancels</Text>
+            </View>
           </View>
-        </Pressable>
+        ) : (
+          <Pressable
+            onPress={() => onPress(recording)}
+            style={({ pressed }: any) => [
+              styles.touchArea,
+              pressed && styles.cardPressed,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel={`Open recording ${recording.title}`}
+          >
+            <View style={styles.info}>
+              <Text style={styles.title} numberOfLines={1}>{recording.title}</Text>
+              <Text style={styles.meta} numberOfLines={1}>
+                {recording.harmonicaType === 'chromatic' ? '12-Chromatic' : 'Diatonic'}
+                {' · '}{formatDuration(recording.duration)}
+                {' · '}{recording.tabNotes.length} note{recording.tabNotes.length !== 1 ? 's' : ''} detected
+              </Text>
+              <Text style={styles.date} numberOfLines={1}>{formatDate(recording.createdAt)}</Text>
+            </View>
+          </Pressable>
+        )}
 
         <Pressable
           onPress={() => onToggleFavorite(recording.id)}
@@ -115,46 +198,56 @@ export function RecordingCard({
           <Text style={styles.keyBadgeText}>Key of {recording.key}</Text>
         </View>
 
-        <Pressable
-          onPress={() => setMenuOpen(true)}
-          style={styles.moreBtn}
-          hitSlop={8}
-          accessibilityRole="button"
-          accessibilityLabel={`More options for ${recording.title}`}
-        >
-          <Ionicons name="ellipsis-horizontal" size={20} color={theme.textMuted} />
-        </Pressable>
+        {/* The trigger goes *inside* CardMenu on web so the menu owns the node it measures
+            itself against — the panel renders in a portal and has no other way to find the
+            button it belongs to. The button itself is unchanged either way. */}
+        {isWeb ? (
+          <CardMenu
+            open={menuOpen}
+            onClose={() => setMenuOpen(false)}
+            items={menuItems}
+          >
+            {moreButton}
+          </CardMenu>
+        ) : moreButton}
       </View>
 
-      <ActionSheetModal
-        visible={menuOpen}
-        title={recording.title}
-        options={[
-          { label: 'Rename', onPress: () => setRenaming(true) },
-          { label: 'Delete', style: 'destructive', onPress: () => setConfirmingDelete(true) },
-        ]}
-        onClose={() => setMenuOpen(false)}
-      />
+      {/* Native keeps all three overlays. A bottom sheet with full-width rows and a centred
+          rename dialog are the right controls on a phone; a 190px popover pinned to a 20px
+          glyph is not. Web renders none of these — see `CardMenu` and the inline field. */}
+      {!isWeb && (<>
+        <ActionSheetModal
+          visible={menuOpen}
+          title={recording.title}
+          options={[
+            { label: 'Rename', onPress: beginRename },
+            { label: 'Delete', style: 'destructive', onPress: () => setConfirmingDelete(true) },
+          ]}
+          onClose={() => setMenuOpen(false)}
+        />
 
-      <ActionSheetModal
-        visible={confirmingDelete}
-        title={`Delete "${recording.title}"? This can't be undone.`}
-        options={[
-          { label: 'Delete', style: 'destructive', onPress: () => onDelete(recording.id) },
-        ]}
-        onClose={() => setConfirmingDelete(false)}
-      />
+        <ActionSheetModal
+          visible={confirmingDelete}
+          title={`Delete "${recording.title}"? This can't be undone.`}
+          options={[
+            { label: 'Delete', style: 'destructive', onPress: () => onDelete(recording.id) },
+          ]}
+          onClose={() => setConfirmingDelete(false)}
+        />
 
-      <NameRecordingModal
-        visible={renaming}
-        defaultTitle={recording.title}
-        heading="Rename recording"
-        onSave={(title) => { onRename(recording.id, title); setRenaming(false); }}
-        onCancel={() => setRenaming(false)}
-      />
+        <NameRecordingModal
+          visible={renaming}
+          defaultTitle={recording.title}
+          heading="Rename recording"
+          onSave={(title) => { onRename(recording.id, title); setRenaming(false); }}
+          onCancel={() => setRenaming(false)}
+        />
+      </>)}
     </>
   );
 }
+
+const isWeb = Platform.OS === 'web';
 
 function createStyles(t: Theme) {
   return StyleSheet.create({
@@ -205,6 +298,25 @@ function createStyles(t: Theme) {
       fontFamily: Poppins.semiBold,
       color:      t.textPrimary,
     },
+    // Sized and weighted exactly like `title`, so the row does not jump when the text
+    // becomes a field. The accent border is the only thing that changes, and it is what
+    // says "this is editable now".
+    titleInput: {
+      fontSize:          FONT.base,
+      fontFamily:        Poppins.semiBold,
+      color:             t.textPrimary,
+      backgroundColor:   t.bg,
+      borderWidth:       1,
+      borderColor:       t.accent,
+      borderRadius:      RADIUS.sm,
+      paddingVertical:   3,
+      paddingHorizontal: 7,
+      // Negative to cancel the padding above: without it the field is visibly wider and
+      // taller than the text it replaced and the whole card shifts on every rename.
+      marginVertical:    -4,
+      marginLeft:        -7,
+      ...(Platform.OS === 'web' ? { outlineStyle: 'none' } as any : null),
+    } as any,
     meta: {
       fontSize:   FONT.xs,
       fontFamily: Poppins.regular,

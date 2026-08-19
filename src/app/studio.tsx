@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, TextInput, View, type ViewStyle } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { ActionSheetModal } from '@/components/ActionSheetModal';
@@ -579,14 +580,33 @@ export default function StudioScreen() {
         onUpgrade={() => router.push('/paywall')}
       />
 
+      {/* The banner used to be one big Pressable that dismissed on a click anywhere, with
+          nothing on it saying so — an affordance you can only find by accident is not one.
+          It also put `accessibilityRole="button"` around the message, so a screen reader
+          announced "Saved to library." as the *name of a button*. Now the banner is text and
+          the dismiss is a real control beside it. */}
       {notice && (
-        <Pressable
+        <View
           style={[styles.notice, notice.tone === 'success' && styles.noticeSuccess]}
-          onPress={() => setNotice(null)}
-          accessibilityRole="button"
+          accessibilityRole="alert"
         >
           <Text style={styles.noticeText}>{notice.text}</Text>
-        </Pressable>
+          <Pressable
+            onPress={() => setNotice(null)}
+            style={({ pressed, hovered }: any) => [
+              styles.noticeClose,
+              Platform.OS === 'web' && hovered && styles.noticeCloseHovered,
+              pressed && { opacity: 0.6 },
+            ]}
+            // The banner is only 10px tall inside its padding; without this the X is a
+            // 16px target sitting in the corner of a toolbar.
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss message"
+          >
+            <Ionicons name="close" size={16} color={theme.textSub} />
+          </Pressable>
+        </View>
       )}
 
       <View style={styles.body}>
@@ -817,16 +837,32 @@ function createStyles(t: Theme) {
     rollTitleInputHovered: { backgroundColor: t.surfaceAlt },
     rollSubtitle: { fontFamily: SpaceGrotesk.regular, fontSize: 11, color: t.textMuted },
     notice: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
       marginHorizontal: 16,
       marginTop: 8,
       padding: 10,
+      // Was a flat 10 all round. The right side gives the X its own room so the message
+      // doesn't run into it on a narrow roll.
+      paddingRight: 8,
       borderRadius: 8,
       backgroundColor: t.warningSoft,
       borderWidth: 1,
       borderColor: t.warning,
     },
     noticeSuccess: { backgroundColor: t.successSoft, borderColor: t.success },
-    noticeText: { fontFamily: SpaceGrotesk.regular, fontSize: 13, color: t.textPrimary },
+    // `flex: 1` so a long warning ("... has no notes long enough to play on a harmonica.")
+    // wraps against the X rather than pushing it off the end of the banner.
+    noticeText: { flex: 1, minWidth: 0, fontFamily: SpaceGrotesk.regular, fontSize: 13, color: t.textPrimary },
+    noticeClose: {
+      padding: 4,
+      borderRadius: 6,
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
+    // Tinted rather than faded: the banner already carries a colour, and an X that dims on
+    // hover reads as disabled against it.
+    noticeCloseHovered: { backgroundColor: t.surfaceAlt },
     body: { flex: 1, flexDirection: 'row', minHeight: 0 },
     rollWrap: { flex: 1, minWidth: 0 },
     empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8, padding: 24 },
