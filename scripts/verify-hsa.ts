@@ -19,6 +19,7 @@
 
 import { readFileSync } from 'node:fs';
 import { CqtAnalyzer, HSA_CQT_CONFIG } from '../src/audio/dsp/cqt';
+import { analyzePoly, MAX_VOICES } from '../src/audio/dsp/hsaPoly';
 
 const FIXTURES = `${__dirname}/fixtures/hsa`;
 const SAMPLE_RATE = 44100;
@@ -80,6 +81,46 @@ async function main(): Promise<void> {
     check('chunked CQT is bit-comparable to whole-file',
           worst < 1e-5 * peak,
           `worst abs diff ${worst.toExponential(2)} at frame ${worstFrame} (peak ${peak.toFixed(3)})`);
+  }
+
+  console.log('\n=== 2. Poly pass matches the Python reference ===\n');
+  {
+    for (const name of ['synth_g4c5', '34blow']) {
+      const raw = readFileSync(`${FIXTURES}/${name}.f32`);
+      const pcm = new Float32Array(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
+      const expected = JSON.parse(readFileSync(`${FIXTURES}/${name}.json`, 'utf8')) as {
+        frameCount: number; voiced: boolean[]; pitches: number[][];
+      };
+
+      const analyzer = await CqtAnalyzer.create(HSA_CQT_CONFIG);
+      const cqt = await analyzer.analyze(pcm);
+      analyzer.dispose();
+
+      const voiced = Uint8Array.from(expected.voiced, (v) => (v ? 1 : 0));
+      const poly   = analyzePoly(cqt, HSA_CQT_CONFIG, voiced);
+
+      let same = 0;
+      let firstBad = -1;
+      const total = Math.min(poly.frameCount, expected.frameCount);
+      for (let f = 0; f < total; f++) {
+        const got: number[] = [];
+        for (let s = 0; s < MAX_VOICES; s++) {
+          const p = poly.pitch[f * MAX_VOICES + s];
+          if (!Number.isFinite(p)) continue;
+          // The notebook's rel_threshold, applied here rather than during analysis — see
+          // the divergence note in hsaPoly.ts.
+          if (s > 0 && poly.salience[f * MAX_VOICES + s] < 0.60 * poly.sFirst[f]) continue;
+          got.push(Math.round(p));
+        }
+        got.sort((a, b) => a - b);
+        const want = expected.pitches[f];
+        if (got.length === want.length && got.every((v, i) => v === want[i])) same++;
+        else if (firstBad < 0) firstBad = f;
+      }
+      check(`${name}: pitch sets match Python`, same === total,
+            `${same}/${total} frames identical` +
+            (firstBad >= 0 ? `, first mismatch at frame ${firstBad}` : ''));
+    }
   }
 
   console.log('');
