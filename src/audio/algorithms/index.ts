@@ -215,6 +215,28 @@ export const TRANSCRIPTION_ALGORITHMS: readonly TranscriptionAlgorithm[] = [
 
 export const DEFAULT_ALGORITHM_ID: TranscriptionAlgorithmId = 'basicPitch';
 
+/**
+ * The engines a user is currently offered a choice between.
+ *
+ * A **product** gate, not a capability one. Every engine in the registry still runs, and
+ * `availableAlgorithms` still answers the different question of what this platform can
+ * execute — this says only what is worth putting in front of someone.
+ *
+ * Basic Pitch is alone here because it is the only engine whose output has been measured
+ * against real playing. HSA v2's re-attack segmentation is unresolved (see
+ * `docs/plan/phase-16-hsa-engine.md`: separating a tongued repeat from a deep throat vibrato
+ * by amplitude alone may not be possible, and it needs recorded material that does not exist
+ * yet), and pMPM's offline pass is strictly worse than the live pass the recording screen
+ * already offers directly. Shipping a picker whose extra rows are worse answers costs the
+ * user a decision and buys nothing.
+ *
+ * Widening this is adding an id to the array; nothing else is gated on it.
+ */
+export const SELECTABLE_ALGORITHM_IDS: readonly TranscriptionAlgorithmId[] = ['basicPitch'];
+
+/** The engine every offline transcription runs while the list above holds one id. */
+export const TRANSCRIBE_ALGORITHM_ID: TranscriptionAlgorithmId = 'basicPitch';
+
 /** Falls back to pMPM rather than throwing: the id can come from persisted settings written
  *  on another platform (or an older build), and an unavailable engine must not strand a
  *  user on a screen with no way to transcribe anything. */
@@ -225,4 +247,10 @@ export function getAlgorithm(id: TranscriptionAlgorithmId): TranscriptionAlgorit
 
 export function availableAlgorithms(): TranscriptionAlgorithm[] {
   return TRANSCRIPTION_ALGORITHMS.filter((a) => a.available);
+}
+
+/** What a picker should list. Empty or single-entry means there is no choice to present, and
+ *  the screens above check exactly that rather than assuming a count. */
+export function selectableAlgorithms(): TranscriptionAlgorithm[] {
+  return availableAlgorithms().filter((a) => SELECTABLE_ALGORITHM_IDS.includes(a.id));
 }
