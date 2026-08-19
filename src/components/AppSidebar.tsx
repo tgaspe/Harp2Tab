@@ -14,6 +14,10 @@
  *
  * Web-only chrome: callers gate on `Platform.OS === 'web'`, matching how the rail has always
  * been used. On native the entry points live in the bottom action bar instead.
+ *
+ * Visually it is a plain `railBg` panel, not the accent fill it started as — see
+ * `fullSidebar` below for why. `/edit` still runs the accent version off `theme.sidebarBg`;
+ * the two want reconciling next time that screen is touched.
  */
 
 import React, { useState } from 'react';
@@ -29,6 +33,7 @@ import { setPendingImport } from '@/audio/pendingImport';
 import { createProject } from '@/audio/midiProject';
 import { Poppins } from '@/constants/fonts';
 import { FONT } from '@/constants/keys';
+import { GROUP_LABEL, RADIUS } from '@/constants/ui';
 import { useTheme } from '@/hooks/useTheme';
 import { usePremium } from '@/hooks/usePremium';
 import { selectHarmonicaType, selectKey, useAppStore } from '@/store/useAppStore';
@@ -54,8 +59,16 @@ export function AppSidebar() {
   // Paid access, not the `isPurchased` latch (8-3) — a subscription can lapse.
   const { premium }         = usePremium();
   const ratingStatus        = useSettingsStore((s) => s.ratingStatus);
+  const hasCompletedOnboarding = useSettingsStore((s) => s.hasCompletedOnboarding);
 
   const [showRatingModal, setShowRatingModal] = useState(false);
+  // Open by default, collapsible.
+  //
+  // Shipping it collapsed left the rail as five rows above 500px of empty panel — the
+  // picker was most of what gave the sidebar its body, and hiding it made the whole column
+  // read as unfinished. It stays collapsible (the summary row above it says which harmonica
+  // is selected, so folding it away loses nothing), it just doesn't start that way.
+  const [pickerOpen, setPickerOpen] = useState(true);
   // Only for failures that happen before the import screen exists (an oversized file
   // rejected at pick time) — everything after that is reported on /import itself.
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -67,6 +80,12 @@ export function AppSidebar() {
     const gate = resolveSessionGate({ isPurchased: premium, totalRecordingsUsed, ratingStatus });
     if (gate === 'showRating') { setShowRatingModal(true); return; }
     if (gate === 'showPaywall') { router.push('/paywall'); return; }
+    // Same first-recording calibration detour as Home's Record button — this rail is the
+    // other way into a session, so it has to make the same stop. See `app.tsx:handleStart`.
+    if (Platform.OS === 'web' && !hasCompletedOnboarding) {
+      router.push({ pathname: '/onboarding', params: { next: 'recording' } });
+      return;
+    }
     startRecording();
     router.push('/recording');
   }
@@ -148,7 +167,7 @@ export function AppSidebar() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.sidebarSection}>
-          <Text style={styles.sidebarSectionLabel}>QUICK ACTIONS</Text>
+          <Text style={styles.sidebarSectionLabel}>Quick actions</Text>
 
           <Pressable
             onPress={handleUploadAudio}
@@ -163,7 +182,7 @@ export function AppSidebar() {
             accessibilityState={{ disabled: !selectedKey }}
           >
             <View style={styles.sidebarRowIconWrap}>
-              <Ionicons name="cloud-upload-outline" size={16} color="rgba(255,255,255,0.85)" />
+              <Ionicons name="cloud-upload-outline" size={16} color={theme.textSub} />
             </View>
             <Text style={styles.sidebarRowText}>Upload Audio</Text>
           </Pressable>
@@ -181,7 +200,7 @@ export function AppSidebar() {
             accessibilityState={{ disabled: !selectedKey }}
           >
             <View style={styles.sidebarRowIconWrap}>
-              <Ionicons name="musical-note-outline" size={16} color="rgba(255,255,255,0.85)" />
+              <Ionicons name="musical-note-outline" size={16} color={theme.textSub} />
             </View>
             <Text style={styles.sidebarRowText}>Upload MIDI</Text>
           </Pressable>
@@ -198,23 +217,20 @@ export function AppSidebar() {
             accessibilityRole="button"
             accessibilityLabel="New MIDI Studio project"
           >
-            {/* `add-circle-outline`, matching the empty-state hero's version of this
-                same button. `options-outline` — a sliders glyph — read as
-                "preferences" here; it stays the Studio's *identity* mark on the
-                project card and on "Open in Studio", where it isn't a create action. */}
+            {/* `add-circle-outline` — this is a create action. `options-outline` (a sliders
+                glyph) stays the Studio's identity mark on the project card and on "Open in
+                Studio", where it isn't creating anything. */}
             <View style={styles.sidebarRowIconWrap}>
-              <Ionicons name="add-circle-outline" size={16} color="rgba(255,255,255,0.85)" />
+              <Ionicons name="add-circle-outline" size={16} color={theme.textSub} />
             </View>
             <Text style={styles.sidebarRowText}>New MIDI Project</Text>
           </Pressable>
 
-          {uploadError && (
-            <View style={styles.uploadError} accessibilityRole="alert" accessibilityLiveRegion="polite">
-              <Ionicons name="alert-circle-outline" size={14} color={theme.warning} />
-              <Text style={styles.uploadErrorText}>{uploadError}</Text>
-            </View>
-          )}
-
+          {/* Last in the stack, directly above the harmonica picker it depends on.
+              The three rows above it are self-contained — pick a file, or start blank —
+              while this one is only armed once a key is chosen, so it sits closest to the
+              control that arms it. Accent fill keeps it the primary action wherever in the
+              order it lands. */}
           <Pressable
             onPress={handleStart}
             disabled={!selectedKey}
@@ -234,49 +250,87 @@ export function AppSidebar() {
             <Text style={[styles.sidebarRowText, styles.sidebarRowTextPrimary]}>Start Recording</Text>
           </Pressable>
 
-          {/* Permanent, not behind a chevron — the key/type picker is part of the
-              panel's normal flow so it's always visible, not a toggle to discover.
-              No card wrapper — sits straight on the panel so the sidebar reads as
-              one homogeneous blue surface, not a blue frame around a white box. */}
-          <View style={styles.sidebarInlineDropdown}>
-            {/* Plain selectable rows instead of the pill-shaped segmented control the hero
-                and native layouts use. Same underlying state/handler. */}
-            <View style={styles.section}>
-              <Text style={styles.sidebarSectionLabel}>HARMONICA TYPE</Text>
-              {(['diatonic', 'chromatic'] as HarmonicaType[]).map((type) => {
-                const active = harmonicaType === type;
-                return (
-                  <Pressable
-                    key={type}
-                    onPress={() => setHarmonicaType(type)}
-                    style={({ hovered }: any) => [
-                      styles.sidebarTypeRow,
-                      active && styles.sidebarTypeRowActive,
-                      hovered && !active && styles.sidebarTypeRowHovered,
-                    ]}
-                    accessibilityRole="radio"
-                    accessibilityState={{ checked: active }}
-                  >
-                    <Text style={[styles.sidebarTypeRowText, active && styles.sidebarTypeRowTextActive]}>
-                      {type === 'chromatic' ? '12-Chromatic' : 'Diatonic'}
-                    </Text>
-                    {active && <Ionicons name="checkmark" size={14} color="#fff" />}
-                  </Pressable>
-                );
-              })}
+          {uploadError && (
+            <View style={styles.uploadError} accessibilityRole="alert" accessibilityLiveRegion="polite">
+              <Ionicons name="alert-circle-outline" size={14} color={theme.warning} />
+              <Text style={styles.uploadErrorText}>{uploadError}</Text>
             </View>
+          )}
+        </View>
 
-            {/* Same onAccent treatment as the type rows above, sitting straight on the blue
-                panel instead of in a white card. */}
-            <View style={[styles.section, { marginTop: 12 }]}>
-              <Text style={styles.sidebarSectionLabel}>HARMONICA KEY</Text>
-              <KeyGrid
-                selected={selectedKey}
-                onSelect={(k: HarmonicaKey) => selectKey_(k)}
-                onAccent
-              />
+        {/* "Recording setup", not "Harmonica" — the label names the *job* the controls
+            under it do rather than the object they configure. "Harmonica" left a user who
+            had not yet connected key/type to transcription with no reason to touch it.
+            Structurally it's still a summary row that expands, rather than a permanently-
+            open twelve-cell grid: what the rail needs to say at rest is *which* harmonica
+            the next recording will use; changing it is the rare case, so it costs a click. */}
+        <View style={styles.sidebarSection}>
+          <Text style={styles.sidebarSectionLabel}>Recording setup</Text>
+
+          <Pressable
+            onPress={() => setPickerOpen((v) => !v)}
+            style={({ pressed, hovered }: any) => [
+              styles.sidebarRow,
+              (pressed || hovered) && styles.sidebarRowPressed,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel={pickerOpen ? 'Hide key and type picker' : 'Change key and type'}
+            accessibilityState={{ expanded: pickerOpen }}
+          >
+            <View style={styles.sidebarRowIconWrap}>
+              <Ionicons name="musical-notes-outline" size={16} color={theme.accent} />
             </View>
-          </View>
+            <Text style={styles.sidebarRowText} numberOfLines={1}>
+              {selectedKey ? `Key of ${selectedKey}` : 'No key selected'}
+              {'  ·  '}
+              {harmonicaType === 'chromatic' ? '12-Chromatic' : 'Diatonic'}
+            </Text>
+            <Ionicons
+              name={pickerOpen ? 'chevron-up' : 'chevron-down'}
+              size={13}
+              color={theme.textMuted}
+            />
+          </Pressable>
+
+          {pickerOpen && (
+            /* Inset onto `bg` rather than sitting straight on the rail: KeyGrid's cells are
+               `surface`-filled, which is the rail's own colour, so on the rail they would be
+               twelve invisible squares. */
+            <View style={styles.sidebarPickerPanel}>
+              <View style={styles.section}>
+                <Text style={styles.sidebarPickerLabel}>Type</Text>
+                {(['diatonic', 'chromatic'] as HarmonicaType[]).map((type) => {
+                  const active = harmonicaType === type;
+                  return (
+                    <Pressable
+                      key={type}
+                      onPress={() => setHarmonicaType(type)}
+                      style={({ hovered }: any) => [
+                        styles.sidebarTypeRow,
+                        active && styles.sidebarTypeRowActive,
+                        hovered && !active && styles.sidebarTypeRowHovered,
+                      ]}
+                      accessibilityRole="radio"
+                      accessibilityState={{ checked: active }}
+                    >
+                      <Text style={[styles.sidebarTypeRowText, active && styles.sidebarTypeRowTextActive]}>
+                        {type === 'chromatic' ? '12-Chromatic' : 'Diatonic'}
+                      </Text>
+                      {active && <Ionicons name="checkmark" size={14} color={theme.accent} />}
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              <View style={[styles.section, { marginTop: 14 }]}>
+                <Text style={styles.sidebarPickerLabel}>Key</Text>
+                <KeyGrid
+                  selected={selectedKey}
+                  onSelect={(k: HarmonicaKey) => selectKey_(k)}
+                />
+              </View>
+            </View>
+          )}
 
           {freeCounterLabel && (
             <Text style={styles.sidebarCounter}>{freeCounterLabel}</Text>
@@ -289,90 +343,108 @@ export function AppSidebar() {
 
 function createStyles(t: Theme) {
   return StyleSheet.create({
-    // Accent-filled, flush to the true viewport edges (no radius, no margin) — clearly its
+    // A neutral rail, flush to the true viewport edges (no radius, no margin) — clearly its
     // own persistent region, not a card floating in the page.
+    //
+    // Was a solid fill of `sidebarBg` (the brand cyan in light mode), then a faint wash of
+    // it. `railBg` is now the plain surface and the *library* carries the tint instead:
+    // 300px of colour beside the content it supports had the emphasis backwards either way,
+    // and with the wash moved across, Start Recording is the only accent object left here.
+    // The rows keep their edge against a same-coloured panel via `railBorder`.
     fullSidebar: {
       width:              300,
       flexShrink:         0,
-      backgroundColor:    t.sidebarBg,
-      // The literal top-to-bottom division line the color contrast alone wasn't enough of.
-      // Dark mode inverts it: the rail is darker than the page there, so a black hairline
-      // would blend into both sides instead of dividing them.
+      backgroundColor:    t.railBg,
+      // The literal top-to-bottom division line, tinted to belong to the panel it edges.
       borderRightWidth:   1,
-      borderRightColor:   t.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.18)',
+      borderRightColor:   t.railBorder,
     },
     // The padding sits on the scroll content, not on `fullSidebar`, so the panel's
     // background and its right-edge hairline still run the full height while only the
     // contents scroll.
     sidebarScroll:        { flex: 1 },
-    sidebarScrollContent: { paddingHorizontal: 20, paddingVertical: 28 },
+    sidebarScrollContent: { paddingHorizontal: 20, paddingVertical: 28, gap: 24 },
 
-    // Plain row content directly on the accent panel — no card, no pill, no shadow.
     sidebarSection: { gap: 8 },
     sidebarSectionLabel: {
-      fontSize:      FONT.xs,
-      fontFamily:    Poppins.bold,
-      color:         '#fff',
-      letterSpacing: 1,
-      marginBottom:  6,
+      ...GROUP_LABEL,
+      color:        t.textSub,
+      marginBottom: 4,
     },
-    sidebarCounter: { fontSize: 10, fontFamily: Poppins.regular, color: 'rgba(255,255,255,0.65)', marginTop: 4 },
+    sidebarCounter: { fontSize: 10, fontFamily: Poppins.regular, color: t.textMuted, marginTop: 4 },
 
-    section: { gap: 12 },
+    section: { gap: 8 },
 
+    // Inset against the rail: one step *down* in elevation (bg, under surface) so a row
+    // reads as a control cut into the panel rather than a card stacked onto it.
     sidebarRow: {
       flexDirection:     'row',
       alignItems:        'center',
       gap:               10,
       paddingVertical:   10,
       paddingHorizontal: 12,
-      borderRadius:      10,
-      backgroundColor:   'rgba(255,255,255,0.14)',
+      borderRadius:      RADIUS.md,
+      backgroundColor:   t.bg,
       borderWidth:       1,
-      borderColor:       'rgba(255,255,255,0.22)',
+      // `railBorder`, not `border`. The rail is a plain panel now and these rows sit on it
+      // at the same fill, so the border is the *only* thing drawing them — a neutral
+      // hairline at that job reads as an accident rather than an edge. The accent tint is
+      // faint enough not to compete with Start Recording's solid fill below.
+      borderColor:       t.railBorder,
       ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
     } as ViewStyle,
-    // Start Recording — the primary action, so it gets a solid white pill that pops off
-    // the accent panel instead of the translucent chrome every other row uses.
+    // Start Recording — the only accent-filled object in the rail, which is the whole
+    // point of taking the accent off the panel behind it.
     sidebarRowPrimary: {
-      backgroundColor: '#fff',
-      borderColor:     '#fff',
+      backgroundColor: t.accent,
+      borderColor:     t.accent,
     },
-    sidebarRowPrimaryPressed: { backgroundColor: t.accentSoft },
-    sidebarRowPressed:  { backgroundColor: 'rgba(255,255,255,0.22)' },
+    sidebarRowPrimaryPressed: { backgroundColor: t.accentDim },
+    sidebarRowPressed:  { backgroundColor: t.surfaceAlt, borderColor: t.accent },
     sidebarRowDisabled: { opacity: 0.55 },
     sidebarRowIconWrap: { width: 22, alignItems: 'center', justifyContent: 'center' },
     // Row-level opacity (sidebarRowDisabled) handles the disabled dimming — no separate
     // text-color override needed on top of it.
-    sidebarRowText: { flex: 1, fontSize: FONT.sm, fontFamily: Poppins.semiBold, color: '#fff' },
-    // On the solid white pill (sidebarRowPrimary) — needs accentDeep, see editStyles.
-    sidebarRowTextPrimary: { color: t.accentDeep },
-    // Stands in for an icon on the Start Recording row — the same red dot the hero's split
-    // button carries, so the two entry points read as the same action.
-    recordDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: t.record },
+    sidebarRowText: { flex: 1, fontSize: FONT.sm, fontFamily: Poppins.semiBold, color: t.textPrimary },
+    // On the accent fill.
+    sidebarRowTextPrimary: { color: '#fff' },
+    // Stands in for an icon on the Start Recording row — a red dot on the cyan fill, the
+    // same mark the recording screen uses.
+    recordDot: { width: 7, height: 7, borderRadius: RADIUS.full, backgroundColor: t.record },
 
-    // No card here — sits straight on the accent panel (rows use their own onAccent
-    // colors) so the whole sidebar reads as one homogeneous surface, not a blue frame
-    // wrapped around a white box.
-    sidebarInlineDropdown: { marginTop: 10, gap: 16 },
+    // The expanded key/type picker. One step down from the rail for the same reason the
+    // rows are, and because KeyGrid's cells are `surface`-filled — the rail's own colour.
+    sidebarPickerPanel: {
+      marginTop:       4,
+      padding:         12,
+      borderRadius:    RADIUS.md,
+      backgroundColor: t.bg,
+      borderWidth:     1,
+      borderColor:     t.railBorder,
+    },
+    sidebarPickerLabel: {
+      ...GROUP_LABEL,
+      color:        t.textMuted,
+      marginBottom: 2,
+    },
 
     sidebarTypeRow: {
       flexDirection:     'row',
       alignItems:        'center',
       justifyContent:    'space-between',
-      paddingVertical:   10,
+      paddingVertical:   9,
       paddingHorizontal: 10,
-      borderRadius:      8,
+      borderRadius:      RADIUS.sm,
       ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
     } as ViewStyle,
-    sidebarTypeRowActive:  { backgroundColor: 'rgba(255,255,255,0.18)' },
-    sidebarTypeRowHovered: { backgroundColor: 'rgba(255,255,255,0.08)' },
+    sidebarTypeRowActive:  { backgroundColor: t.accentSoft },
+    sidebarTypeRowHovered: { backgroundColor: t.surfaceAlt },
     sidebarTypeRowText: {
       fontSize:   FONT.sm,
       fontFamily: Poppins.semiBold,
-      color:      'rgba(255,255,255,0.85)',
+      color:      t.textSub,
     },
-    sidebarTypeRowTextActive: { color: '#fff' },
+    sidebarTypeRowTextActive: { color: t.accent },
 
     uploadError: {
       flexDirection: 'row',
@@ -380,7 +452,7 @@ function createStyles(t: Theme) {
       gap:           6,
       paddingHorizontal: 10,
       paddingVertical:   8,
-      borderRadius:      10,
+      borderRadius:      RADIUS.md,
       backgroundColor:   t.warningSoft,
     },
     uploadErrorText: {

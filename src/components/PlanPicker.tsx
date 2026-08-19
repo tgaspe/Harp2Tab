@@ -56,7 +56,7 @@ function createStyles(t: Theme) {
     },
     price: {
       fontSize:   FONT['2xl'],
-      fontFamily: Poppins.black,
+      fontFamily: Poppins.extraBold,
       color:      t.accent,
     },
     priceLabel: {

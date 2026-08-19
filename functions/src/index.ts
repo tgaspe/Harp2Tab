@@ -132,6 +132,13 @@ export const revenuecatWebhook = onRequest(
 async function applyWrite(uid: string, event: RevenueCatEvent, doc: StoredDoc) {
   const ref = getFirestore().collection('entitlements').doc(uid);
 
+  /**
+   * Whether the transaction actually wrote, so the log below reports what happened rather than
+   * what was attempted. The transaction body can also *re-run* under contention, which is why
+   * this is assigned inside it rather than accumulated.
+   */
+  let wrote = false;
+
   await getFirestore().runTransaction(async (tx) => {
     const snapshot = await tx.get(ref);
     const storedUpdatedAt = snapshot.exists
@@ -144,11 +151,17 @@ async function applyWrite(uid: string, event: RevenueCatEvent, doc: StoredDoc) {
         eventAt: event.event_timestamp_ms,
         storedUpdatedAt,
       });
+      wrote = false;
       return;
     }
 
     tx.set(ref, doc);
+    wrote = true;
   });
+
+  // A dropped event already logged its own line. Claiming a write here as well is how a
+  // correctly-refused event reads, in the log, as an entitlement being resurrected.
+  if (!wrote) return;
 
   logger.info(doc.plan === 'revoked' ? 'Entitlement revoked' : 'Entitlement written',
     { uid, type: event.type });

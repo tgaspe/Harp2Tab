@@ -245,9 +245,16 @@ function createStyles(t: Theme) {
       height:            64,
       borderBottomWidth: 1,
       borderBottomColor: t.border,
-      // Same tone as the docked transport bar at the bottom of the editor (webTransportBar,
-      // also t.surface) — the two pieces of chrome bracket the page, so they share a surface.
-      backgroundColor:   t.surface,
+      // The page colour, not `surface`.
+      //
+      // It shared `surface` with the app shell's left rail, and the two meet at a corner —
+      // so the chrome read as one continuous L with no boundary between the bar and the
+      // panel under it. The bar and the rail are now both plain (`bg`/`railBg`) and the
+      // tint lives on the library column instead, so the L is deliberate: the chrome is
+      // the uncoloured region, and its bottom hairline is what parts it from the content.
+      //
+      // Note this also parts it from the editor's docked transport bar, still `t.surface`.
+      backgroundColor:   t.bg,
       flexDirection:     'row',
       alignItems:        'center',
       justifyContent:    'space-between',

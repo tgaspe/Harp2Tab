@@ -19,7 +19,7 @@
  * sync engine especially) should reach it the same way.
  */
 
-import { firebaseApp } from './firebase.web';
+import { firestoreDb } from './firebase.web';
 
 export type EntitlementPlan = 'lifetime' | 'subscription';
 
@@ -30,6 +30,8 @@ export interface Entitlement {
   /** Where it came from — `play`, `stripe`, a manual grant. Useful when reconciling the
    *  existing Google Play lifetime buyers, which is Phase 8's grandfathering problem. */
   source?: string;
+  /** The store's product id for what was bought — a Stripe price id on web (8-6). */
+  productId?: string;
   /** Epoch ms a subscription lapses. Absent for `lifetime`. */
   expiresAt?: number;
 }
@@ -43,9 +45,13 @@ export interface Entitlement {
  * blip turns into a paying customer being shown the paywall.
  */
 export async function fetchEntitlement(uid: string): Promise<Entitlement | null> {
-  const { getFirestore, doc, getDoc } = await import('firebase/firestore');
+  const { doc, getDoc } = await import('firebase/firestore');
 
-  const snapshot = await getDoc(doc(getFirestore(firebaseApp()), 'entitlements', uid));
+  // `firestoreDb()` rather than `getFirestore(app)`: the handle is a per-app singleton, and the
+  // emulator connect has to happen on it before anything uses it. Calling `getFirestore` here
+  // meant this reader silently read the *real* project while the rest of the app was pointed at
+  // the emulator — and started the instance, so sync's connect then threw.
+  const snapshot = await getDoc(doc(await firestoreDb(), 'entitlements', uid));
   if (!snapshot.exists()) return null;
 
   // `plan` is widened to `string` deliberately: it is whatever the writer put there, and the
@@ -75,6 +81,7 @@ export async function fetchEntitlement(uid: string): Promise<Entitlement | null>
     plan:      data.plan,
     since:     data.since,
     source:    data.source,
+    productId: data.productId,
     expiresAt: data.expiresAt,
   };
 }

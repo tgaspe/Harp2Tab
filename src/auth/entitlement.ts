@@ -16,6 +16,7 @@ export interface Entitlement {
   plan:       EntitlementPlan;
   since?:     number;
   source?:    string;
+  productId?: string;
   expiresAt?: number;
 }
 

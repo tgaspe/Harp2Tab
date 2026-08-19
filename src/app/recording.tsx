@@ -626,7 +626,7 @@ function createStyles(t: Theme) {
     },
     elapsed: {
       fontSize:      FONT['2xl'],
-      fontFamily:    Poppins.thin,
+      fontFamily:    Poppins.regular,
       color:         t.textSub,
       fontVariant:   ['tabular-nums'],
       letterSpacing: 1,

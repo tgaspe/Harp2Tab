@@ -103,6 +103,26 @@ export function audibleProject(project: MidiProject): MidiProject {
   };
 }
 
+/**
+ * A title that no existing project already uses — "Folk tune", then "Folk tune 2", "3"...
+ *
+ * Every creation path could previously mint a duplicate: `createProject` defaults to the
+ * constant `'Untitled project'`, and the two import paths take the source file's name
+ * verbatim, so importing one file twice produced two cards that were identical in every
+ * visible respect. A library you cannot tell apart is not a library.
+ *
+ * Applied on insert only (see `saveProject`), never on update — renaming a project because
+ * it was saved again would be worse than the collision.
+ */
+export function uniqueProjectTitle(desired: string, existing: readonly string[]): string {
+  const taken = new Set(existing);
+  if (!taken.has(desired)) return desired;
+  for (let n = 2; ; n++) {
+    const candidate = `${desired} ${n}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
 export function createProject(init: Partial<MidiProject> = {}): MidiProject {
   const now = Date.now();
   const tracks = init.tracks ?? [createTrack(0)];

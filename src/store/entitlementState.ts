@@ -47,6 +47,8 @@ export interface PremiumState {
   plan:       PremiumPlan;
   /** Epoch ms the subscription lapses. Absent for lifetime and free. */
   expiresAt?: number;
+  /** The store product this came from, so `/profile` can name the plan (8-6). */
+  productId?: string;
   /** Past `expiresAt` but still inside `ENTITLEMENT_GRACE_MS` — paid, and worth saying so. */
   inGrace:    boolean;
   source:     PremiumSource;
@@ -95,7 +97,10 @@ function resolveAccount(cached: Entitlement | null, now: number): PremiumState |
   if (!cached) return null;
 
   if (cached.plan === 'lifetime') {
-    return { premium: true, plan: 'lifetime', inGrace: false, source: 'account' };
+    return {
+      premium: true, plan: 'lifetime', inGrace: false, source: 'account',
+      productId: cached.productId,
+    };
   }
 
   // A subscription with no `expiresAt` is a malformed document — but the safe reading of
@@ -103,7 +108,10 @@ function resolveAccount(cached: Entitlement | null, now: number): PremiumState |
   // to money changing hands, so the failure mode of trusting it is a few unpaid days; the
   // failure mode of distrusting it is billing someone and locking them out anyway.
   if (cached.expiresAt === undefined) {
-    return { premium: true, plan: 'subscription', inGrace: false, source: 'account' };
+    return {
+      premium: true, plan: 'subscription', inGrace: false, source: 'account',
+      productId: cached.productId,
+    };
   }
 
   if (now <= cached.expiresAt) {
@@ -113,6 +121,7 @@ function resolveAccount(cached: Entitlement | null, now: number): PremiumState |
       expiresAt: cached.expiresAt,
       inGrace:   false,
       source:    'account',
+      productId: cached.productId,
     };
   }
 
@@ -123,6 +132,7 @@ function resolveAccount(cached: Entitlement | null, now: number): PremiumState |
       expiresAt: cached.expiresAt,
       inGrace:   true,
       source:    'account',
+      productId: cached.productId,
     };
   }
 

@@ -20,7 +20,7 @@
  */
 
 import React, { useCallback, useMemo, useState } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Text, View, type ViewStyle } from 'react-native';
+import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -40,11 +40,13 @@ import {
 import { initialsFor, joinedOn, memberSince, useAuth } from '@/auth/useAuth';
 import { useTheme } from '@/hooks/useTheme';
 import { usePremium } from '@/hooks/usePremium';
+import { useEntitlementStore } from '@/store/useEntitlementStore';
 import type { PremiumState } from '@/store/entitlementState';
 import { useHeaderActionStore } from '@/store/useHeaderActionStore';
 import { useRecordingsStore } from '@/store/useRecordingsStore';
 import { useMidiProjectsStore } from '@/store/useMidiProjectsStore';
 import { FREE_TIER_ENABLED, RECORDING_LIMIT, useSettingsStore } from '@/store/useSettingsStore';
+import { planNameForProduct } from '@/billing/plans';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { FONT } from '@/constants/keys';
 import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_BOTTOM, WEB_SCREEN_PADDING_TOP } from '@/constants/layout';
@@ -88,6 +90,14 @@ interface Notice {
  */
 function planLabel(state: PremiumState): string {
   if (!state.premium) return 'Free';
+
+  // The product the money was actually spent on, when the document names one: "Yearly" answers
+  // "what am I paying for" in a way "Premium" does not. Unknown ids fall back to the
+  // entitlement's own name, which is still true — a document written before 8-6, or a plan
+  // sold through a store this build has never heard of.
+  const byProduct = planNameForProduct(state.productId);
+  if (byProduct) return byProduct;
+
   return state.plan === 'lifetime' ? 'Lifetime' : 'Premium';
 }
 
@@ -108,6 +118,20 @@ function formatPlayingTime(totalMs: number): string {
 export default function ProfileScreen() {
   const router = useRouter();
   const theme  = useTheme();
+  const managementUrl = useEntitlementStore((s) => s.managementUrl);
+
+  /**
+   * Opening the portal, or `null` when there is nothing to open.
+   *
+   * `managementURL` is null for a customer with no *active subscription* — which includes the
+   * lifetime buyer, who has nothing to manage, and anyone whose access came from a hand grant
+   * (8-7). Rendering a dead "Manage" on those accounts would send them looking for a billing
+   * page that does not exist.
+   */
+  const manageBilling = useMemo(
+    () => (managementUrl ? () => { void Linking.openURL(managementUrl); } : null),
+    [managementUrl],
+  );
   const styles = useMemo(() => createStyles(theme), [theme]);
 
   const auth = useAuth();
@@ -450,13 +474,29 @@ export default function ProfileScreen() {
                 : 'Unlimited while in development'
               }
             />
-            <FieldRow label="Billing">
+            {/* Billing (8-6).
+                **Cancelling is a link, not a button we implement.** With Managed Payments,
+                Stripe is the merchant of record, so the cancel, the card update and the invoice
+                history are legally and practically theirs — the SDK hands us the destination as
+                `managementURL`. Building our own cancel would mean maintaining a second, worse
+                copy of a page Stripe is obliged to provide. */}
+            <FieldRow
+              label="Billing"
+              action={manageBilling ? { label: 'Manage', onPress: manageBilling } : undefined}
+            >
               <Text style={styles.note}>
                 {premiumState.inGrace
                   ? 'We could not take your last payment. Your access continues for a few days '
                     + 'while your bank retries — update your card to avoid losing it.'
-                  : 'Subscriptions and web billing arrive with the next release. Existing Google '
-                    + 'Play purchases carry over.'}
+                  : premiumState.plan === 'lifetime'
+                    ? 'Bought once, yours for good. There is nothing to renew and nothing to cancel.'
+                  : manageBilling
+                    ? 'Update your card, see your invoices or cancel any time. Cancelling keeps '
+                      + 'your access until the date above, and your library stays either way.'
+                  : premiumState.premium
+                    ? 'Your plan is active. The billing page will appear here once your payment '
+                      + 'details finish syncing.'
+                    : 'No plan yet. Everything you have made stays on this device either way.'}
               </Text>
             </FieldRow>
             {!premiumState.premium && (

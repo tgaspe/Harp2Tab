@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useTheme } from '@/hooks/useTheme';
 import { HARMONICA_KEYS, FONT } from '@/constants/keys';
 import { Poppins } from '@/constants/fonts';
+import { RADIUS } from '@/constants/ui';
 import type { Theme } from '@/theme';
 import type { HarmonicaKey } from '@/types';
 
@@ -96,7 +97,7 @@ function createStyles(t: Theme) {
       flex: 1,
       aspectRatio: 1,
       maxWidth: 80,
-      borderRadius: 14,
+      borderRadius: RADIUS.md,
       backgroundColor: t.surface,
       borderWidth: 1,
       borderColor: t.border,

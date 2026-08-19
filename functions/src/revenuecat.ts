@@ -25,6 +25,15 @@ export interface EntitlementDoc {
   since?:     number;
   source?:    string;
   expiresAt?: number;
+  /**
+   * The store's product identifier for what was bought — a Stripe price id on web.
+   *
+   * Stored so `/profile` can name the plan ("Yearly") rather than the entitlement ("Premium"),
+   * and so a support question about someone's billing has an answer in the document itself.
+   * **Not derivable from the dates**: `since` is the *original* purchase, so after a year of
+   * renewals a monthly subscription's span looks exactly like an annual one's.
+   */
+  productId?: string;
   /** `event_timestamp_ms` of the event that produced this. The staleness guard reads it. */
   updatedAt:  number;
 }
@@ -290,6 +299,7 @@ function buildDoc(event: RevenueCatEvent, at: number): EntitlementDoc {
     plan:      isLifetimeGrant(event) ? 'lifetime' : 'subscription',
     since:     event.purchased_at_ms ?? at,
     source:    sourceOf(event),
+    productId: event.product_id ?? undefined,
     expiresAt,
     updatedAt: at,
   };

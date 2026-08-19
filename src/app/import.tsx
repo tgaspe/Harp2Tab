@@ -1010,7 +1010,7 @@ export default function ImportScreen() {
               accessibilityRole="button"
               accessibilityLabel="Open this file in the MIDI Studio"
             >
-              <Ionicons name="options-outline" size={16} color={theme.accent} />
+              <Ionicons name="layers-outline" size={16} color={theme.accent} />
               <Text style={styles.studioBtnText}>Open in Studio</Text>
             </Pressable>
 
@@ -1616,7 +1616,7 @@ function createStyles(theme: Theme) {
     },
     sectionLabel: {
       alignSelf:     'flex-start',
-      fontFamily:    SpaceGrotesk.medium,
+      fontFamily:    Poppins.bold,
       fontSize:      FONT.xs,
       letterSpacing: 1,
       color:         theme.textMuted,

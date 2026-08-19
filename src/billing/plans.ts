@@ -92,3 +92,35 @@ export const PLAN_PERKS = [
   'Export to TXT, CSV, MIDI, MusicXML & JSON',
   'All future updates included',
 ];
+
+/**
+ * Store product ids → the plan they were bought as (8-6).
+ *
+ * `/profile` reads this to name a plan "Yearly" rather than "Premium". The entitlement document
+ * carries the store's product id (`productId`, written by the webhook), and this is the only
+ * place that knows what those ids mean.
+ *
+ * **Why not derive it from the dates?** `since` is the *original* purchase, so after twelve
+ * renewals a monthly subscription spans a year and is indistinguishable from an annual one.
+ * The product id is the only durable fact about which plan was chosen.
+ *
+ * These are the **sandbox** price ids. The live account issues different ones at 8c — add them
+ * here rather than replacing, so a sandbox document written today still reads correctly after
+ * the switch. An id that is missing is not an error: the label falls back to "Premium", which
+ * is true, just less specific.
+ */
+export const PLAN_BY_PRODUCT_ID: Record<string, WebPlanId> = {
+  price_1U4QkFEE7XhRWEbEBUTxzoIb: 'monthly',
+  price_1U4QkGEE7XhRWEbE2shVLHvB: 'yearly',
+  price_1U4QkIEE7XhRWEbEYDYqI4tK: 'lifetime',
+  prod_V4ZiRNhE4Z46KV:            'monthly',
+  prod_V4ZiiNm4QnNCqp:            'yearly',
+  prod_V4Zi9i9aFBYHoS:            'lifetime',
+};
+
+/** The plan's display name for a store product id, or `null` when the id is unknown. */
+export function planNameForProduct(productId: string | undefined): string | null {
+  if (!productId) return null;
+  const id = PLAN_BY_PRODUCT_ID[productId];
+  return id ? (MOCK_WEB_PLANS.find((p) => p.id === id)?.name ?? null) : null;
+}

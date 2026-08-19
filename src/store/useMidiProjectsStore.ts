@@ -5,6 +5,7 @@ import {
   deserializeProject,
   projectDurationMs,
   serializeProject,
+  uniqueProjectTitle,
   type StoredProject,
 } from '@/audio/midiProject';
 import type { MidiProject, Tombstone } from '@/types';
@@ -60,7 +61,17 @@ export const useMidiProjectsStore = create<MidiProjectsState>()(
         set((s) => ({
           // Newest first; replace rather than duplicate if the same id is saved twice —
           // same convention as `useRecordingsStore`.
-          projects: [touch(project), ...s.projects.filter((p) => p.id !== project.id)],
+          projects: [
+            // Insert vs. update, told apart by id. A first save gets its title
+            // disambiguated against the library; a re-save keeps whatever it is called,
+            // because renaming on every write would be its own bug.
+            touch(
+              s.projects.some((p) => p.id === project.id)
+                ? project
+                : { ...project, title: uniqueProjectTitle(project.title, s.projects.map((p) => p.title)) },
+            ),
+            ...s.projects.filter((p) => p.id !== project.id),
+          ],
           deletedIds: s.deletedIds.filter((t) => t.id !== project.id),
         })),
 

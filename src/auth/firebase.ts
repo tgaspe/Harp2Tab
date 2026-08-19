@@ -31,3 +31,15 @@ const notOnNative = (): never => {
 
 export const firebaseApp  = notOnNative;
 export const firebaseAuth = notOnNative;
+
+/**
+ * The Firestore handle and the emulator switch, mirroring `firebase.web.ts`.
+ *
+ * Native never reaches either: `isFirebaseConfigured()` is `false`, so the sync engine's entry
+ * condition stops before anything asks for a database. They exist so the `.web` modules that
+ * import them typecheck against this file, which is the one TypeScript resolves.
+ */
+export const firestoreDb: () => Promise<never> = async () => notOnNative();
+
+/** Always false on native — there is no emulator to point at, because there is nothing to sync. */
+export const isEmulator = (): boolean => false;

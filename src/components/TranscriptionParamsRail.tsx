@@ -15,7 +15,7 @@ import { SliderInput } from './SliderInput';
 import { Toggle } from './Toggle';
 import { useTheme } from '@/hooks/useTheme';
 import { FONT } from '@/constants/keys';
-import { Poppins, SpaceGrotesk } from '@/constants/fonts';
+import { Poppins } from '@/constants/fonts';
 import type { ParamValues, TranscriptionParam } from '@/audio/algorithms';
 import type { Theme } from '@/theme';
 
@@ -225,7 +225,7 @@ function createStyles(t: Theme) {
       minWidth:      0,
     },
     label: {
-      fontFamily:    SpaceGrotesk.medium,
+      fontFamily:    Poppins.semiBold,
       fontSize:      FONT.xs,
       letterSpacing: 1,
       color:         t.textMuted,

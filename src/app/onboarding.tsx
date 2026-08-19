@@ -2,6 +2,7 @@ import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { FONT } from '@/constants/keys';
 import { useTheme } from '@/hooks/useTheme';
 import { addAudioFrameListener, startCapture, stopCapture, setThreshold } from '@/native/AudioCapture';
+import { useAppStore } from '@/store/useAppStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
 import type { Theme } from '@/theme';
@@ -34,11 +35,17 @@ export default function OnboardingScreen() {
   const router  = useRouter();
   const theme   = useTheme();
   const styles  = useMemo(() => createStyles(theme), [theme]);
-  const { skipPermission } = useLocalSearchParams<{ skipPermission?: string }>();
+  // `next` is how the web entry points say "this calibration belongs to a recording the
+  // user already pressed Record for" — see the `leave()` helper below.
+  const { skipPermission, next } = useLocalSearchParams<{ skipPermission?: string; next?: string }>();
 
   const hasCompletedOnboarding    = useSettingsStore((s) => s.hasCompletedOnboarding);
   const setMicSensitivity        = useSettingsStore((s) => s.setMicSensitivity);
   const setHasCompletedOnboarding = useSettingsStore((s) => s.setHasCompletedOnboarding);
+  const startRecording            = useAppStore((s) => s.startRecording);
+
+  /** Arrived here from a Record press rather than from Home or Settings. */
+  const fromRecord = next === 'recording';
 
   const [step,            setStep]            = useState<CalibrationStep>('permission');
   const [countdownSec,    setCountdownSec]    = useState(0);
@@ -52,6 +59,8 @@ export default function OnboardingScreen() {
   const meterAnim        = useRef(new Animated.Value(0)).current;
   const listenerRef      = useRef<ReturnType<typeof addAudioFrameListener> | null>(null);
   const intervalRef      = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** Set once this screen has bowed out on its own terms — see the cleanup effect. */
+  const handedOffRef     = useRef(false);
 
   // ── Guard: returning users can only reach this via Settings ──────────────
   useEffect(() => {
@@ -63,11 +72,18 @@ export default function OnboardingScreen() {
   }, []);
 
   // ── Cleanup on unmount ────────────────────────────────────────────────────
+  //
+  // The `stopCapture()` here is for an *abandoned* calibration — a Back press mid-countdown,
+  // which would otherwise leave the mic hot with nobody listening. A calibration that ran to
+  // the end already stopped capture in `finishBlow`, and when the next screen is /recording
+  // that screen opens its own stream on mount; if this unmount landed after that (route
+  // transitions do not promise otherwise), a second stop here would tear down the take the
+  // user just started. So once `leave()` has committed, this cleanup keeps its hands off.
   useEffect(() => {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
       listenerRef.current?.remove();
-      stopCapture();
+      if (!handedOffRef.current) stopCapture();
     };
   }, []);
 
@@ -214,17 +230,37 @@ export default function OnboardingScreen() {
     beginSilenceMeasurement();
   }
 
+  // ── Where this flow lets out ─────────────────────────────────────────────
+  /**
+   * On the web the user arrives here mid-press: they hit Record, and calibration is the
+   * one-time first step of that recording. Dropping them back on Home afterwards would
+   * make them press Record a second time to get the thing they already asked for, so the
+   * session is started here and the flow lets out on /recording instead.
+   *
+   * `replace`, not `push`, in both cases — calibration is done, and a Back that returns
+   * to a finished countdown is nobody's idea of history.
+   */
+  function leave() {
+    handedOffRef.current = true;
+    if (fromRecord) {
+      startRecording();
+      router.replace('/recording');
+      return;
+    }
+    router.replace('/app');
+  }
+
   // ── Step: result — commit and proceed ────────────────────────────────────
   function finish() {
     setMicSensitivity(calibratedValue);
     setHasCompletedOnboarding(true);
-    router.replace('/app');
+    leave();
   }
 
   // ── Step: denied — skip with defaults ────────────────────────────────────
   function skip() {
     setHasCompletedOnboarding(true);
-    router.replace('/app');
+    leave();
   }
 
   // ── Meter color ───────────────────────────────────────────────────────────
@@ -263,7 +299,9 @@ export default function OnboardingScreen() {
             icon="mic-outline"
             title="Mic Calibration"
             body={
-              'Harp2Tab needs a moment to learn your environment.\n\n' +
+              (fromRecord
+                ? 'Before your first recording, Harp2Tab needs a moment to learn your environment. This is one-time — every recording after this one starts straight away.\n\n'
+                : 'Harp2Tab needs a moment to learn your environment.\n\n') +
               'First, we\'ll need access to your microphone.'
             }
             theme={theme}
@@ -362,7 +400,7 @@ export default function OnboardingScreen() {
               style={({ pressed }) => [styles.btn, pressed && styles.btnPressed]}
               onPress={finish}
             >
-              <Text style={styles.btnText}>Start Using Harp2Tab</Text>
+              <Text style={styles.btnText}>{fromRecord ? 'Start Recording' : 'Start Using Harp2Tab'}</Text>
             </Pressable>
             <Pressable
               style={({ pressed }) => [styles.btnGhost, pressed && { opacity: 0.5 }]}

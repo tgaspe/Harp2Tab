@@ -1,18 +1,14 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import {
-  Poppins_200ExtraLight,
   Poppins_400Regular,
   Poppins_500Medium,
   Poppins_600SemiBold,
   Poppins_700Bold,
   Poppins_800ExtraBold,
-  Poppins_900Black,
 } from '@expo-google-fonts/poppins';
 import {
-  SpaceGrotesk_300Light,
   SpaceGrotesk_400Regular,
   SpaceGrotesk_500Medium,
-  SpaceGrotesk_600SemiBold,
   SpaceGrotesk_700Bold,
 } from '@expo-google-fonts/space-grotesk';
 import { useFonts } from 'expo-font';
@@ -26,6 +22,7 @@ import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { TopBar } from '@/components/TopBar';
 import { startAuthListener } from '@/auth/useAuthStore';
 import { startEntitlementListener } from '@/store/useEntitlementStore';
+import { startPurchasesListener } from '@/billing/purchases';
 import { startSyncListener } from '@/sync/syncEngine';
 import { AdoptionPrompt } from '@/sync/AdoptionPrompt';
 
@@ -35,17 +32,13 @@ export default function RootLayout() {
   const colorScheme = useColorScheme();
 
   const [fontsLoaded] = useFonts({
-    Poppins_200ExtraLight,
     Poppins_400Regular,
     Poppins_500Medium,
     Poppins_600SemiBold,
     Poppins_700Bold,
     Poppins_800ExtraBold,
-    Poppins_900Black,
-    SpaceGrotesk_300Light,
     SpaceGrotesk_400Regular,
     SpaceGrotesk_500Medium,
-    SpaceGrotesk_600SemiBold,
     SpaceGrotesk_700Bold,
   });
 
@@ -75,6 +68,13 @@ export default function RootLayout() {
    * cached entitlement.
    */
   useEffect(() => startEntitlementListener(), []);
+
+  /**
+   * Configures the RevenueCat SDK for whoever is signed in, and keeps the customer-portal link
+   * current (8-6). Started here rather than in `useIAP` because `/profile` needs the link and
+   * never renders the paywall — a hook that mounts on one screen cannot serve another.
+   */
+  useEffect(() => startPurchasesListener(), []);
 
   /**
    * Cloud sync (7b-4), started the same way and for the same reason: one module owns the

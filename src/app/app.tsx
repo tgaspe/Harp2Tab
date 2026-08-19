@@ -1,3 +1,4 @@
+import { ActionSheetModal } from '@/components/ActionSheetModal';
 import { AppSidebar } from '@/components/AppSidebar';
 import { KeyGrid } from '@/components/KeyGrid';
 import { RatingModal } from '@/components/RatingModal';
@@ -18,13 +19,14 @@ import { selectRecordings, useRecordingsStore } from '@/store/useRecordingsStore
 import { selectMidiProjects, useMidiProjectsStore } from '@/store/useMidiProjectsStore';
 import { createProject } from '@/audio/midiProject';
 import type { Theme } from '@/theme';
-import type { HarmonicaKey, HarmonicaType, TabRecording } from '@/types';
+import type { HarmonicaKey, HarmonicaType, MidiProject, TabRecording } from '@/types';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
-import { Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type ViewStyle } from 'react-native';
+import { Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions, type ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WEB_SCREEN_PADDING_TOP, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
+import { GROUP_LABEL, RADIUS, SECTION_HEADING } from '@/constants/ui';
 
 type SortOption = 'recent' | 'oldest' | 'title' | 'longest';
 const SORT_OPTIONS: { value: SortOption; label: string }[] = [
@@ -32,6 +34,27 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
   { value: 'oldest',  label: 'Oldest first' },
   { value: 'title',   label: 'Title (A–Z)' },
   { value: 'longest', label: 'Longest' },
+];
+
+/**
+ * The projects section's own sort, deliberately not `SortOption`.
+ *
+ * Three of the four options carry over, but 'Longest' does not: a project's length is a
+ * property of whichever track you end up converting, not of the project, so ordering by it
+ * would rank the list on a number the card never shows. 'Most tracks' replaces it — it
+ * sorts on the figure the card *does* print, and it's the one that separates a real
+ * arrangement from a one-track import.
+ *
+ * 'Most recent'/'Oldest' also resolve on `updatedAt` here, where the tabs list uses
+ * `createdAt`. Same reason: the project card's timestamp line says "Updated", and a sort
+ * that disagreed with the stamp beside it would look broken.
+ */
+type ProjectSortOption = 'recent' | 'oldest' | 'title' | 'tracks';
+const PROJECT_SORT_OPTIONS: { value: ProjectSortOption; label: string }[] = [
+  { value: 'recent', label: 'Most recent' },
+  { value: 'oldest', label: 'Oldest first' },
+  { value: 'title',  label: 'Title (A–Z)' },
+  { value: 'tracks', label: 'Most tracks' },
 ];
 
 // Shared by the key filter and sort pills — a small pill that opens an absolute-positioned
@@ -92,33 +115,93 @@ function FilterDropdown({ pillPrefix = '', value, options, onSelect, theme, styl
   );
 }
 
-// `layout="row"` is the sidebar's compact icon-and-two-line-stack form — used for the
-// dashboard's secondary/glanceable stats, which shouldn't be as visually loud as the
-// primary "column" tile form (kept around in case a future full-width band needs it).
 /**
- * One library stat, as a chip in the dashboard header's stat strip.
+ * "2 minutes ago" / "3 days ago" / a date once it stops being recent.
  *
- * Replaced a two-layout `StatTile` that existed to sit in the left rail. The rail was the
- * wrong home for these: it is otherwise entirely actions, and a stat wedged under them was
- * both the least glanceable thing on the panel and the first thing a short viewport cut
- * off. Up beside the greeting they're read on arrival, which is when a "here's where you
- * left off" number is worth anything.
- *
- * Value and label sit on one line rather than stacked, so the strip stays one row tall and
- * reads as a sentence fragment ("3h 42m transcribed") instead of a card.
+ * Coarse on purpose: the question this answers is "is this the thing I was just doing",
+ * and past about a week the answer is no and the exact figure stops mattering.
  */
-function StatPill({ icon, value, label, styles, theme }: {
-  icon: keyof typeof Ionicons.glyphMap;
-  value: string;
-  label: string;
-  styles: ReturnType<typeof createStyles>;
+function timeAgo(ts: number): string {
+  const secs = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (secs < 60)    return 'just now';
+  const mins = Math.round(secs / 60);
+  if (mins < 60)    return `${mins} minute${mins === 1 ? '' : 's'} ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24)   return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  const days = Math.round(hours / 24);
+  if (days <= 7)    return `${days} day${days === 1 ? '' : 's'} ago`;
+  return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+/**
+ * One MIDI project, as a card in the dashboard's projects grid.
+ *
+ * A component rather than inline markup for one reason: deleting a project used to fire the
+ * instant the trash icon was hit, while deleting a *recording* — the less valuable of the
+ * two — went through a confirmation sheet. That needed local `confirming` state, and the
+ * grid is a `.map()`.
+ */
+function ProjectCard({ project, onOpen, onDelete, theme, styles }: {
+  project: MidiProject;
+  onOpen: () => void;
+  onDelete: () => void;
   theme: Theme;
+  styles: ReturnType<typeof createStyles>;
 }) {
+  const [confirming, setConfirming] = useState(false);
+  // Whole-card hover, for the same reason as RecordingCard's — see the note there.
+  const [hovered, setHovered] = useState(false);
+
   return (
-    <View style={styles.statPill}>
-      <Ionicons name={icon} size={14} color={theme.accent} />
-      <Text style={styles.statPillValue}>{value}</Text>
-      <Text style={styles.statPillLabel}>{label}</Text>
+    <View
+      style={[styles.projectCard, hovered && styles.projectCardHovered]}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
+    >
+      <Pressable
+        style={styles.projectCardMain}
+        onPress={onOpen}
+        accessibilityRole="button"
+        accessibilityLabel={`Open ${project.title} in the MIDI Studio`}
+      >
+        <View style={styles.projectCardIconWrap}>
+          <Ionicons name="layers-outline" size={28} color={theme.accent} />
+        </View>
+        <View style={styles.projectCardText}>
+          <Text style={styles.projectCardTitle} numberOfLines={1}>{project.title}</Text>
+          <Text style={styles.projectCardMeta} numberOfLines={1}>
+            {project.tracks.length} track{project.tracks.length === 1 ? '' : 's'}
+            {' · '}
+            {project.tracks.reduce((n, t) => n + t.notes.length, 0)} notes
+          </Text>
+          {/* The line that tells two same-shaped projects apart. Title collisions are
+              prevented at save time now, but "which of these did I touch last" is a
+              different question and only a timestamp answers it. */}
+          <Text style={styles.projectCardStamp} numberOfLines={1}>
+            Updated {timeAgo(project.updatedAt)}
+          </Text>
+        </View>
+      </Pressable>
+      <Pressable
+        onPress={() => setConfirming(true)}
+        style={styles.projectCardDelete}
+        hitSlop={6}
+        accessibilityRole="button"
+        accessibilityLabel={`Delete project ${project.title}`}
+      >
+        <Ionicons name="trash-outline" size={14} color={theme.textMuted} />
+      </Pressable>
+
+      {/* Same sheet, same wording shape as RecordingCard's delete — the two destructive
+          actions on this page should cost the same. */}
+      <ActionSheetModal
+        visible={confirming}
+        title={`Delete "${project.title}"? This can't be undone.`}
+        options={[
+          { label: 'Delete', style: 'destructive', onPress: onDelete },
+        ]}
+        onClose={() => setConfirming(false)}
+      />
     </View>
   );
 }
@@ -129,7 +212,14 @@ export default function KeySelectionScreen() {
   const styles         = useMemo(() => createStyles(theme), [theme]);
   const hasCompletedOnboarding = useSettingsStore((s) => s.hasCompletedOnboarding);
 
+  // Native only. On the web, mic calibration is the first step of the first *recording*
+  // rather than a wall in front of the app: most of what Home offers — the library, audio
+  // and MIDI upload, a blank Studio project — never touches a microphone, and demanding
+  // one from a visitor who has not asked to record yet is both a worse first impression
+  // and a browser prompt with no context behind it. `handleStart` sends them through
+  // calibration at the moment it actually means something.
   useEffect(() => {
+    if (Platform.OS === 'web') return;
     if (!hasCompletedOnboarding) router.replace('/onboarding');
   }, [hasCompletedOnboarding]);
 
@@ -155,12 +245,6 @@ export default function KeySelectionScreen() {
   // Only for failures that happen before the import screen exists (an oversized file
   // rejected at pick time) — everything after that is reported on /import itself.
   const [uploadError, setUploadError] = useState<string | null>(null);
-  // Web-only: the key/type picker lives behind the "New Recording" action's chevron
-  // instead of always being on-screen. Shared between the hero (empty-library / first
-  // visit) and the compact dashboard header (returning user) below — only one of those
-  // two ever renders at a time, so one flag covers both.
-  const [pickerOpen, setPickerOpen] = useState(false);
-
   // Web-only: lets a recording row's play button preview it without leaving Home or
   // touching the shared editing session in useAppStore — this hook instance is fully
   // self-contained (play() takes notes as an argument), so previewing here can't clobber
@@ -175,6 +259,35 @@ export default function KeySelectionScreen() {
   const [libraryKeyFilter, setLibraryKeyFilter] = useState<'all' | HarmonicaKey>('all');
   const [librarySort, setLibrarySort] = useState<SortOption>('recent');
   const [libraryView, setLibraryView] = useState<'list' | 'grid'>('list');
+  // The projects section's toolbar is its own, not a second view onto the tabs one. The two
+  // libraries hold different objects and get scanned for different reasons — sorting tabs by
+  // key while browsing projects by track count is a normal thing to want, and one shared
+  // pair of controls would make each section's setting a side effect of the other's.
+  // Defaults to `grid` because the projects section has always been a wrapping card grid;
+  // the toggle adds a list option, it doesn't change what you get on arrival.
+  const [projectSort, setProjectSort] = useState<ProjectSortOption>('recent');
+  const [projectView, setProjectView] = useState<'list' | 'grid'>('grid');
+
+  /**
+   * How many project cards go across, and therefore how wide one is.
+   *
+   * Three of them span exactly the width of one tab card below — the two libraries are the
+   * same page-width object, one just subdivided — which is why the count is fixed rather
+   * than a `flexBasis` the cards negotiate among themselves. That was the old behaviour and
+   * it left a ragged right edge wherever the column width wasn't a clean multiple of 300.
+   *
+   * Fixed at three it would keep dividing a column that has already run out of room: the
+   * rail takes a flat 300px, so a 1024px window leaves each card about 200px for a 62px
+   * icon plus three lines of text. Dropping a column is better than truncating every card
+   * in the section, so the count steps down instead. Measured on the *window* rather than
+   * on the column because the rail's width is a constant — the two differ by a fixed amount
+   * and window width is the number that doesn't need a layout pass to read.
+   */
+  const { width: windowWidth } = useWindowDimensions();
+  const projectColumns = windowWidth >= 1200 ? 3 : windowWidth >= 900 ? 2 : 1;
+  // The gutter is padding *inside* each item (see `projectGrid`'s negative margin), so the
+  // basis is a clean fraction of the row with nothing to subtract from it.
+  const projectColumnBasis = `${100 / projectColumns}%` as ViewStyle['flexBasis'];
 
   const effectiveLimit = computeEffectiveLimit(ratingStatus);
 
@@ -183,6 +296,14 @@ export default function KeySelectionScreen() {
     const gate = resolveSessionGate({ isPurchased: premium, totalRecordingsUsed, ratingStatus });
     if (gate === 'showRating') { setShowRatingModal(true); return; }
     if (gate === 'showPaywall') { router.push('/paywall'); return; }
+    // Web: first recording ever, so calibrate first. The gate is resolved before this on
+    // purpose — someone who is about to hit the paywall should see it rather than spend
+    // eight seconds blowing into a microphone for a session they can't start. Onboarding
+    // calls `startRecording()` itself and lands on /recording when it's done.
+    if (Platform.OS === 'web' && !hasCompletedOnboarding) {
+      router.push({ pathname: '/onboarding', params: { next: 'recording' } });
+      return;
+    }
     startRecording();
     router.push('/recording');
   }
@@ -256,47 +377,13 @@ export default function KeySelectionScreen() {
     preview.play(recording.tabNotes, { bpm: recording.bpm ?? 100, metronomeEnabled: false, rate: 1 });
   }
 
-  // Sidebar stats (web, returning users only) — computed from the same recordings array as
-  // the list, not tracked separately.
-  //
-  // These replaced a raw recording count (already printed in the section header a few inches
-  // to the right) and a total note count (a number with no scale to read it against). Each
-  // one here answers a question instead: how much have I done, which harp do I actually
-  // reach for, and — the only figure on the panel that can change today — what have I done
-  // this week. All three come out of fields `TabRecording` already carries.
-  //
-  // **Sits above the onboarding guard below, deliberately.** React identifies hooks by call
-  // order, so a hook placed after an early return is skipped on the renders that take it —
-  // and `hasCompletedOnboarding` flips false→true in the ordinary first-run flow. The render
-  // straight after onboarding would then call one more hook than the render before it and
-  // throw "Rendered more hooks than during the previous render". This depends only on
-  // `recordings`, so computing it before the guard costs one pass over an already-loaded array.
-  const libraryStats = useMemo(() => {
-    const totalMs = recordings.reduce((sum, r) => sum + r.duration, 0);
-
-    const keyCounts = new Map<HarmonicaKey, number>();
-    for (const r of recordings) keyCounts.set(r.key, (keyCounts.get(r.key) ?? 0) + 1);
-    // Ties break on whichever key was seen first, which is insertion order — arbitrary but
-    // stable, and a tie means there is no most-used key to be wrong about.
-    let topKey: HarmonicaKey | null = null;
-    let topCount = 0;
-    for (const [key, count] of keyCounts) {
-      if (count > topCount) { topKey = key; topCount = count; }
-    }
-
-    const weekAgo   = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    const thisWeek  = recordings.filter((r) => r.createdAt >= weekAgo).length;
-
-    return { totalMs, topKey, topCount, thisWeek };
-  }, [recordings]);
-
-  if (!hasCompletedOnboarding) return null;
+  if (Platform.OS !== 'web' && !hasCompletedOnboarding) return null;
 
   // Shared across the web hero dropdown and the native single-column layout below — the
   // markup is identical, only where each piece lands in the page differs per platform.
   const harmonicaTypeSection = (
     <View style={styles.section}>
-      <Text style={styles.sectionLabel}>HARMONICA TYPE</Text>
+      <Text style={styles.sectionLabel}>Harmonica type</Text>
       <View style={styles.segmented}>
         {(['diatonic', 'chromatic'] as HarmonicaType[]).map((type) => {
           const active = harmonicaType === type;
@@ -320,7 +407,7 @@ export default function KeySelectionScreen() {
 
   const keySection = (
     <View style={[styles.section, Platform.OS !== 'web' && { marginTop: 16 }]}>
-      <Text style={styles.sectionLabel}>HARMONICA KEY</Text>
+      <Text style={styles.sectionLabel}>Harmonica key</Text>
       <KeyGrid
         selected={selectedKey}
         onSelect={(k: HarmonicaKey) => selectKey_(k)}
@@ -423,10 +510,6 @@ export default function KeySelectionScreen() {
     </View>
   );
 
-  const freeCounterLabel = FREE_TIER_ENABLED && !premium
-    ? `${Math.min(totalRecordingsUsed, effectiveLimit)} / ${effectiveLimit} free recordings used`
-    : null;
-
   // Store keeps newest-first for future consumers; display oldest-to-newest so the most
   // recent recording reads as "last".
   const orderedRecordings = [...recordings].reverse();
@@ -440,10 +523,37 @@ export default function KeySelectionScreen() {
     ...presentKeys.map((k) => ({ value: k, label: `Key ${k}` })),
   ];
 
-  const librarySearchTrimmed = librarySearch.trim().toLowerCase();
+  /**
+   * Search is *page*-scoped; the key filter and sort are *section*-scoped.
+   *
+   * That asymmetry is deliberate and is why the input moved up into the page header. A
+   * control's position is a claim about its reach, and this one used to sit inside the
+   * Harmonica Tabs toolbar — which is exactly why it only ever searched tabs. Level with
+   * the page title it can honestly span both libraries. Key and sort stay in the toolbar
+   * because a MIDI project has no key and no duration to order by.
+   */
+  const searchQuery   = librarySearch.trim().toLowerCase();
+  const searching     = searchQuery !== '';
+
+  /** Projects match on title *or* any track name — "bass", "lead". A project otherwise has
+   *  almost no searchable surface, and the track list is the part the user named. */
+  const matchedProjects = (searching
+    ? midiProjects.filter((p) =>
+        p.title.toLowerCase().includes(searchQuery) ||
+        p.tracks.some((t) => (t.name ?? '').toLowerCase().includes(searchQuery)))
+    : midiProjects
+  ).slice().sort((a, b) => {
+    switch (projectSort) {
+      case 'recent': return b.updatedAt - a.updatedAt;
+      case 'oldest': return a.updatedAt - b.updatedAt;
+      case 'title':  return a.title.localeCompare(b.title);
+      case 'tracks': return b.tracks.length - a.tracks.length;
+    }
+  });
+
   const filteredRecordings = recordings
     .filter((r) => libraryKeyFilter === 'all' || r.key === libraryKeyFilter)
-    .filter((r) => librarySearchTrimmed === '' || r.title.toLowerCase().includes(librarySearchTrimmed))
+    .filter((r) => !searching || r.title.toLowerCase().includes(searchQuery))
     .sort((a, b) => {
       switch (librarySort) {
         case 'recent':  return b.createdAt - a.createdAt;
@@ -452,66 +562,52 @@ export default function KeySelectionScreen() {
         case 'longest': return b.duration - a.duration;
       }
     });
-  const libraryFiltersActive = libraryKeyFilter !== 'all' || librarySearchTrimmed !== '';
+  const libraryFiltersActive = libraryKeyFilter !== 'all' || searching;
 
+  // A section with no hits is noise while searching, so it goes away entirely; with nothing
+  // matching anywhere, one page-level empty state stands in for both.
+  const projectsVisible  = matchedProjects.length > 0;
+  const tabsVisible      = searching ? filteredRecordings.length > 0 : true;
+  const noResultsAtAll   = searching && !projectsVisible && filteredRecordings.length === 0;
+  const hasAnyDocuments  = recordings.length > 0 || midiProjects.length > 0;
 
-  /** Sidebar-width duration: "3h 42m" / "42m" / "48s". Never zero-padded — this is a
-   *  headline figure, not a timecode. */
-  function totalDurationLabel(ms: number): string {
-    const totalMinutes = Math.floor(ms / 60000);
-    if (totalMinutes < 1) return `${Math.round(ms / 1000)}s`;
-    const hours   = Math.floor(totalMinutes / 60);
-    const minutes = totalMinutes % 60;
-    return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
-  }
+  /**
+   * The one line under the page title.
+   *
+   * Replaced a "Welcome back / Here's where you left off." greeting *and* a strip of three
+   * stat pills (total duration, most-used key, count this week). None of the three was
+   * actionable, none changed what the user did next, and together they pushed the library
+   * itself below the fold on a laptop. A count of what's in the library is the only number
+   * that earns a place directly under a heading that says "Library".
+   */
+  /**
+   * The one document to offer back — whichever of the two libraries was touched last.
+   *
+   * Deliberately across *both* types rather than per-section: "where was I" has one answer,
+   * and making the user compare a tab's timestamp against a project's to find it is the work
+   * this is supposed to save. Resolved on `updatedAt`, not `createdAt` — the list below
+   * already sorts by creation, so keying this off the same field would just restate row one.
+   */
+  const resumeTarget: { kind: 'tab'; rec: TabRecording } | { kind: 'project'; project: MidiProject } | null = (() => {
+    const newestRec  = recordings.reduce<TabRecording | null>((best, r) => (!best || r.updatedAt > best.updatedAt ? r : best), null);
+    const newestProj = midiProjects.reduce<MidiProject | null>((best, p) => (!best || p.updatedAt > best.updatedAt ? p : best), null);
+    if (newestProj && (!newestRec || newestProj.updatedAt > newestRec.updatedAt)) return { kind: 'project', project: newestProj };
+    if (newestRec) return { kind: 'tab', rec: newestRec };
+    return null;
+  })();
 
-  // Split button (main = start with current selection, chevron = open the key/type
-  // dropdown) — shared markup between the hero's larger card version and the dashboard
-  // header's compact version below, just with different wrapping styles per caller.
-  // Hero-only now — the sidebar shows the key/type picker permanently instead of behind
-  // this chevron (see the sidebar's own inline picker below).
-  const splitButton = (mainStyle: object, chevronStyle: object, textStyle: object, dotSize: number) => (
-    <View style={styles.splitBtnAnchor}>
-      <View style={styles.splitBtnRow}>
-        <Pressable
-          onPress={handleStart}
-          disabled={!selectedKey}
-          style={({ pressed, hovered }: any) => [
-            mainStyle,
-            !selectedKey && styles.splitBtnMainDisabled,
-            (pressed || hovered) && !!selectedKey && styles.splitBtnMainPressed,
-          ]}
-          accessibilityRole="button"
-          accessibilityLabel="Start Recording"
-          accessibilityState={{ disabled: !selectedKey }}
-        >
-          <View style={[styles.recordDot, { width: dotSize, height: dotSize, borderRadius: dotSize / 2 }]} />
-          <Text style={[textStyle, !selectedKey && styles.splitBtnMainTextDisabled]}>
-            Start Recording
-          </Text>
-        </Pressable>
-        <Pressable
-          onPress={() => setPickerOpen((v) => !v)}
-          style={({ pressed, hovered }: any) => [
-            chevronStyle,
-            (pressed || hovered) && styles.splitBtnChevronPressed,
-          ]}
-          accessibilityRole="button"
-          accessibilityLabel={pickerOpen ? 'Hide key & type picker' : 'Choose key & type'}
-          accessibilityState={{ expanded: pickerOpen }}
-        >
-          <Ionicons name={pickerOpen ? 'chevron-up' : 'chevron-down'} size={13} color="#fff" />
-        </Pressable>
-      </View>
+  const resultCount = matchedProjects.length + filteredRecordings.length;
+  const librarySummary = searching
+    ? `${resultCount} result${resultCount === 1 ? '' : 's'} for “${librarySearch.trim()}”`
+    : recordings.length === 0 && midiProjects.length === 0
+    ? 'Nothing saved yet.'
+    : [
+        `${recordings.length} tab${recordings.length === 1 ? '' : 's'}`,
+        midiProjects.length > 0
+          ? `${midiProjects.length} MIDI project${midiProjects.length === 1 ? '' : 's'}`
+          : null,
+      ].filter(Boolean).join('  ·  ');
 
-      {pickerOpen && (
-        <View style={styles.splitDropdown}>
-          {harmonicaTypeSection}
-          {keySection}
-        </View>
-      )}
-    </View>
-  );
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -522,7 +618,7 @@ export default function KeySelectionScreen() {
       />
       <View style={[
         styles.container,
-        Platform.OS === 'web' && orderedRecordings.length > 0 && styles.containerFlush,
+        Platform.OS === 'web' && styles.containerFlush,
       ]}>
 
         {/* Header — TopBar covers logo/gear on web; on web the hero banner below carries
@@ -551,295 +647,279 @@ export default function KeySelectionScreen() {
         )}
 
         {Platform.OS === 'web' ? (
-          orderedRecordings.length === 0 ? (
-            // The marketing hero only earns its space for a genuinely new user with
-            // nothing saved yet — a one-time activation pitch, not something a returning
-            // user with a library should see on every visit.
+          /**
+           * One shell, always — sidebar plus a scrolling library column, whether or not
+           * anything is saved yet.
+           *
+           * This used to branch on `recordings.length === 0` into two entirely different
+           * pages: a full-bleed marketing hero with three 240px action cards, or this
+           * dashboard. The cost was that saving a first recording silently reorganised the
+           * whole screen — every entry point changed position, shape, size and colour at
+           * exactly the moment a new user was least able to absorb it. One layout is worth
+           * more than a better first-visit page, so the hero is gone and the empty library
+           * is just this column with nothing in it.
+           */
+          <View style={styles.dashboardShell}>
+            <AppSidebar />
             <ScrollView
-              style={styles.scroll}
-              contentContainerStyle={styles.webScrollContent}
+              style={styles.dashboardMainScroll}
+              contentContainerStyle={styles.dashboardMainScrollContent}
               showsVerticalScrollIndicator={false}
             >
-              <View style={styles.hero}>
-                <View style={styles.heroRow}>
-                  <View style={styles.heroLeft}>
-                    <View style={styles.heroBadge}>
-                      <Ionicons name="sparkles-outline" size={12} color={theme.accent} />
-                      <Text style={styles.heroBadgeText}>Your music. Transcribed.</Text>
-                    </View>
-                    <Text style={styles.heroTitle}>
-                      Turn your harmonica into tabs, <Text style={styles.heroTitleAccent}>instantly.</Text>
-                    </Text>
-                    <Text style={styles.heroSubtitle}>
-                      Record, upload, and let Harp2Tab detect the notes so you can focus on playing.
-                    </Text>
-                  </View>
-
-                  <View style={styles.heroRight}>
-                    <View style={styles.heroCard}>
-                      <View style={styles.heroCardIconWrap}>
-                        <Ionicons name="mic-outline" size={20} color={theme.accent} />
-                      </View>
-                      <Text style={styles.heroCardTitle}>New Recording</Text>
-                      <Text style={styles.heroCardDesc}>Record audio from your microphone</Text>
-
-                      {splitButton(styles.splitBtnMain, styles.splitBtnChevron, styles.splitBtnMainText, 7)}
-
-                      {freeCounterLabel && (
-                        <Text style={styles.heroCardCounter}>{freeCounterLabel}</Text>
-                      )}
-                    </View>
-
-                    <View style={styles.heroCardOutlined}>
-                      <View style={styles.heroCardIconWrapMuted}>
-                        <Ionicons name="cloud-upload-outline" size={20} color={theme.textSub} />
-                      </View>
-                      <Text style={styles.heroCardTitle}>Upload Audio</Text>
-                      <Text style={styles.heroCardDesc}>Upload a file and get your tabs in seconds</Text>
-                      <Pressable
-                        onPress={handleUploadAudio}
-                        disabled={!selectedKey}
-                        style={({ pressed, hovered }: any) => [
-                          styles.chooseFileBtn,
-                          !selectedKey && styles.chooseFileBtnDisabled,
-                          (pressed || hovered) && !!selectedKey && styles.chooseFileBtnPressed,
-                        ]}
-                        accessibilityRole="button"
-                        accessibilityLabel="Choose audio file"
-                        accessibilityState={{ disabled: !selectedKey }}
-                      >
-                        <Text style={styles.chooseFileBtnText}>Choose File</Text>
-                      </Pressable>
-                      <Text style={styles.uploadHint}>Supports .wav, .mp3, .m4a</Text>
-                    </View>
-
-                    {/* Third entry point: MIDI already states its pitches and timings, so
-                        this one converts rather than transcribes — a different promise from
-                        the audio card, and worth its own card rather than a second button. */}
-                    <View style={styles.heroCardOutlined}>
-                      <View style={styles.heroCardIconWrapMuted}>
-                        <Ionicons name="musical-note-outline" size={20} color={theme.textSub} />
-                      </View>
-                      <Text style={styles.heroCardTitle}>Upload MIDI</Text>
-                      <Text style={styles.heroCardDesc}>Convert a MIDI part into harmonica tabs</Text>
-                      <Pressable
-                        onPress={handleUploadMidi}
-                        disabled={!selectedKey}
-                        style={({ pressed, hovered }: any) => [
-                          styles.chooseFileBtn,
-                          !selectedKey && styles.chooseFileBtnDisabled,
-                          (pressed || hovered) && !!selectedKey && styles.chooseFileBtnPressed,
-                        ]}
-                        accessibilityRole="button"
-                        accessibilityLabel="Choose MIDI file"
-                        accessibilityState={{ disabled: !selectedKey }}
-                      >
-                        <Text style={styles.chooseFileBtnText}>Choose File</Text>
-                      </Pressable>
-                      <Text style={styles.uploadHint}>Supports .mid, .midi</Text>
-                    </View>
-
-                    {uploadErrorBanner}
-                  </View>
+              {/* The library *is* the page, so it gets the page title. What was here before
+                  was "Welcome back / Here's where you left off." at 26px — the largest text
+                  on the screen, carrying no information — over an 11px muted label that was
+                  the only thing naming the actual content. */}
+              <View style={styles.pageHeader}>
+                <View style={styles.pageHeaderText}>
+                  <Text style={styles.pageTitle}>Library</Text>
+                  <Text style={styles.pageSubtitle}>{librarySummary}</Text>
                 </View>
+
+                {hasAnyDocuments && (
+                  <View style={styles.searchBox}>
+                    <Ionicons name="search" size={15} color={theme.textMuted} />
+                    <TextInput
+                      value={librarySearch}
+                      onChangeText={setLibrarySearch}
+                      placeholder="Search library..."
+                      placeholderTextColor={theme.textMuted}
+                      style={styles.searchInput}
+                      accessibilityLabel="Search tabs and MIDI projects"
+                    />
+                    {/* A page-level search you can't get out of in one click is a trap —
+                        clearing it by selecting and deleting is fine for a toolbar filter,
+                        not for the control that governs the whole page. */}
+                    {searching && (
+                      <Pressable
+                        onPress={() => setLibrarySearch('')}
+                        hitSlop={6}
+                        accessibilityRole="button"
+                        accessibilityLabel="Clear search"
+                      >
+                        <Ionicons name="close-circle" size={15} color={theme.textMuted} />
+                      </Pressable>
+                    )}
+                  </View>
+                )}
               </View>
 
-              {/* Empty-state: nothing to manage yet, so no sidebar — just the hero above
-                  and the empty-library prompt below, single column throughout. */}
-              <View style={styles.section}>
-                <Text style={styles.sectionLabel}>HARMONICA TABS</Text>
+              {/* Where you were, offered back.
+                  Top of the column rather than filling the empty space at the bottom: this
+                  is the first thing worth acting on, and a "continue" affordance below a
+                  list you've already had to scan is a "continue" affordance that arrives
+                  too late to save anyone anything. */}
+              {resumeTarget && !searching && (
+                <Pressable
+                  onPress={() => {
+                    if (resumeTarget.kind === 'tab') handleOpenRecording(resumeTarget.rec);
+                    else router.push({ pathname: '/studio', params: { projectId: resumeTarget.project.id } });
+                  }}
+                  style={({ hovered }: any) => [styles.resumeBand, hovered && styles.resumeBandHovered]}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Resume ${resumeTarget.kind === 'tab' ? resumeTarget.rec.title : resumeTarget.project.title}`}
+                >
+                  <View style={styles.resumeIconWrap}>
+                    <Ionicons
+                      name={resumeTarget.kind === 'tab' ? 'musical-notes-outline' : 'layers-outline'}
+                      size={18}
+                      color={theme.accent}
+                    />
+                  </View>
+                  <View style={styles.resumeText}>
+                    <Text style={styles.resumeLabel}>Continue working</Text>
+                    <Text style={styles.resumeTitle} numberOfLines={1}>
+                      {resumeTarget.kind === 'tab' ? resumeTarget.rec.title : resumeTarget.project.title}
+                      <Text style={styles.resumeStamp}>
+                        {'   '}edited {timeAgo(resumeTarget.kind === 'tab' ? resumeTarget.rec.updatedAt : resumeTarget.project.updatedAt)}
+                      </Text>
+                    </Text>
+                  </View>
+                  <Ionicons name="arrow-forward" size={16} color={theme.accent} />
+                </Pressable>
+              )}
+
+              {/* Projects sit above recordings because they're upstream of them: a
+                  project is what a tab gets converted *out of*, so finding one is how you
+                  get back to editing the source rather than the result. */}
+              {projectsVisible && (
+                <View style={[styles.section, styles.sectionElevated]}>
+                  {/* Same toolbar shape as Harmonica Tabs below — label left, controls
+                      right. The projects list stopped being a handful of cards you take in
+                      at a glance, and a section you have to scan needs the same ordering
+                      and density controls as the one under it. No key filter: a project
+                      has no harmonica key until a track is converted. */}
+                  <View style={styles.libraryToolbar}>
+                    {/* Named for what the section holds, not for the editor that opens it. */}
+                    <Text style={styles.sectionLabel}>
+                      MIDI Projects · {matchedProjects.length}
+                    </Text>
+
+                    <View style={styles.libraryToolbarRight}>
+                      <FilterDropdown
+                        pillPrefix="Sort: "
+                        value={projectSort}
+                        options={PROJECT_SORT_OPTIONS}
+                        onSelect={(v) => setProjectSort(v as ProjectSortOption)}
+                        theme={theme}
+                        styles={styles}
+                      />
+
+                      <View style={styles.viewToggle}>
+                        <Pressable
+                          onPress={() => setProjectView('list')}
+                          style={[styles.viewToggleSeg, projectView === 'list' && styles.viewToggleSegActive]}
+                          accessibilityRole="radio"
+                          accessibilityState={{ checked: projectView === 'list' }}
+                          accessibilityLabel="Project list view"
+                        >
+                          <Ionicons name="list-outline" size={14} color={projectView === 'list' ? '#fff' : theme.textSub} />
+                        </Pressable>
+                        <Pressable
+                          onPress={() => setProjectView('grid')}
+                          style={[styles.viewToggleSeg, projectView === 'grid' && styles.viewToggleSegActive]}
+                          accessibilityRole="radio"
+                          accessibilityState={{ checked: projectView === 'grid' }}
+                          accessibilityLabel="Project grid view"
+                        >
+                          <Ionicons name="grid-outline" size={14} color={projectView === 'grid' ? '#fff' : theme.textSub} />
+                        </Pressable>
+                      </View>
+                    </View>
+                  </View>
+
+                  {/* The only place on this screen that says what makes a project a
+                      different kind of thing from a tab. */}
+                  <Text style={styles.sectionSubtitle}>
+                    Multi-track source — convert a track to tabs
+                  </Text>
+                  <View style={projectView === 'grid' ? styles.projectGrid : styles.projectList}>
+                    {matchedProjects.map((project) => (
+                      <View
+                        key={project.id}
+                        style={projectView === 'grid'
+                          ? [styles.projectGridItem, { flexBasis: projectColumnBasis }]
+                          : undefined}
+                      >
+                        <ProjectCard
+                          project={project}
+                          onOpen={() => router.push({ pathname: '/studio', params: { projectId: project.id } })}
+                          onDelete={() => deleteProject(project.id)}
+                          theme={theme}
+                          styles={styles}
+                        />
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              )}
+
+              {tabsVisible && (
+              <View style={[styles.section, styles.dashboardLibrary]}>
+                {/* Search/filter/sort/view over an empty library is four controls that can
+                    only ever return nothing — so the toolbar arrives with the content. */}
+                {recordings.length > 0 ? (
+                  <View style={styles.libraryToolbar}>
+                    <Text style={styles.sectionLabel}>
+                      Harmonica Tabs · {filteredRecordings.length}
+                    </Text>
+
+                    <View style={styles.libraryToolbarRight}>
+                      <FilterDropdown
+                        value={libraryKeyFilter}
+                        options={keyFilterOptions}
+                        onSelect={(v) => setLibraryKeyFilter(v as 'all' | HarmonicaKey)}
+                        theme={theme}
+                        styles={styles}
+                      />
+
+                      <FilterDropdown
+                        pillPrefix="Sort: "
+                        value={librarySort}
+                        options={SORT_OPTIONS}
+                        onSelect={(v) => setLibrarySort(v as SortOption)}
+                        theme={theme}
+                        styles={styles}
+                      />
+
+                      <View style={styles.viewToggle}>
+                        <Pressable
+                          onPress={() => setLibraryView('list')}
+                          style={[styles.viewToggleSeg, libraryView === 'list' && styles.viewToggleSegActive]}
+                          accessibilityRole="radio"
+                          accessibilityState={{ checked: libraryView === 'list' }}
+                          accessibilityLabel="List view"
+                        >
+                          <Ionicons name="list-outline" size={14} color={libraryView === 'list' ? '#fff' : theme.textSub} />
+                        </Pressable>
+                        <Pressable
+                          onPress={() => setLibraryView('grid')}
+                          style={[styles.viewToggleSeg, libraryView === 'grid' && styles.viewToggleSegActive]}
+                          accessibilityRole="radio"
+                          accessibilityState={{ checked: libraryView === 'grid' }}
+                          accessibilityLabel="Grid view"
+                        >
+                          <Ionicons name="grid-outline" size={14} color={libraryView === 'grid' ? '#fff' : theme.textSub} />
+                        </Pressable>
+                      </View>
+                    </View>
+                  </View>
+                ) : (
+                  <Text style={styles.sectionLabel}>Harmonica Tabs</Text>
+                )}
+
+                {filteredRecordings.length > 0 ? (
+                  <View style={libraryView === 'grid' ? styles.recordingsGrid : styles.recordingsList}>
+                    {filteredRecordings.map((recording) => (
+                      <View key={recording.id} style={libraryView === 'grid' ? styles.recordingsGridItem : undefined}>
+                        <RecordingCard
+                          recording={recording}
+                          onPress={handleOpenRecording}
+                          onDelete={deleteRecording}
+                          onRename={renameRecording}
+                          onToggleFavorite={toggleFavorite}
+                          isPlaying={previewId === recording.id && preview.isPlaying}
+                          onTogglePlay={handleTogglePreview}
+                        />
+                      </View>
+                    ))}
+                  </View>
+                ) : (
+                  <View style={styles.recordingsEmpty}>
+                    <Ionicons
+                      name={libraryFiltersActive ? 'search-outline' : 'file-tray-outline'}
+                      size={26}
+                      color={theme.textMuted}
+                    />
+                    <Text style={styles.recordingsEmptyTitle}>
+                      {libraryFiltersActive ? 'No matching tabs' : 'No tabs yet'}
+                    </Text>
+                    {/* Points at the rail rather than repeating its buttons. The rail is
+                        now always on screen, which is the reason the empty state no longer
+                        has to carry its own copy of the entry points. */}
+                    <Text style={styles.recordingsEmptyText}>
+                      {libraryFiltersActive
+                        ? 'Try a different search term or key filter.'
+                        : 'Start a recording, or upload an audio or MIDI file — the actions are in the panel on the left.'}
+                    </Text>
+                  </View>
+                )}
+              </View>
+              )}
+
+              {/* One empty state for the whole page, standing in for the two section-level
+                  ones that were hidden. */}
+              {noResultsAtAll && (
                 <View style={styles.recordingsEmpty}>
-                  <Ionicons name="file-tray-outline" size={26} color={theme.textMuted} />
-                  <Text style={styles.recordingsEmptyTitle}>No tabs yet</Text>
+                  <Ionicons name="search-outline" size={26} color={theme.textMuted} />
+                  <Text style={styles.recordingsEmptyTitle}>No results</Text>
                   <Text style={styles.recordingsEmptyText}>
-                    Record a new song or upload an audio/MIDI file to get started.
+                    Nothing in your tabs or MIDI projects matches “{librarySearch.trim()}”.
                   </Text>
                 </View>
-              </View>
+              )}
             </ScrollView>
-          ) : (
-            // Left panel for quick actions + stats, full page height (not just as tall as
-            // its own content) so it reads as a persistent panel rather than a card that
-            // happens to sit next to the library — sits outside the ScrollView entirely;
-            // only the library side scrolls, same app-shell pattern as GitHub/Linear/etc.
-            <View style={styles.dashboardShell}>
-              <AppSidebar />
-              <ScrollView
-                style={styles.dashboardMainScroll}
-                contentContainerStyle={styles.dashboardMainScrollContent}
-                showsVerticalScrollIndicator={false}
-              >
-                <Text style={styles.dashboardTitle}>Welcome back</Text>
-                <Text style={styles.dashboardSubtitle}>Here&apos;s where you left off.</Text>
-
-                {/* Scrolls away with the greeting it belongs to — this is page header, read
-                    on arrival, not a persistent readout to browse the library against. */}
-                {recordings.length > 0 && (
-                  <View style={styles.statStrip}>
-                    <StatPill
-                      icon="time-outline"
-                      value={totalDurationLabel(libraryStats.totalMs)}
-                      label="transcribed"
-                      styles={styles} theme={theme}
-                    />
-                    {/* Only meaningful once there's something to be most-used: with one
-                        recording every key is the top key, which says nothing. */}
-                    {libraryStats.topKey && recordings.length > 1 && (
-                      <StatPill
-                        icon="musical-note-outline"
-                        value={libraryStats.topKey}
-                        label="most-used key"
-                        styles={styles} theme={theme}
-                      />
-                    )}
-                    <StatPill
-                      icon="calendar-outline"
-                      value={String(libraryStats.thisWeek)}
-                      label="this week"
-                      styles={styles} theme={theme}
-                    />
-                  </View>
-                )}
-
-                {/* Projects sit above recordings because they're upstream of them: a
-                    project is what a tab gets converted *out of*, so finding one is how you
-                    get back to editing the source rather than the result. */}
-                {midiProjects.length > 0 && (
-                  <View style={styles.section}>
-                    {/* Named for what the section holds, not for the editor that opens it —
-                        and the subtitle is the only place on this screen that says what
-                        makes a project a different kind of thing from a tab. */}
-                    <Text style={styles.libraryToolbarLabel}>
-                      MIDI PROJECTS · {midiProjects.length}
-                    </Text>
-                    <Text style={styles.sectionSubtitle}>
-                      Multi-track source — convert a track to tabs
-                    </Text>
-                    <View style={styles.projectGrid}>
-                      {midiProjects.map((project) => (
-                        <View key={project.id} style={styles.projectCard}>
-                          <Pressable
-                            style={styles.projectCardMain}
-                            onPress={() => router.push({ pathname: '/studio', params: { projectId: project.id } })}
-                            accessibilityRole="button"
-                            accessibilityLabel={`Open ${project.title} in the MIDI Studio`}
-                          >
-                            <Ionicons name="options-outline" size={16} color={theme.accent} />
-                            <View style={styles.projectCardText}>
-                              <Text style={styles.projectCardTitle} numberOfLines={1}>{project.title}</Text>
-                              <Text style={styles.projectCardMeta} numberOfLines={1}>
-                                {project.tracks.length} track{project.tracks.length === 1 ? '' : 's'}
-                                {' · '}
-                                {project.tracks.reduce((n, t) => n + t.notes.length, 0)} notes
-                              </Text>
-                            </View>
-                          </Pressable>
-                          <Pressable
-                            onPress={() => deleteProject(project.id)}
-                            style={styles.projectCardDelete}
-                            accessibilityRole="button"
-                            accessibilityLabel={`Delete project ${project.title}`}
-                          >
-                            <Ionicons name="trash-outline" size={14} color={theme.textMuted} />
-                          </Pressable>
-                        </View>
-                      ))}
-                    </View>
-                  </View>
-                )}
-
-                <View style={[styles.section, styles.dashboardLibrary]}>
-                  <View style={styles.libraryToolbar}>
-                      <Text style={styles.libraryToolbarLabel}>
-                        HARMONICA TABS · {recordings.length}
-                      </Text>
-
-                      <View style={styles.libraryToolbarRight}>
-                        <View style={styles.searchBox}>
-                          <Ionicons name="search" size={14} color={theme.textMuted} />
-                          <TextInput
-                            value={librarySearch}
-                            onChangeText={setLibrarySearch}
-                            placeholder="Search tabs..."
-                            placeholderTextColor={theme.textMuted}
-                            style={styles.searchInput}
-                            accessibilityLabel="Search recordings"
-                          />
-                        </View>
-
-                        <FilterDropdown
-                          value={libraryKeyFilter}
-                          options={keyFilterOptions}
-                          onSelect={(v) => setLibraryKeyFilter(v as 'all' | HarmonicaKey)}
-                          theme={theme}
-                          styles={styles}
-                        />
-
-                        <FilterDropdown
-                          pillPrefix="Sort: "
-                          value={librarySort}
-                          options={SORT_OPTIONS}
-                          onSelect={(v) => setLibrarySort(v as SortOption)}
-                          theme={theme}
-                          styles={styles}
-                        />
-
-                        <View style={styles.viewToggle}>
-                          <Pressable
-                            onPress={() => setLibraryView('list')}
-                            style={[styles.viewToggleSeg, libraryView === 'list' && styles.viewToggleSegActive]}
-                            accessibilityRole="radio"
-                            accessibilityState={{ checked: libraryView === 'list' }}
-                            accessibilityLabel="List view"
-                          >
-                            <Ionicons name="list-outline" size={14} color={libraryView === 'list' ? '#fff' : theme.textSub} />
-                          </Pressable>
-                          <Pressable
-                            onPress={() => setLibraryView('grid')}
-                            style={[styles.viewToggleSeg, libraryView === 'grid' && styles.viewToggleSegActive]}
-                            accessibilityRole="radio"
-                            accessibilityState={{ checked: libraryView === 'grid' }}
-                            accessibilityLabel="Grid view"
-                          >
-                            <Ionicons name="grid-outline" size={14} color={libraryView === 'grid' ? '#fff' : theme.textSub} />
-                          </Pressable>
-                        </View>
-                      </View>
-                    </View>
-
-                    {filteredRecordings.length > 0 ? (
-                      <View style={libraryView === 'grid' ? styles.recordingsGrid : styles.recordingsList}>
-                        {filteredRecordings.map((recording) => (
-                          <View key={recording.id} style={libraryView === 'grid' ? styles.recordingsGridItem : undefined}>
-                            <RecordingCard
-                              recording={recording}
-                              onPress={handleOpenRecording}
-                              onDelete={deleteRecording}
-                              onRename={renameRecording}
-                              onToggleFavorite={toggleFavorite}
-                              isPlaying={previewId === recording.id && preview.isPlaying}
-                              onTogglePlay={handleTogglePreview}
-                            />
-                          </View>
-                        ))}
-                      </View>
-                    ) : (
-                      <View style={styles.recordingsEmpty}>
-                        <Ionicons name="search-outline" size={26} color={theme.textMuted} />
-                        <Text style={styles.recordingsEmptyTitle}>
-                          {libraryFiltersActive ? 'No matching tabs' : 'No tabs yet'}
-                        </Text>
-                        <Text style={styles.recordingsEmptyText}>
-                          {libraryFiltersActive
-                            ? 'Try a different search term or key filter.'
-                            : 'Record a new song or upload an audio/MIDI file to get started.'}
-                        </Text>
-                      </View>
-                    )}
-                  </View>
-              </ScrollView>
-            </View>
-          )
+          </View>
         ) : (
           <>
             <ScrollView
@@ -849,7 +929,7 @@ export default function KeySelectionScreen() {
             >
               {orderedRecordings.length > 0 && (
                 <View style={styles.section}>
-                  <Text style={styles.sectionLabel}>HARMONICA TABS</Text>
+                  <Text style={styles.sectionLabel}>Harmonica Tabs</Text>
                   <View style={styles.recordingsList}>
                     {orderedRecordings.map((recording) => (
                       <RecordingCard
@@ -931,25 +1011,89 @@ function createStyles(t: Theme) {
     scroll:        { flex: 1 },
     scrollContent: { gap: 24, paddingBottom: 16 },
     section: { gap: 12 },
+    // The projects section carries a `position:absolute` sort popover and is followed in
+    // document order by the tabs section, so without its own stacking context the popover
+    // opens *underneath* the tab cards. `libraryToolbar`'s zIndex can't fix that on its own:
+    // it only orders things within this section's context, not between the two sections.
+    // Higher than `libraryToolbar`'s 30 so the intent (projects above tabs) reads at a glance.
+    sectionElevated: { zIndex: 40 } as ViewStyle,
     recordingsList: { gap: 10 },
-    projectGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+    // Gutters as item padding plus a negative outer margin, not `gap`.
+    //
+    // `gap` and "three cards span exactly one tab card" can't both hold: with a 12px gap
+    // the row is 3 × basis + 24px, so the basis has to be a third of the column *minus*
+    // 8px — a calc() the style layer can't express. Pulling the row 6px wider than the
+    // column and giving each item 6px of inner padding puts the outer card edges back on
+    // the column edges, and leaves the basis a clean 1/3.
+    projectGrid: {
+      flexDirection:   'row',
+      flexWrap:        'wrap',
+      marginHorizontal: -6,
+      rowGap:           12,
+    },
+    // `flexBasis` is supplied per-item (see `projectColumnBasis`) — it's the one part of
+    // this that depends on the window width. Neither grow nor shrink: the basis *is* the
+    // width, and letting the last row's items grow would stretch two cards across a row
+    // sized for three.
+    projectGridItem: {
+      paddingHorizontal: 6,
+      flexGrow:          0,
+      flexShrink:        0,
+      minWidth:          0,
+    },
+    // List view: the same cards, stacked full-width. Gap matches `recordingsList` (10, not
+    // the grid's 12) so a project list and a tab list under it read as one rhythm.
+    projectList: { gap: 10 },
+    // Matched to RecordingCard — same surface, same radius, same border, same font sizes.
+    // Projects are upstream of tabs, so a project card reading as the lesser object (it was
+    // on `cardBg` at radius 10 with 12px type against the tab card's `surface`/14/15px) had
+    // the relationship backwards.
     projectCard: {
       flexDirection: 'row',
       alignItems: 'center',
-      flexBasis: 280,
-      flexGrow: 1,
-      minWidth: 240,
-      borderRadius: 10,
+      // Fills whatever it's put in — a third of the row in grid view, the whole column in
+      // list view. The card used to carry its own 300/240/360 basis-min-max, which is what
+      // stopped a row of them from lining up with the full-width tab cards underneath.
+      width: '100%',
+      borderRadius: RADIUS.md,
       borderWidth: 1,
       borderColor: t.border,
       backgroundColor: t.cardBg,
-      paddingRight: 4,
+      paddingRight: 6,
     },
-    projectCardMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, minWidth: 0 },
-    projectCardText: { flex: 1, minWidth: 0 },
-    projectCardTitle: { fontFamily: Poppins.bold, fontSize: 14, color: t.textPrimary },
-    projectCardMeta: { fontFamily: SpaceGrotesk.regular, fontSize: 12, color: t.textMuted },
-    projectCardDelete: { padding: 8 },
+    projectCardHovered: { backgroundColor: t.cardHover },
+    projectCardMain: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      paddingVertical: 10,
+      paddingHorizontal: 14,
+      minWidth: 0,
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
+    // The tinted square RecordingCard puts its play control in, at the same radius —
+    // so a row of the two reads as one grid rather than two conventions. Sized against the
+    // card rather than against the glyph: at 34px it sat in an 88px card looking like a
+    // bullet point, while the *shorter* recording card carried a 56px tile. At 62 it is now
+    // the larger of the two, which suits a project being the upstream object; the glyph went
+    // 22 → 28 with it, since scaling the tile alone just adds padding around the same mark.
+    projectCardIconWrap: {
+      width: 62,
+      height: 62,
+      borderRadius: RADIUS.sm,
+      backgroundColor: t.accentSoft,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    projectCardText: { flex: 1, minWidth: 0, gap: 3 },
+    projectCardTitle: { fontFamily: Poppins.semiBold, fontSize: FONT.base, color: t.textPrimary },
+    projectCardMeta: { fontFamily: Poppins.regular, fontSize: FONT.sm, color: t.textSub },
+    projectCardStamp: { fontFamily: Poppins.regular, fontSize: FONT.xs, color: t.textMuted },
+    projectCardDelete: {
+      padding: 8,
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
     recordingsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
     recordingsGridItem: { flexBasis: 320, flexGrow: 1, minWidth: 280 },
     startAndUpload: { gap: 10 },
@@ -969,37 +1113,46 @@ function createStyles(t: Theme) {
       // despite their own zIndex, since that only applies within this row's own context.
       zIndex:         30,
     } as ViewStyle,
-    libraryToolbarLabel: {
-      fontSize:      FONT.xs,
-      fontFamily:    Poppins.bold,
-      color:         t.textMuted,
-      letterSpacing: 1.2,
-    },
     // Sits under a section label to say what the section's contents *are*, where the label
     // alone can only say what they're called.
     sectionSubtitle: {
-      fontSize:   FONT.xs,
+      fontSize:   FONT.sm,
       fontFamily: Poppins.regular,
       color:      t.textMuted,
-      marginTop:  4,
+      // Negative, against the section's own 12px gap: this line belongs to the label
+      // above it, not to the content below, and should sit tight under it.
+      marginTop:  -6,
     },
     libraryToolbarRight: {
       flexDirection: 'row',
       alignItems:    'center',
-      flexWrap:      'wrap',
+      flexWrap:      'nowrap',
+      flexShrink:    1,
       gap:           8,
     },
     searchBox: {
       flexDirection:     'row',
       alignItems:        'center',
       gap:               8,
-      backgroundColor:   t.surface,
+      // `cardBg` + `railBorder`, like every other control on this page and on the rail.
+      //
+      // These were `surface` (#F4F4F5, a *warm* grey) on what is now a cool #F2F8FA ground:
+      // near-identical in lightness, opposite in hue, so the field read as a smudge on the
+      // page rather than as something you could type into. White gives it back its edge and
+      // the accent hairline is what draws it.
+      backgroundColor:   t.cardBg,
       borderWidth:       1,
-      borderColor:       t.border,
-      borderRadius:      10,
+      borderColor:       t.railBorder,
+      borderRadius:      RADIUS.md,
       paddingHorizontal: 12,
       paddingVertical:   8,
-      width:             200,
+      // Wider than it was in the toolbar — it governs the page now, not one section —
+      // but still shrinkable and never growing, so it gives way on a narrow window
+      // instead of pushing the title block around.
+      width:             300,
+      flexGrow:          0,
+      flexShrink:        1,
+      minWidth:          180,
     },
     searchInput: {
       flex:       1,
@@ -1014,10 +1167,10 @@ function createStyles(t: Theme) {
       flexDirection:     'row',
       alignItems:        'center',
       gap:               6,
-      backgroundColor:   t.surface,
+      backgroundColor:   t.cardBg,
       borderWidth:       1,
-      borderColor:       t.border,
-      borderRadius:      10,
+      borderColor:       t.railBorder,
+      borderRadius:      RADIUS.md,
       paddingHorizontal: 12,
       paddingVertical:   8,
       ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
@@ -1030,10 +1183,10 @@ function createStyles(t: Theme) {
       left:            0,
       marginTop:       6,
       minWidth:        160,
-      backgroundColor: t.surface,
-      borderRadius:    12,
+      backgroundColor: t.cardBg,
+      borderRadius:    RADIUS.md,
       borderWidth:     1,
-      borderColor:     t.border,
+      borderColor:     t.railBorder,
       padding:         6,
       gap:             2,
       zIndex:          20,
@@ -1042,7 +1195,7 @@ function createStyles(t: Theme) {
     filterOption: {
       paddingVertical:   8,
       paddingHorizontal: 10,
-      borderRadius:      8,
+      borderRadius:      RADIUS.sm,
       ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
     } as ViewStyle,
     filterOptionHovered: { backgroundColor: t.surfaceAlt },
@@ -1052,10 +1205,10 @@ function createStyles(t: Theme) {
 
     viewToggle: {
       flexDirection:   'row',
-      backgroundColor: t.surface,
+      backgroundColor: t.cardBg,
       borderWidth:     1,
-      borderColor:     t.border,
-      borderRadius:    10,
+      borderColor:     t.railBorder,
+      borderRadius:    RADIUS.md,
       padding:         3,
       gap:             2,
     },
@@ -1064,219 +1217,76 @@ function createStyles(t: Theme) {
       height:           28,
       alignItems:       'center',
       justifyContent:   'center',
-      borderRadius:     8,
+      borderRadius:     RADIUS.sm,
       ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
     } as ViewStyle,
     viewToggleSegActive: { backgroundColor: t.accent },
 
-    webScrollContent: { paddingBottom: 16, gap: 28 },
-
-    // Hero banner — a soft accent-tinted gradient (web supports arbitrary CSS through
-    // style, unlike native) fading into the page background, framing the headline and the
-    // two entry-point cards.
-    hero: {
-      borderRadius: 24,
-      padding:      32,
-      borderWidth:  1,
-      borderColor:  t.border,
-      overflow:     'visible',
-      ...(Platform.OS === 'web'
-        ? { backgroundImage: `linear-gradient(135deg, ${t.accentSoft} 0%, ${t.bg} 75%)` } as any
-        : { backgroundColor: t.surface }),
-    },
-    heroRow: {
-      flexDirection: 'row',
-      flexWrap:      'wrap',
-      alignItems:    'center',
-      gap:           32,
-    },
-    heroLeft: { flex: 1, minWidth: 280, gap: 16 },
-    heroBadge: {
-      flexDirection:     'row',
-      alignItems:        'center',
-      alignSelf:         'flex-start',
-      gap:               6,
-      backgroundColor:   t.accentSoft,
-      borderRadius:      20,
-      borderWidth:        1,
-      borderColor:       t.accent,
-      paddingHorizontal: 12,
-      paddingVertical:   6,
-    },
-    heroBadgeText: { fontSize: FONT.xs, fontFamily: Poppins.semiBold, color: t.accent },
-    heroTitle: {
-      fontSize:      36,
-      lineHeight:    42,
-      fontFamily:    SpaceGrotesk.bold,
-      color:         t.textPrimary,
-      letterSpacing: -0.5,
-    },
-    heroTitleAccent: { color: t.accent },
-    heroSubtitle: {
-      fontSize:   FONT.base,
-      fontFamily: Poppins.regular,
-      color:      t.textSub,
-      lineHeight: 22,
-      maxWidth:   420,
-    },
-
-    heroRight: { flexDirection: 'row', flexWrap: 'wrap', gap: 16 },
-    heroCard: {
-      width:           240,
-      borderRadius:    16,
-      padding:         18,
-      gap:             10,
-      backgroundColor: t.accentSoft,
-      borderWidth:     1,
-      borderColor:     t.accent,
-    },
-    heroCardOutlined: {
-      width:              240,
-      borderRadius:       16,
-      padding:            18,
-      gap:                10,
-      backgroundColor:    t.bg,
-      borderWidth:        1.5,
-      borderStyle:        'dashed',
-      borderColor:        t.border,
-    },
-    heroCardIconWrap: {
-      width:            40,
-      height:           40,
-      borderRadius:     20,
-      backgroundColor:  t.bg,
-      alignItems:       'center',
-      justifyContent:   'center',
-    },
-    heroCardIconWrapMuted: {
-      width:            40,
-      height:           40,
-      borderRadius:     20,
-      backgroundColor:  t.surfaceAlt,
-      alignItems:       'center',
-      justifyContent:   'center',
-    },
-    heroCardTitle: { fontSize: FONT.md, fontFamily: Poppins.bold, color: t.textPrimary },
-    heroCardDesc: {
-      fontSize:   FONT.xs,
-      fontFamily: Poppins.regular,
-      color:      t.textMuted,
-      lineHeight: 16,
-    },
-    heroCardCounter: {
-      fontSize:   10,
-      fontFamily: Poppins.regular,
-      color:      t.textMuted,
-      textAlign:  'center',
-    },
-
-    // Split button — main half starts recording with whatever's already selected, the
-    // chevron half opens the picker dropdown below it without navigating away.
-    splitBtnAnchor: { position: 'relative' } as any,
-    splitBtnRow: { flexDirection: 'row', borderRadius: 10, overflow: 'hidden' },
-    splitBtnMain: {
-      flex:            1,
-      flexDirection:   'row',
-      alignItems:      'center',
-      justifyContent:  'center',
-      gap:             8,
-      backgroundColor: t.accent,
-      paddingVertical: 11,
-      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
-    } as ViewStyle,
-    splitBtnMainDisabled: { backgroundColor: t.surfaceAlt },
-    splitBtnMainPressed:  { backgroundColor: t.accentDim },
-    splitBtnMainText:  { fontSize: FONT.sm, fontFamily: Poppins.bold, color: '#fff' },
-    splitBtnMainTextDisabled: { color: t.textMuted },
-    recordDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: t.record },
-    splitBtnChevron: {
-      width:            34,
-      alignItems:       'center',
-      justifyContent:   'center',
-      backgroundColor:  t.accentDim,
-      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
-    } as ViewStyle,
-    splitBtnChevronPressed: { opacity: 0.85 },
-
-    splitDropdown: {
-      position:        'absolute',
-      top:             '100%',
-      left:            0,
-      right:           0,
-      marginTop:       10,
-      backgroundColor: t.surface,
-      borderRadius:    14,
-      borderWidth:     1,
-      borderColor:     t.border,
-      padding:         16,
-      gap:             16,
-      zIndex:          20,
-      ...(Platform.OS === 'web' ? { boxShadow: '0 12px 28px rgba(0,0,0,0.18)' } as any : null),
-    } as any,
     // Dashboard shell — sidebar (`AppSidebar`) and main content as direct flex-row
     // siblings, neither one wrapped in the page ScrollView. That's what makes the sidebar
     // genuinely full page height (it stretches to match dashboardShell's own height, which
     // is the full viewport height via the flex:1 chain from `safe`/`container`) instead of
     // just being as tall as its own content — only dashboardMainScroll scrolls internally.
     dashboardShell: { flexDirection: 'row', flex: 1 },
-    dashboardMainScroll: { flex: 1 },
+    // The tinted half of the shell. The rail is plain and the library is washed, which is
+    // the inverse of how it started — see `railBg` in the theme. Practically it also gives
+    // the white `cardBg` rows something to sit on: on a white page they were held by their
+    // border alone.
+    dashboardMainScroll: { flex: 1, backgroundColor: t.libraryBg },
     dashboardMainScrollContent: {
       paddingHorizontal: 40,
       paddingTop:        WEB_SCREEN_PADDING_TOP,
       paddingBottom:     WEB_SCREEN_PADDING_BOTTOM,
-      gap:               16,
+      gap:               24,
     },
-    dashboardLibrary: { marginTop: 8 },
-    dashboardTitle: {
+    dashboardLibrary: { marginTop: 0 },
+    // Title block and the page-scoped search on one line. Wraps rather than crushing the
+    // field on a narrow window.
+    pageHeader: {
+      flexDirection:  'row',
+      flexWrap:       'wrap',
+      alignItems:     'center',
+      justifyContent: 'space-between',
+      gap:            16,
+    },
+    pageHeaderText: { gap: 2, flexShrink: 1, minWidth: 0 },
+    // Accent-tinted rather than another neutral card: this is the one row on the page that
+    // is a shortcut rather than a listing, and it should not read as the first item of the
+    // library underneath it.
+    resumeBand: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      gap:               14,
+      paddingVertical:   14,
+      paddingHorizontal: 16,
+      borderRadius:      RADIUS.md,
+      backgroundColor:   t.accentSoft,
+      borderWidth:       1,
+      borderColor:       t.accent,
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
+    resumeBandHovered: { borderColor: t.accentDim, backgroundColor: t.cardHover },
+    resumeIconWrap: {
+      width: 38, height: 38, borderRadius: RADIUS.sm,
+      backgroundColor: t.bg, alignItems: 'center', justifyContent: 'center',
+    },
+    resumeText:  { flex: 1, minWidth: 0, gap: 2 },
+    resumeLabel: { ...GROUP_LABEL, color: t.accentDeep },
+    resumeTitle: { fontSize: FONT.base, fontFamily: Poppins.semiBold, color: t.textPrimary },
+    resumeStamp: { fontSize: FONT.xs, fontFamily: Poppins.regular, color: t.textMuted },
+    pageTitle: {
       fontSize:      FONT.xl,
       fontFamily:    SpaceGrotesk.bold,
       color:         t.textPrimary,
       letterSpacing: -0.3,
     },
-    dashboardSubtitle: { fontSize: FONT.sm, fontFamily: Poppins.regular, color: t.textMuted },
-
-    // The header's stat strip. `flexWrap` rather than a fixed row: three pills fit any
-    // desktop width the dashboard layout appears at, but the strip shouldn't be the thing
-    // that decides how narrow the window is allowed to get. No vertical margin — the
-    // scroll container's own `gap: 16` spaces it off the greeting like every other block
-    // in this column.
-    statStrip: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-    statPill: {
-      flexDirection:     'row',
-      alignItems:        'center',
-      gap:               6,
-      paddingVertical:   7,
-      paddingHorizontal: 12,
-      borderRadius:      999,
-      borderWidth:       1,
-      borderColor:       t.border,
-      backgroundColor:   t.surface,
-    },
-    statPillValue: { fontSize: FONT.sm, fontFamily: SpaceGrotesk.bold, color: t.textPrimary },
-    statPillLabel: { fontSize: FONT.xs, fontFamily: Poppins.regular, color: t.textMuted },
-
-    chooseFileBtn: {
-      borderWidth:     1.5,
-      borderColor:     t.accent,
-      borderRadius:    10,
-      paddingVertical: 10,
-      alignItems:      'center',
-    },
-    chooseFileBtnPressed:  { backgroundColor: t.accentSoft },
-    chooseFileBtnDisabled: { opacity: 0.6 },
-    chooseFileBtnText: { fontSize: FONT.sm, fontFamily: Poppins.bold, color: t.accent },
-    uploadHint: {
-      fontSize:   10,
-      fontFamily: Poppins.regular,
-      color:      t.textMuted,
-      textAlign:  'center',
-    },
+    pageSubtitle: { fontSize: FONT.sm, fontFamily: Poppins.regular, color: t.textMuted },
 
     recordingsEmpty: {
       alignItems:        'center',
       justifyContent:    'center',
       gap:               8,
-      borderRadius:      14,
+      borderRadius:      RADIUS.lg,
       borderWidth:       1,
       borderStyle:       'dashed',
       borderColor:       t.border,
@@ -1294,14 +1304,14 @@ function createStyles(t: Theme) {
     segmented: {
       flexDirection:   'row',
       backgroundColor: t.surfaceAlt,
-      borderRadius:    12,
+      borderRadius:    RADIUS.md,
       padding:         3,
     },
     segment: {
       flex:            1,
       paddingVertical: 10,
       alignItems:      'center',
-      borderRadius:    10,
+      borderRadius:    RADIUS.sm,
     },
     segmentActive:    { backgroundColor: t.accent },
     segmentText: {
@@ -1311,11 +1321,12 @@ function createStyles(t: Theme) {
     },
     segmentTextActive: { color: '#fff' },
 
+    // One treatment, one rank. There used to be three of these — `sectionLabel` (ls 1.4),
+    // `libraryToolbarLabel` (ls 1.2) and the sidebar's own (ls 1.0) — differing by amounts
+    // too small to be deliberate and too visible to be nothing.
     sectionLabel: {
-      fontSize:      FONT.xs,
-      fontFamily:    Poppins.bold,
-      color:         t.textMuted,
-      letterSpacing: 1.4,
+      ...SECTION_HEADING,
+      color: t.textPrimary,
     },
     tip: {
       flexDirection: 'row',
@@ -1336,7 +1347,7 @@ function createStyles(t: Theme) {
     bottomActions: { gap: 10, paddingTop: 10 },
     startBtn: {
       backgroundColor: t.accent,
-      borderRadius: 14,
+      borderRadius: RADIUS.md,
       paddingVertical: 18,
       alignItems: 'center',
       ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
@@ -1370,7 +1381,7 @@ function createStyles(t: Theme) {
       justifyContent:    'center',
       gap:               6,
       backgroundColor:   t.surface,
-      borderRadius:      12,
+      borderRadius:      RADIUS.md,
       paddingVertical:   12,
       borderWidth:       1,
       borderColor:       t.border,
@@ -1391,7 +1402,7 @@ function createStyles(t: Theme) {
       gap:           6,
       paddingHorizontal: 10,
       paddingVertical:   8,
-      borderRadius:      10,
+      borderRadius:      RADIUS.md,
       backgroundColor:   t.warningSoft,
     },
     uploadErrorText: {

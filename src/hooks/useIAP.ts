@@ -11,6 +11,8 @@ import {
   type ProductAndroid,
 } from 'react-native-iap';
 
+import { MOCK_WEB_PLANS, type WebPlanId } from '@/billing/plans';
+
 export const PRODUCT_SKU = 'harp2tab_premium';
 
 interface IAPState {
@@ -66,7 +68,12 @@ export function useIAP() {
     };
   }, []);
 
-  async function buy() {
+  /**
+   * `planId` exists only so the shared paywall can call one signature on both platforms, and
+   * is ignored: Android sells exactly one product (8-1's "web only" decision), so there is
+   * nothing to choose between. Web's `useIAP.web.ts` is the file that uses it.
+   */
+  async function buy(_planId?: WebPlanId) {
     setState(s => ({ ...s, purchasing: true, error: null }));
     try {
       await requestPurchase({
@@ -96,5 +103,10 @@ export function useIAP() {
     }
   }
 
-  return { ...state, buy, restore };
+  /**
+   * The plan list, so both platforms return the same shape. Native's copy is the static one —
+   * there is no offering to price it from, and `PlanPicker.tsx` ignores the list anyway and
+   * renders the single Play Billing price.
+   */
+  return { ...state, plans: MOCK_WEB_PLANS, buy, restore };
 }

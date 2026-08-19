@@ -124,7 +124,35 @@ npx firebase emulators:start           # firestore :8080, functions :5001, UI :4
 npx firebase deploy --only functions
 ```
 
-`functions/.secret.local` holds emulator secrets and is never committed.
+`functions/.secret.local` holds emulator secrets and is never committed. Deployed secrets live in
+Secret Manager, and **a new secret version is not used until the function is redeployed** — the
+deploy pins a version.
+
+### The RevenueCat webhook (8-2)
+
+Deployed and live at `https://us-central1-harp2tab.cloudfunctions.net/revenuecatWebhook`.
+
+```bash
+npx firebase deploy --only functions:revenuecatWebhook
+npx firebase functions:log --only revenuecatWebhook
+```
+
+Its runtime config is `functions/.env` (`RC_LIFETIME_PRODUCT_IDS`, `RC_ACCEPT_SANDBOX`) plus the
+`REVENUECAT_WEBHOOK_SECRET` secret. Set the secret without a trailing newline — the interactive
+prompt captures one from a paste, and the comparison is byte-for-byte, so every delivery 401s:
+
+```bash
+S=$(openssl rand -hex 32); printf '%s' "$S" | npx firebase functions:secrets:set REVENUECAT_WEBHOOK_SECRET --data-file -; echo "$S"
+```
+
+Day-to-day operation of Stripe and RevenueCat once money is real — changing a price, refunds,
+hand-granting access, and the "I paid but I don't have access" checklist — is in
+[`billing-operations.md`](billing-operations.md).
+
+Reading the logs: `Ignored event` is a normal outcome (the event names no `premium` entitlement)
+and still answers 200 — a non-2xx would only make RevenueCat retry something correctly refused.
+`Dropped stale event` is the staleness guard refusing an out-of-order delivery. Full runbook in
+[`stripe-setup.md`](stripe-setup.md).
 
 ### Cloud sync (7b)
 
@@ -149,8 +177,21 @@ npx expo start --web --clear                     # terminal 2 — --clear, or th
 ```
 
 Then sign in and save a tab. Documents appear at <http://localhost:4000/firestore> under
-`users/{uid}/tabs`. The console logs `[sync] Firestore → emulator …` on the first call, because
-a build silently talking to an emulator looks exactly like a build whose sync is broken.
+`users/{uid}/tabs`. The console logs `[firebase] Firestore → emulator …` on the first call,
+because a build silently talking to an emulator looks exactly like a build whose sync is broken.
+
+**One handle, one connect (fixed 2026-08-19).** `getFirestore(app)` returns a *singleton per
+app*, not a handle per caller. Three modules each memoised "their own" instance and each called
+`connectFirestoreEmulator` on it, so the second throws *"Firestore has already been started and
+its settings can no longer be changed"* and whichever module touched Firestore first decided who
+worked. Worse, `entitlement.web.ts` never connected the emulator at all, so entitlement reads
+went to the **real project** while everything else talked to `127.0.0.1`. The instance and the
+connect now live in `firestoreDb()` (`src/auth/firebase.web.ts`), and every consumer goes through
+it. **A fourth consumer calls that function, never `getFirestore` directly.**
+
+⚠️ **Turn the emulator flag off for any entitlement or billing testing.** The RevenueCat webhook
+writes to the real project and cannot reach a local emulator, so with the flag on `/profile`
+reads an empty local database and reports Free no matter what was bought.
 
 `EXPO_PUBLIC_FIREBASE_EMULATOR=1` **enables the engine on its own**, independently of
 `SYNC_ENABLED`. That is why emulator work never required flipping the production switch — and

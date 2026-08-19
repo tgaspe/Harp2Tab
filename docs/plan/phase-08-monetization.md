@@ -288,7 +288,45 @@ Sequential; each step blocks the next.
    built and tested in Stripe test mode against nothing, and the domain gates **go-live**, not
    the build. Add it to the fix-up checklist (`grep -rn "TODO(domain)" src/`).
 
-### Setup state — what exists in Stripe as of 2026-08-14
+### Setup state — 8b complete, 2026-08-19
+
+**A sandbox purchase works end to end**: Web SDK → Stripe checkout → RevenueCat → the deployed
+`revenuecatWebhook` → `/entitlements/{uid}` → paid access, with cancellation revoking it. The
+click-by-click record, including the divergences from the plan below, is in
+[`../stripe-setup.md`](../stripe-setup.md). What that surfaced, in order of how much it matters:
+
+- **Trials and coupons are supported after all.** RevenueCat's Stripe Billing docs, re-read
+  2026-08-18: *"Free trials are supported in RevenueCat purchase flows"*, *"Stripe coupons are
+  supported"*. The paragraph below recording "no promo codes or free trials are possible on this
+  billing path" as a knowing trade **is wrong** and the trade is off the table. Whether to
+  actually offer a trial is now an open product decision, cheapest to take at product-import time.
+- **RevenueCat keys imported products on the Stripe _price_ id.** So `RC_LIFETIME_PRODUCT_IDS` is
+  `prod_V4Zi9i9aFBYHoS,price_1U4QkIEE7XhRWEbEYDYqI4tK`, and `PLAN_BY_PRODUCT_ID`
+  (`src/billing/plans.ts`) maps both forms.
+- **`EntitlementDoc` gained `productId`** (`functions/src/revenuecat.ts`), written from
+  `event.product_id`. Without it `/profile` can only say "Premium" — and the tempting shortcut of
+  deriving the term from the dates is wrong, because `since` is the *original* purchase, so after
+  twelve renewals a monthly subscription spans a year.
+- **A custom checkout domain is impossible on this path**: *"Custom domains aren't supported for
+  Managed Payments."* Checkout stays on Stripe's domain and receipts say *Sold through Link*.
+- **Open measurement**: whether Managed Payments treats listed prices as tax-inclusive. It
+  withholds indirect taxes at completion, which on a €4.49 EU B2C sale is ~€0.78 before card and
+  MP fees — a materially different margin from the one the pricing section below assumes.
+
+**8-4/8-5/8-6 shipped** with it: `useIAP.web.ts` on `@revenuecat/purchases-js`, the three-plan
+paywall reading the offering, and `/profile`'s plan block with the Stripe customer-portal link.
+Two defects were found and fixed while testing, both worth remembering:
+
+- `paywall.tsx` called `setPurchased()` on **every** successful purchase including web. That flag
+  is the device-local one-way latch, so a cancelled web subscriber would have stayed premium on
+  that browser forever with the entitlement store saying "revoked" — the exact latch problem 8-3
+  set out to end, surviving on the one path that still called it. Now native-only.
+- SDK configuration lived inside `useIAP`, a hook that mounts only on the paywall, so `/profile`
+  never had `managementURL` and its Manage row never appeared. Configuration now follows the
+  *account* (`src/billing/purchases.web.ts`, started from the root layout beside the auth and
+  entitlement listeners).
+
+### What exists in Stripe — as of 2026-08-14
 
 8-1 steps 1 and 2 are done. **Belgium is eligible for Managed Payments** (8-1.1 answered —
 this closes the phase's blocking open question and takes the Paddle fallback off the table).

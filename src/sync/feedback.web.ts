@@ -14,9 +14,8 @@
  * it would fail. Submissions are read in the Firebase console.
  */
 
-import { firebaseApp } from '@/auth/firebase';
 import type { AuthUser } from '@/auth/types';
-import { isEmulator } from '@/sync/firestore';
+import { firestoreDb } from '@/auth/firebase';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
@@ -33,30 +32,16 @@ export interface FeedbackInput {
 
 const api = () => import('firebase/firestore');
 
-const EMULATOR_HOST = '127.0.0.1';
-const EMULATOR_PORT = 8080;
 
 /**
- * Memoised for the same reason `firestore.web.ts` memoises its own: `connectFirestoreEmulator`
- * throws if it runs twice on one instance, and it must run before the instance is used.
+ * The shared handle — see `firestoreDb` in `auth/firebase.web.ts`.
  *
- * A separate instance from the sync façade's is harmless — the SDK returns the same underlying
- * client for one app, and each module connects its own handle at most once.
+ * This module used to memoise "its own" instance, on the belief that the SDK hands each caller
+ * a separate handle it may connect independently. It does not: `getFirestore(app)` is a
+ * singleton, so the second `connectFirestoreEmulator` threw and whichever module got there
+ * first decided the outcome.
  */
-let instance: ReturnType<Awaited<ReturnType<typeof api>>['getFirestore']> | undefined;
-
-async function db() {
-  if (instance) return instance;
-
-  const { getFirestore, connectFirestoreEmulator } = await api();
-  instance = getFirestore(firebaseApp());
-
-  if (isEmulator()) {
-    connectFirestoreEmulator(instance, EMULATOR_HOST, EMULATOR_PORT);
-  }
-
-  return instance;
-}
+const db = firestoreDb;
 
 /**
  * What build the report came from.

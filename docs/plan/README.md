@@ -1,11 +1,20 @@
 # Harp2Tab — Full Roadmap Implementation Plan
 
-Status as of 2026-08-14: Phases 0–6, 7a, 7b, 8a, 11, 13 and 14 are implemented on
-`web_version`. Phases 9, 10, 12, 15 and 8b/8c are still just this plan.
+Status as of 2026-08-19: Phases 0–6, 7a, 7b, 8a, 8b, 11, 13 and 14 are implemented on
+`web_version`. Phases 9, 10, 12 (partly), 15 and 8c are still just this plan.
 
-**7b ships behind `SYNC_ENABLED = false`** (`src/sync/syncEngine.ts`) until the two-browser
-pass, the stored-document size check and the privacy-policy update are done — see the Status
-section of [`phase-07b-sync.md`](phase-07b-sync.md).
+**7b's `SYNC_ENABLED` is now `true`** and the web app is deployed to Firebase Hosting at
+`harp2tab.web.app` and `harp2tab.com` (commit `facbc3e`). **The two manual 7b checks — the
+two-browser pass and the stored-document size check — and the privacy-policy update are still
+outstanding**, and sync is live regardless; see the Status section of
+[`phase-07b-sync.md`](phase-07b-sync.md).
+
+**8b is done** (2026-08-19): a sandbox subscription is bought, written, cancelled and revoked
+end to end, with 8-4/8-5/8-6 shipped. Untested: the lifetime purchase (which answers 8-1.6),
+declined cards and 3-D Secure. See [`../stripe-setup.md`](../stripe-setup.md) Part 4.
+
+**`www.harp2tab.com` returns Firebase's "Site Not Found"** — the CNAME exists but the hostname
+has not been added to the Hosting site, so any inbound `www` link is dead.
 
 ## Release sequence (decided 2026-08-13)
 
@@ -66,7 +75,14 @@ existed, so the command would have failed. No phase owned this; it is now step 2
       email/password surface, `/profile` and the merge engine are the work. Account
       deletion + a privacy-policy/Data-safety update are release blockers the moment
       accounts exist. Three separate pieces of work block on buying the custom domain.
-- [~] [Phase 8](phase-08-monetization.md) — **8a shipped** (commits `7e24aba`, `e8e110f`): the revocable
+- [~] [Phase 8](phase-08-monetization.md) — **8a and 8b shipped.** 8b (2026-08-19): RevenueCat on
+      **Stripe Billing** (not RevenueCat Billing — that fork would have made RC the merchant of
+      record), the `premium` entitlement, the current offering, `revenuecatWebhook` deployed and
+      authenticated, and 8-4/8-5/8-6 in code. **Two corrections to the plan text below**: trials
+      and Stripe coupons *are* supported on this path, and a custom checkout domain is *not*
+      (Managed Payments excludes it). 8c is untouched — `FREE_TIER_ENABLED` is still `false` and
+      `RC_ACCEPT_SANDBOX` is still `true`.
+      Original 8a note. **8a shipped** (commits `7e24aba`, `e8e110f`): the revocable
       entitlement store, the RevenueCat webhook → Cloud Function entitlement writer, the
       three-plan paywall on mock offerings, `/profile`'s plan block, and
       `verify-entitlement.ts`. **8b and 8c are not started** — `useIAP.web.ts` is still the

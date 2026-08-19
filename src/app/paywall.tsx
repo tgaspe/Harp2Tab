@@ -10,9 +10,9 @@ import { VerifyBanner } from '@/components/VerifyBanner';
 import { useAuth } from '@/auth/useAuth';
 import { FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
-import { RATING_BONUS, RECORDING_LIMIT, useSettingsStore } from '@/store/useSettingsStore';
+import { FREE_TIER_ENABLED, RATING_BONUS, RECORDING_LIMIT, useSettingsStore } from '@/store/useSettingsStore';
 import { PlanPicker } from '@/components/PlanPicker';
-import { DEFAULT_PLAN_ID, MOCK_WEB_PLANS, PLAN_PERKS, type WebPlanId } from '@/billing/plans';
+import { DEFAULT_PLAN_ID, PLAN_PERKS, type WebPlanId } from '@/billing/plans';
 import { preserveSessionForPaywall } from '@/store/sessionSnapshot';
 import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
 import type { Theme } from '@/theme';
@@ -35,7 +35,7 @@ export default function PaywallScreen() {
   const ratingStatus  = useSettingsStore((s) => s.ratingStatus);
   const effectiveLimit = RECORDING_LIMIT + (ratingStatus === 'rated' ? RATING_BONUS : 0);
 
-  const { product, purchasing, restoring, error, purchased, buy, restore } = useIAP();
+  const { product, purchasing, restoring, error, purchased, plans, buy, restore } = useIAP();
 
   const auth     = useAuth();
   const signedIn = auth.status === 'signedIn' && !!auth.user;
@@ -73,9 +73,18 @@ export default function PaywallScreen() {
    */
   useEffect(() => { setTookPreserved(preserveSessionForPaywall()); }, []);
 
+  /**
+   * **`setPurchased()` is native-only, and this is the line that enforces it (8-3).**
+   *
+   * That flag is a device-local, one-way latch — correct for Play's lifetime unlock, and wrong
+   * for every subscription. Setting it on web would make a cancelled subscriber permanently
+   * premium on that browser, with nothing able to revoke it: the entitlement store would say
+   * "revoked" and this would still say "paid". Web access lives in the entitlement store,
+   * which `useIAP.web.ts` has already written by the time this runs.
+   */
   useEffect(() => {
     if (!purchased) return;
-    setPurchased();
+    if (Platform.OS !== 'web') setPurchased();
     router.back();
   }, [purchased]);
 
@@ -95,6 +104,40 @@ export default function PaywallScreen() {
    *  apart while it was three copies of the same expression. */
   const purchaseDisabled = unverified || (canPurchase && (busy || !purchasable));
 
+  /**
+   * **The button has to say what the money does (8-5).** "Unlock Full App" is true of a
+   * one-time unlock and misleading in front of a plan picker offering two subscriptions: the
+   * last thing a customer reads before paying should tell them whether this recurs.
+   *
+   * Native keeps the original wording — it still sells the single one-time SKU, and that is
+   * the promise made to the buyer who already has one.
+   */
+  const purchaseLabel =
+    Platform.OS !== 'web' ? 'Unlock Full App'
+    : planId === 'lifetime' ? 'Buy Lifetime'
+    : planId === 'yearly'   ? 'Subscribe yearly'
+    : 'Subscribe monthly';
+
+  /**
+   * "Restore" means two different things, so it says two different things.
+   *
+   * Play re-reads the device's purchase history. A browser has no such history — the purchase
+   * belongs to the account, so restoring is asking RevenueCat what this account holds. It is
+   * also how a hand-issued grant (8-7) is collected, which is why it stays visible to someone
+   * who has never bought anything here.
+   */
+  const restoreLabel = Platform.OS === 'web' ? 'Already paid? Restore access' : 'Restore Purchase';
+
+  /**
+   * Did a limit send them here, or did they choose to come?
+   *
+   * With `FREE_TIER_ENABLED` off there is no limit to have used, so "you've used your 3 free
+   * recordings" is simply false — and it is the first sentence someone reads on the screen
+   * that asks them for money. `/profile`'s Upgrade button (8-6) is the route that made this
+   * reachable without a gate.
+   */
+  const gatedByLimit = FREE_TIER_ENABLED;
+
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.container}>
@@ -107,7 +150,9 @@ export default function PaywallScreen() {
           />
           <Text style={styles.title}>Harp2Tab</Text>
           <Text style={styles.tagline}>
-            You&apos;ve used your {effectiveLimit} free recordings.
+            {gatedByLimit
+              ? `You've used your ${effectiveLimit} free recordings.`
+              : 'Unlimited transcriptions, editing and export.'}
           </Text>
           <Text style={styles.sub}>
             Unlock the full app to keep recording and exporting your tabs.
@@ -116,7 +161,7 @@ export default function PaywallScreen() {
 
         {/* Plans (web) / the one-time price badge (native) — see PlanPicker's two files. */}
         <PlanPicker
-          plans={MOCK_WEB_PLANS}
+          plans={plans}
           selectedId={planId}
           onSelect={setPlanId}
           disabled={busy}
@@ -192,7 +237,7 @@ export default function PaywallScreen() {
         {/* Purchase button */}
         <View style={styles.buttons}>
           <Pressable
-            onPress={canPurchase ? buy : () => setAuthOpen(true)}
+            onPress={canPurchase ? () => buy(planId) : () => setAuthOpen(true)}
             disabled={purchaseDisabled}
             style={({ pressed, hovered }: any) => [
               styles.buyBtn,
@@ -223,7 +268,7 @@ export default function PaywallScreen() {
                 />
                 <Text style={[styles.buyBtnText, purchaseDisabled && styles.buyBtnTextDisabled]}>
                   {unverified   ? 'Confirm your email first'
-                  : canPurchase ? 'Unlock Full App'
+                  : canPurchase ? purchaseLabel
                   : 'Continue'}
                 </Text>
               </>
@@ -240,11 +285,11 @@ export default function PaywallScreen() {
             (pressed || (Platform.OS === 'web' && hovered)) && { opacity: 0.6 },
           ]}
           accessibilityRole="button"
-          accessibilityLabel="Restore Purchase"
+          accessibilityLabel={restoreLabel}
         >
           {restoring
             ? <ActivityIndicator size="small" color={theme.textMuted} />
-            : <Text style={styles.restoreBtnText}>Restore Purchase</Text>
+            : <Text style={styles.restoreBtnText}>{restoreLabel}</Text>
           }
         </Pressable>
 

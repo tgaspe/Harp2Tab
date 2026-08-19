@@ -11,7 +11,9 @@
  * landing page — see the note in `firebase.web.ts`, and the same call in `entitlement.web.ts`.
  */
 
-import { firebaseApp } from '@/auth/firebase';
+import { firestoreDb, isEmulator } from '@/auth/firebase';
+
+export { isEmulator };
 
 /** The three collections under `/users/{uid}/`. Named rather than free-form so a typo cannot
  *  write a library into a path the security rules do not cover. */
@@ -35,52 +37,10 @@ const BATCH_LIMIT = 400;
 const api = () => import('firebase/firestore');
 
 /**
- * Point the SDK at the local emulator instead of the real project.
- *
- * **This is what makes cloud sync safe to develop against.** Without it the only way to watch
- * the engine actually write anything is to write it into the project that will hold real
- * libraries — and the first live run of a merge is exactly the moment you want a database you
- * can throw away.
- *
- * Set `EXPO_PUBLIC_FIREBASE_EMULATOR=1` in `.env` and start it with
- * `npx firebase emulators:start --only firestore`; the UI at `localhost:4000` shows the
- * documents appearing. **Auth is deliberately left pointing at the real project**, so Google
- * sign-in still works — the Firestore emulator decodes a genuine ID token without verifying it,
- * which is enough for `request.auth` and therefore for the rules to be exercised properly.
- *
- * Written as a complete `process.env.X` member expression, not a lookup through a variable.
- * Expo 55 rewrites these to a virtual env module (`_expoVirtualEnv.env.X`) at build time, and
- * that rewrite is a syntactic match on the full expression — `process.env[key]` is not a form it
- * can see. Verified in the emitted bundle rather than assumed.
+ * The shared handle. `firebase.web.ts` owns the instance and the emulator connect — see the
+ * note there for why this cannot be a per-module memo.
  */
-export const isEmulator = (): boolean =>
-  process.env.EXPO_PUBLIC_FIREBASE_EMULATOR === '1';
-
-const EMULATOR_HOST = '127.0.0.1';
-const EMULATOR_PORT = 8080;
-
-/**
- * Memoised, because `connectFirestoreEmulator` must run before the instance is used for
- * anything else and throws if it is called twice. Every call below goes through here, so there
- * is exactly one instance and exactly one connect.
- */
-let instance: ReturnType<Awaited<ReturnType<typeof api>>['getFirestore']> | undefined;
-
-async function db() {
-  if (instance) return instance;
-
-  const { getFirestore, connectFirestoreEmulator } = await api();
-  instance = getFirestore(firebaseApp());
-
-  if (isEmulator()) {
-    connectFirestoreEmulator(instance, EMULATOR_HOST, EMULATOR_PORT);
-    // Loud on purpose. A build silently talking to an emulator looks exactly like a build whose
-    // sync is broken — no documents appear in the console and nothing errors.
-    console.info(`[sync] Firestore → emulator ${EMULATOR_HOST}:${EMULATOR_PORT} (not the real project)`);
-  }
-
-  return instance;
-}
+const db = firestoreDb;
 
 /**
  * Documents written since `since`.

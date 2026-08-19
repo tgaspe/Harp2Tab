@@ -205,7 +205,7 @@ function createStyles(t: Theme) {
     sectionBody: { flex: 1, minWidth: 0, maxWidth: 820 },
     sectionTitle: {
       fontSize:   FONT.md,
-      fontFamily: SpaceGrotesk.semiBold,
+      fontFamily: SpaceGrotesk.bold,
       color:      t.textPrimary,
       letterSpacing: -0.2,
     },

@@ -29,17 +29,30 @@ interface EntitlementStoreState {
   /** When we last successfully *heard from* the server — not when we last tried. */
   fetchedAt: number | null;
 
+  /**
+   * Where a subscriber cancels or updates their card (8-6).
+   *
+   * Stripe's hosted customer portal, handed to us by the RevenueCat SDK. It lives here rather
+   * than in the entitlement document because it is not something the webhook knows: it is a
+   * property of the *store*, not of the purchase, and only the client ever sees it. `null`
+   * means either "no active subscription" or "the SDK has not answered yet" — both of which
+   * render the same way, as no Manage row.
+   */
+  managementUrl: string | null;
+
   refresh:    (uid: string) => Promise<void>;
   applyLocal: (uid: string, entitlement: Entitlement | null) => void;
+  setManagementUrl: (url: string | null) => void;
   clear:      () => void;
 }
 
 export const useEntitlementStore = create<EntitlementStoreState>()(
   persist(
     (set, get) => ({
-      cached:    null,
-      uid:       null,
-      fetchedAt: null,
+      cached:        null,
+      uid:           null,
+      fetchedAt:     null,
+      managementUrl: null,
 
       /**
        * Re-read the entitlement for `uid`.
@@ -71,10 +84,21 @@ export const useEntitlementStore = create<EntitlementStoreState>()(
        */
       applyLocal: (uid, entitlement) => set({ cached: entitlement, uid, fetchedAt: Date.now() }),
 
+      /**
+       * The portal link for the signed-in customer, from the SDK's `CustomerInfo`.
+       *
+       * Not persisted: it is cheap to re-fetch, it belongs to whoever is signed in *now*, and a
+       * stale one on a shared browser would offer person A's billing page to person B.
+       */
+      setManagementUrl: (url) => {
+        if (get().managementUrl === url) return;
+        set({ managementUrl: url });
+      },
+
       /** Sign-out. Deliberately does not touch `isPurchased`, which belongs to the device. */
       clear: () => {
-        if (get().cached === null && get().uid === null) return;
-        set({ cached: null, uid: null, fetchedAt: null });
+        if (get().cached === null && get().uid === null && get().managementUrl === null) return;
+        set({ cached: null, uid: null, fetchedAt: null, managementUrl: null });
       },
     }),
     {

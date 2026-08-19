@@ -24,6 +24,7 @@ import {
   initializeAuth,
   type Auth,
 } from 'firebase/auth';
+import type { Firestore } from 'firebase/firestore';
 
 /**
  * Read from `EXPO_PUBLIC_`-prefixed env rather than hardcoded, so staging and production can
@@ -127,3 +128,62 @@ export function firebaseAuth(): Auth {
  *  auth bootstrap so a misconfigured build renders signed-out instead of a blank screen. */
 export const isFirebaseConfigured = (): boolean =>
   Object.values(firebaseConfig).every(Boolean);
+
+/**
+ * **The one Firestore handle, and the one place the emulator is connected.**
+ *
+ * `getFirestore(app)` returns a *singleton per app*, not a fresh handle per caller — so three
+ * modules each memoising "their own" instance were all memoising the same object, and the
+ * second `connectFirestoreEmulator` on it threw *"Firestore has already been started and its
+ * settings can no longer be changed"*. Whichever module happened to touch Firestore first
+ * decided whether the others worked, which made the failure look like a race (it was one) and
+ * land on whichever feature lost.
+ *
+ * The worse half was silent: `entitlement.web.ts` never connected the emulator at all, so with
+ * `EXPO_PUBLIC_FIREBASE_EMULATOR=1` every entitlement read went to the **real project** while
+ * sync talked to `127.0.0.1`. A dev session reading production is not a bug you notice — it
+ * looks like everything working.
+ *
+ * So: every consumer of Firestore in this app goes through here. Adding a fourth means calling
+ * this function, never `getFirestore` directly.
+ *
+ * Firestore stays a dynamic import for the reason given in `sync/firestore.web.ts`: keeping it
+ * out of the static graph is what stops a signed-out visitor downloading the Firestore chunk to
+ * read the landing page.
+ */
+let firestoreInstance: Firestore | undefined;
+
+export async function firestoreDb(): Promise<Firestore> {
+  if (firestoreInstance) return firestoreInstance;
+
+  const { getFirestore, connectFirestoreEmulator } = await import('firebase/firestore');
+  firestoreInstance = getFirestore(firebaseApp());
+
+  if (isEmulator()) {
+    connectFirestoreEmulator(firestoreInstance, EMULATOR_HOST, EMULATOR_PORT);
+    // Loud on purpose. A build silently talking to an emulator looks exactly like a build whose
+    // sync is broken — no documents appear in the console and nothing errors.
+    console.info(`[firebase] Firestore → emulator ${EMULATOR_HOST}:${EMULATOR_PORT} (not the real project)`);
+  }
+
+  return firestoreInstance;
+}
+
+/**
+ * Point the SDK at the local emulator instead of the real project.
+ *
+ * Set `EXPO_PUBLIC_FIREBASE_EMULATOR=1` in `.env` and start it with
+ * `npx firebase emulators:start --only firestore`. **Auth is deliberately left pointing at the
+ * real project**, so Google sign-in still works — the Firestore emulator decodes a genuine ID
+ * token without verifying it, which is enough for `request.auth` and therefore for the rules to
+ * be exercised properly.
+ *
+ * Written as a complete `process.env.X` member expression, not a lookup through a variable.
+ * Expo 55 rewrites these to a virtual env module at build time, and that rewrite is a syntactic
+ * match on the full expression — `process.env[key]` is not a form it can see.
+ */
+export const isEmulator = (): boolean =>
+  process.env.EXPO_PUBLIC_FIREBASE_EMULATOR === '1';
+
+const EMULATOR_HOST = '127.0.0.1';
+const EMULATOR_PORT = 8080;
