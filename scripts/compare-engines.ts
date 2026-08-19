@@ -1,5 +1,5 @@
 /**
- * Side-by-side of the spectral engine against Basic Pitch on a real recording.
+ * Side-by-side of the HSA v2 engine against Basic Pitch on a real recording.
  *
  * Synthetic tones tell you whether the algorithm is correct; they cannot tell you whether it
  * is *useful*. Real harmonica has breath noise, reed transients, room, and a player who
@@ -21,7 +21,7 @@ import { dirname, join, resolve } from 'path';
 import * as tf from '@tensorflow/tfjs';
 
 import { defaultParams } from '../src/audio/algorithms';
-import { spectralAlgorithm } from '../src/audio/algorithms/spectral';
+import { hsaAlgorithm } from '../src/audio/algorithms/hsa.web';
 import { DEFAULT_BASIC_PITCH_CONFIG, segment } from '../src/audio/algorithms/basicPitch.web';
 import type { DecodedAudio } from '../src/audio/audioImport';
 import { shiftMidiNotes } from '../src/audio/notesToTabs';
@@ -170,8 +170,8 @@ function f1Against(reference: MidiNote[], subject: MidiNote[], toleranceMs = 100
  * what makes a sweep of this size take seconds rather than hours.
  */
 async function sweep(audio: DecodedAudio, reference: MidiNote[]): Promise<void> {
-  const prepared = await spectralAlgorithm.prepare(audio);
-  const base     = defaultParams(spectralAlgorithm);
+  const prepared = await hsaAlgorithm.prepare(audio);
+  const base     = defaultParams(hsaAlgorithm);
 
   const grid = {
     onsetThreshold:   [0.20, 0.25, 0.30, 0.35, 0.40],
@@ -193,7 +193,7 @@ async function sweep(audio: DecodedAudio, reference: MidiNote[]): Promise<void> 
             const params = {
               ...base, onsetThreshold, sustainThreshold, bridgeMs, minNoteLengthMs, octaveEvidence,
             };
-            const result = await spectralAlgorithm.resegment(prepared, params);
+            const result = await hsaAlgorithm.resegment(prepared, params);
             const notes  = result.output.kind === 'notes' ? result.output.notes : [];
             const score  = f1Against(reference, notes);
             evaluated++;
@@ -298,32 +298,38 @@ async function main(): Promise<void> {
 
   // What the app would actually show. Basic Pitch's raw output on a harmonica take contains
   // a substantial tail of notes far below any harmonica — breath noise and room read as
-  // pitch — and `transcription.ts` removes them before anything reaches the editor. The
-  // spectral engine cannot produce them at all, since its candidate range is the harp's, so
-  // comparing against the unfiltered output would score it down for a class of error it is
-  // structurally incapable of making. Same two steps, same order, as the note lane.
+  // pitch — and `transcription.ts` removes them before anything reaches the editor.
+  //
+  // **Only the reference is filtered, and under HSA v2 that is now an asymmetry.** The
+  // spectral engine this replaced bounded its own search to the harp's range, so it could not
+  // emit that tail at all and one-sided filtering put the two on equal footing. HSA v2 has no
+  // such bar, so any sub-harmonica note it emits counts against its precision here even though
+  // the note lane would discard it before the editor ever saw it. The number below is
+  // therefore a floor for HSA v2, not a like-for-like score. Fixing it means applying
+  // `asAppShows` to the subject too — deliberately not done here, because it would also move
+  // the number away from the Phase 14 baseline this script exists to stay comparable with.
   const reference = asAppShows(rawReference);
 
-  console.log('Spectral…');
+  console.log('HSA v2…');
   const spBegan = Date.now();
-  const prepared = await spectralAlgorithm.prepare(audio);
-  const result   = await spectralAlgorithm.resegment(prepared, defaultParams(spectralAlgorithm));
+  const prepared = await hsaAlgorithm.prepare(audio);
+  const result   = await hsaAlgorithm.resegment(prepared, defaultParams(hsaAlgorithm));
   const subject  = result.output.kind === 'notes' ? result.output.notes : [];
   prepared.dispose();
   const spElapsed = Date.now() - spBegan;
 
   console.log(`\n─── Timing ───`);
-  console.log(`  Basic Pitch ${(bpElapsed / 1000).toFixed(1)}s   Spectral ${(spElapsed / 1000).toFixed(1)}s`
+  console.log(`  Basic Pitch ${(bpElapsed / 1000).toFixed(1)}s   HSA v2 ${(spElapsed / 1000).toFixed(1)}s`
             + `   (${(bpElapsed / spElapsed).toFixed(1)}× faster)`);
 
   console.log(`\n─── Shape ───`);
   describe('Basic Pitch (raw)', rawReference, audio.durationMs);
   describe('Basic Pitch (as the app shows it)', reference, audio.durationMs);
-  describe('Spectral',    subject,   audio.durationMs);
+  describe('HSA v2',      subject,   audio.durationMs);
 
   console.log(`\n─── Pitch content (top 10) ───`);
   pitchHistogram('Basic Pitch', reference);
-  pitchHistogram('Spectral   ', subject);
+  pitchHistogram('HSA v2     ', subject);
 
   console.log(`\n─── Agreement ───`);
   for (const tolerance of [50, 100, 200]) {
@@ -346,14 +352,14 @@ async function main(): Promise<void> {
       Math.abs(r.timeMs - note.timeMs) < 100 && (note.midi - r.midi) % 12 === 0 && note.midi !== r.midi);
     if (partner) octaveOff++;
   }
-  console.log(`  spectral notes that are an octave off a Basic Pitch note: ${octaveOff}`);
-  console.log(`  spectral notes with no Basic Pitch counterpart at all:    ${unmatched.onlySubject}`);
-  console.log(`  Basic Pitch notes the spectral engine missed:             ${unmatched.onlyReference}`);
+  console.log(`  HSA v2 notes that are an octave off a Basic Pitch note: ${octaveOff}`);
+  console.log(`  HSA v2 notes with no Basic Pitch counterpart at all:      ${unmatched.onlySubject}`);
+  console.log(`  Basic Pitch notes HSA v2 missed:                          ${unmatched.onlyReference}`);
 
   if (process.argv.includes('--sweep')) await sweep(audio, reference);
 
   if (process.argv.includes('--write-midi')) {
-    for (const [name, notes] of [['basicpitch', reference], ['spectral', subject]] as const) {
+    for (const [name, notes] of [['basicpitch', reference], ['hsa', subject]] as const) {
       const path = file.replace(/\.wav$/i, `.${name}.json`);
       writeFileSync(path, JSON.stringify(notes, null, 2));
       console.log(`  wrote ${path}`);

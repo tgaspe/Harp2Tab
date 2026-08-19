@@ -70,11 +70,15 @@ export function isPlayableOnAnyHarmonica(midi: number): boolean {
 /**
  * The outer bounds of the set above.
  *
- * The spectral engine searches only inside this range, which is what makes a subharmonic
- * ghost below the harmonica structurally impossible rather than merely unlikely — there is
- * no candidate down there to win. Derived here, from the same layout tables, so that
- * widening a layout widens the search with it rather than silently leaving notes
- * unreachable.
+ * Derived here, from the same layout tables, so that widening a layout widens every consumer
+ * of this range with it rather than silently leaving notes unreachable.
+ *
+ * **Nothing reads it as of Phase 16.** The spectral engine was its only consumer — it searched
+ * only inside these bounds, which is what made a subharmonic ghost below the harmonica
+ * structurally impossible there rather than merely unlikely. HSA v2 has no such bar; the note
+ * lane rejects out-of-range pitches after the fact via `isPlayableOnAnyHarmonica` instead.
+ * Kept because any engine that wants to bound its search wants exactly this, and deriving it
+ * again elsewhere is how the two definitions drift apart.
  */
 export const PLAYABLE_MIDI_RANGE: { min: number; max: number } = (() => {
   let min = Infinity;

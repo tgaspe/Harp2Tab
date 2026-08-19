@@ -103,6 +103,29 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name:    'harp2tab-settings',
       storage: settingsStorage,
+      /**
+       * v1 — Phase 16 renamed the polyphonic offline engine's registry id `'spectral'` → `'hsa'`.
+       *
+       * Without this, anyone who had deliberately selected that engine would land on pMPM via
+       * `getAlgorithm`'s unavailable-engine fallback, and their tuned parameters would sit
+       * orphaned under a dead key forever. The blast radius is small — the default is
+       * `basicPitch` — but silently reverting a setting someone changed on purpose is the
+       * wrong failure mode.
+       */
+      version: 1,
+      migrate: (persisted: unknown, from: number) => {
+        const s = persisted as Partial<SettingsState> | undefined;
+        if (!s || from >= 1) return s;
+        if ((s.defaultAlgorithm as string) === 'spectral') s.defaultAlgorithm = 'hsa';
+        const params = s.transcriptionParams as Record<string, unknown> | undefined;
+        if (params && 'spectral' in params) {
+          // Only if `hsa` has nothing of its own — a value the user set under the new id wins
+          // over one carried across from the old.
+          if (!('hsa' in params)) params.hsa = params.spectral;
+          delete params.spectral;
+        }
+        return s;
+      },
     },
   ),
 );

@@ -23,7 +23,7 @@ written that way. Read that before changing one.
 | `verify-sync-merge.ts` | 58 | The sync merge (7b) — every row of its decision table, tombstone expiry either side of the boundary, two devices disagreeing about a deletion, plan idempotence — plus the wire round trip and the v4 migration. No network, no emulator |
 | `verify-entitlement.ts` | 54 | The entitlement resolver — RevenueCat event → document → access — with an injected clock, so renewals and expiries don't take a month to test |
 | `verify-firestore-rules.ts` | 24 | `firestore.rules` against the emulator. **Needs a second terminal**, see below |
-| `verify-spectral-pitch.ts` | — | Calibration harness for the spectral engine. A measurement tool, not a regression gate — see below |
+| `verify-hsa.ts` | 17 | The HSA v2 engine (Phase 16): chunked CQT equals whole-file CQT, the poly pass frame-for-frame against the Python reference, `detectReattacks` unit cases, `resegment` purity, and the round trip on a real take |
 
 ### Firestore rules
 
@@ -44,14 +44,18 @@ npx tsx scripts/verify-firestore-rules.ts          # terminal 2
 > permissive parent `match` silently overriding a nested `allow write: if false`) are invisible
 > to code review.
 
-### Spectral engine calibration
+### HSA v2
 
-`verify-spectral-pitch.ts` measures octave-error rate for the spectral engine, and measures
-pMPM on the same material for comparison. It is a **calibration harness for in-progress work**
-([Phase 14](plan/phase-14-spectral.md)), so failing checks there are the current state of the
-engine rather than a broken build. Basic Pitch is deliberately absent — it needs TensorFlow.js
-and an `OfflineAudioContext`, neither of which exists under `tsx`; comparing against it is a
-browser job.
+`verify-hsa.ts` is a **regression gate, not a measurement tool** — the opposite of the
+`verify-spectral-pitch.ts` it replaced ([Phase 16](plan/phase-16-hsa-engine.md) supersedes
+Phase 14, and that harness went with the engine it calibrated). Its first two assertions are
+the port's correctness claim: the chunked CQT must be bit-comparable to the whole-file CQT, and
+the TypeScript poly pass must reproduce the Python notebook's pitch set on every frame. A
+failure there is a real defect, not a tuning state.
+
+Its Python-reference fixtures live in `scripts/fixtures/`. Basic Pitch is deliberately absent —
+it needs TensorFlow.js and an `OfflineAudioContext`, neither of which exists under `tsx`;
+comparing against it is `compare-engines.ts`'s job, in a browser.
 
 ## Tooling and fixtures
 
@@ -59,11 +63,10 @@ These are not tests — they generate material or produce measurements.
 
 | Script | Purpose |
 |---|---|
-| `compare-engines.ts` | Side-by-side of the spectral engine against Basic Pitch on a real recording. `npx tsx scripts/compare-engines.ts <file.wav> [--write-midi]` |
+| `compare-engines.ts` | Side-by-side of HSA v2 against Basic Pitch on a real recording. `npx tsx scripts/compare-engines.ts <file.wav> [--write-midi]` |
 | `perf-studio-lanes.ts` | Perf spike for the Studio's multi-track render path against a 12-track / 5,400-note fixture |
 | `make-perf-fixture.ts` | Generates that fixture as the exact localStorage payload the Studio's store expects |
 | `make-test-wav.ts` | Renders a known tab sequence to WAV, for exercising the audio-upload path by hand |
-| `_dbg.ts` | Ad-hoc spectral debugging scratch |
 
 ## Manual verification
 
