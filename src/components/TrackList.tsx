@@ -1,7 +1,10 @@
-import React, { useMemo, useState } from 'react';
-import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type ViewStyle,
+} from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { audibleTracks, GM_FAMILIES, gmProgramOptions, instrumentName } from '@/audio/studioTracks';
+import { TRACK_COLORS } from '@/audio/midiProject';
 import { useTheme } from '@/hooks/useTheme';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { WEB_CONTENT_WIDTH } from '@/constants/layout';
@@ -30,12 +33,38 @@ interface TrackListProps {
   onToggleCollapsed: () => void;
   /** Absent while conversion isn't available (e.g. a track with no notes). */
   onConvert?:      (id: string) => void;
+  /** Both optional: a caller that can't persist track edits simply doesn't offer them, and
+   *  the row falls back to plain text and a plain swatch. */
+  onRenameTrack?:   (id: string, name: string) => void;
+  onSetTrackColor?: (id: string, color: string) => void;
 }
 
 export function TrackList({
   tracks, selectedTrackId, onSelectTrack, onToggleMute, onToggleSolo, onSetProgram,
   onAddTrack, onDeleteTrack, collapsed, onToggleCollapsed, onConvert,
+  onRenameTrack, onSetTrackColor,
 }: TrackListProps) {
+  // Which track's colour popover is open. One at a time for the same reason the instrument
+  // picker is: two anchored panels open at once is never what anyone meant.
+  const [colorFor, setColorFor] = useState<string | null>(null);
+  // The track being renamed, and the in-progress text. Seeded on open so abandoning an edit
+  // and starting again begins from the saved name.
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [draftName,  setDraftName]  = useState('');
+
+  function beginRename(track: MidiTrackData) {
+    setDraftName(track.name);
+    setRenamingId(track.id);
+  }
+
+  /** Empty or unchanged is a no-op — there's nothing to tell someone who clicked away from
+   *  a field they didn't mean to open. */
+  function commitRename(track: MidiTrackData) {
+    const next = draftName.trim();
+    if (next && next !== track.name) onRenameTrack?.(track.id, next);
+    setRenamingId(null);
+  }
+
   // Which track's instrument picker is open, if any. Still one at a time, but now because
   // it's a modal rather than because the 240px panel couldn't hold two inline lists.
   const [pickerFor, setPickerFor] = useState<string | null>(null);
@@ -190,26 +219,104 @@ export function TrackList({
                 </Pressable>
               )}
 
-              <Pressable
-                style={styles.rowMain}
-                onPress={() => onSelectTrack(track.id)}
-                accessibilityRole="radio"
-                accessibilityState={{ selected }}
-                accessibilityLabel={`${track.name}, ${instrumentName(track.program)}, ${track.notes.length} notes`}
-              >
-                <View style={[styles.swatch, { backgroundColor: track.color }]} />
-                <View style={styles.rowText}>
-                  <Text
-                    style={[styles.trackName, silenced && styles.trackNameSilenced]}
-                    numberOfLines={1}
-                  >
-                    {track.name}
-                  </Text>
-                  <Text style={styles.trackMeta} numberOfLines={1}>
-                    {instrumentName(track.program)} · {track.notes.length} notes
-                  </Text>
+              {/* The row changes shape on selection, and that falls out of the interaction
+                  rather than being bolted on: click once to select, then the row's parts
+                  become individually editable.
+
+                  Unselected it is one `rowMain` Pressable over the swatch and the text — a
+                  single large target for browsing a long arrangement. Selected it no longer
+                  needs to *be* a select target, so it becomes a plain View and the swatch
+                  and name become their own controls inside it.
+
+                  This is also the only structure that works on web: `rowMain` is a real
+                  <button> (accessibilityRole="radio"), and neither a nested button nor a
+                  text field may live inside one. There is never a nested control in either
+                  state. */}
+              {selected ? (
+                <View style={styles.rowMain}>
+                  <TrackSwatch
+                    track={track}
+                    editable={!!onSetTrackColor}
+                    open={colorFor === track.id}
+                    onPress={() => setColorFor((id) => (id === track.id ? null : track.id))}
+                    onPick={(color) => { onSetTrackColor?.(track.id, color); setColorFor(null); }}
+                    onClose={() => setColorFor(null)}
+                    styles={styles}
+                  />
+                  <View style={styles.rowText}>
+                    {renamingId === track.id ? (
+                      <TextInput
+                        value={draftName}
+                        onChangeText={setDraftName}
+                        autoFocus
+                        selectTextOnFocus
+                        style={styles.trackNameInput}
+                        onSubmitEditing={() => commitRename(track)}
+                        onBlur={() => commitRename(track)}
+                        // Escape abandons the edit. `onKeyPress` is the only place
+                        // react-native-web surfaces it; `onSubmitEditing` covers Enter only.
+                        onKeyPress={(e: any) => {
+                          if (e.nativeEvent?.key === 'Escape') setRenamingId(null);
+                        }}
+                        accessibilityLabel={`Rename track ${track.name}`}
+                        maxLength={60}
+                        returnKeyType="done"
+                      />
+                    ) : onRenameTrack ? (
+                      <Pressable
+                        onPress={() => beginRename(track)}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Rename track ${track.name}`}
+                        {...(Platform.OS === 'web' ? ({ title: 'Rename track' } as any) : null)}
+                      >
+                        {({ hovered }: any) => (
+                          <Text
+                            style={[
+                              styles.trackName,
+                              silenced && styles.trackNameSilenced,
+                              Platform.OS === 'web' && hovered && styles.trackNameEditable,
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {track.name}
+                          </Text>
+                        )}
+                      </Pressable>
+                    ) : (
+                      <Text
+                        style={[styles.trackName, silenced && styles.trackNameSilenced]}
+                        numberOfLines={1}
+                      >
+                        {track.name}
+                      </Text>
+                    )}
+                    <Text style={styles.trackMeta} numberOfLines={1}>
+                      {instrumentName(track.program)} · {track.notes.length} notes
+                    </Text>
+                  </View>
                 </View>
-              </Pressable>
+              ) : (
+                <Pressable
+                  style={styles.rowMain}
+                  onPress={() => onSelectTrack(track.id)}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected }}
+                  accessibilityLabel={`${track.name}, ${instrumentName(track.program)}, ${track.notes.length} notes`}
+                >
+                  <View style={[styles.swatch, { backgroundColor: track.color }]} />
+                  <View style={styles.rowText}>
+                    <Text
+                      style={[styles.trackName, silenced && styles.trackNameSilenced]}
+                      numberOfLines={1}
+                    >
+                      {track.name}
+                    </Text>
+                    <Text style={styles.trackMeta} numberOfLines={1}>
+                      {instrumentName(track.program)} · {track.notes.length} notes
+                    </Text>
+                  </View>
+                </Pressable>
+              )}
 
               <View style={styles.controls}>
                 <Pressable
@@ -249,8 +356,13 @@ export function TrackList({
                   />
                 </Pressable>
 
+                {/* Square, matching mute and solo. It used to be `toggleWide` with an
+                    "Instrument" label stretched across the rest of the row — a word that
+                    repeats nothing useful, two lines under the instrument's actual name in
+                    the meta line. The tooltip and the accessibility label both still name
+                    the current instrument. */}
                 <Pressable
-                  style={[styles.toggle, styles.toggleWide, pickerFor === track.id && styles.toggleOpen]}
+                  style={[styles.toggle, pickerFor === track.id && styles.toggleOpen]}
                   onPress={() => setPickerFor(track.id)}
                   accessibilityRole="button"
                   accessibilityState={{ expanded: pickerFor === track.id }}
@@ -264,10 +376,6 @@ export function TrackList({
                     size={14}
                     color={pickerFor === track.id ? theme.accent : theme.textMuted}
                   />
-                  <Text
-                    style={[styles.toggleText, pickerFor === track.id && styles.toggleTextOpen]}
-                    numberOfLines={1}
-                  >Instrument</Text>
                 </Pressable>
               </View>
 
@@ -407,6 +515,102 @@ function InstrumentPickerModal({ track, onPick, onClose, theme, styles }: {
   );
 }
 
+/**
+ * The lane-colour chip, and the palette it opens.
+ *
+ * Portaled through a `Modal` rather than positioned inside the row, for the reason this
+ * file already records about the collapsed rail's tooltip: the track panel is a ScrollView,
+ * so anything absolutely positioned beside a row is clipped by its overflow. Measuring the
+ * chip's viewport rect and painting at document level is the only way a popover survives
+ * here at all.
+ *
+ * A popover and not a centered modal like the instrument picker: that one is a browse
+ * through 128 GM programs grouped by family, this is eight swatches. The weight should
+ * match the decision.
+ *
+ * The positioning is the same technique `CardMenu` uses. Extracting a shared
+ * `AnchoredPopover` is the right cleanup and is deliberately not done here — it is a
+ * refactor of working code, not part of this change.
+ */
+function TrackSwatch({ track, editable, open, onPress, onPick, onClose, styles }: {
+  track:    MidiTrackData;
+  editable: boolean;
+  open:     boolean;
+  onPress:  () => void;
+  onPick:   (color: string) => void;
+  onClose:  () => void;
+  styles:   ReturnType<typeof createStyles>;
+}) {
+  const anchorRef = useRef<any>(null);
+  const [place, setPlace] = useState<{ top: number; left: number } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!open || Platform.OS !== 'web') return;
+    const rect = anchorRef.current?.getBoundingClientRect?.();
+    if (!rect) return;
+    // Hung below-left of the chip, then pulled back inside the window if the panel is close
+    // to an edge. The track rail lives at the far left of the studio, so the right edge is
+    // the one that actually bites on a narrow window.
+    const PANEL_W = 128;
+    const PANEL_H = 76;
+    const flipUp  = window.innerHeight - rect.bottom < PANEL_H;
+    setPlace({
+      top:  flipUp ? rect.top - PANEL_H - 6 : rect.bottom + 6,
+      left: Math.min(rect.left, window.innerWidth - PANEL_W - 8),
+    });
+  }, [open]);
+
+  if (!editable) {
+    return <View style={[styles.swatch, { backgroundColor: track.color }]} />;
+  }
+
+  return (
+    <View ref={anchorRef}>
+      <Pressable
+        onPress={onPress}
+        hitSlop={8}
+        style={[styles.swatch, styles.swatchEditable, { backgroundColor: track.color }]}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={`Change colour of track ${track.name}`}
+        {...(Platform.OS === 'web' ? ({ title: 'Track colour' } as any) : null)}
+      />
+
+      {open && (
+        <Modal transparent visible animationType="none" onRequestClose={onClose}>
+          <Pressable style={styles.colorScrim} onPress={onClose}>
+            {!!place && (
+              <Pressable
+                style={[styles.colorPanel, place]}
+                onPress={(e) => e.stopPropagation()}
+              >
+                {TRACK_COLORS.map((color) => {
+                  const current = color === track.color;
+                  return (
+                    <Pressable
+                      key={color}
+                      onPress={() => onPick(color)}
+                      style={({ hovered }: any) => [
+                        styles.colorCell,
+                        { backgroundColor: color },
+                        current && styles.colorCellCurrent,
+                        Platform.OS === 'web' && hovered && !current && styles.colorCellHovered,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: current }}
+                      accessibilityLabel={current ? `Colour ${color}, current` : `Set colour ${color}`}
+                    />
+                  );
+                })}
+              </Pressable>
+            )}
+          </Pressable>
+        </Modal>
+      )}
+    </View>
+  );
+}
+
 function createStyles(t: Theme) {
   return StyleSheet.create({
     panel: {
@@ -504,8 +708,60 @@ function createStyles(t: Theme) {
     // entered its row.
     rowMain: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingRight: 18 },
     swatch: { width: 10, height: 10, borderRadius: 3 },
+    // A touch larger and ringed once it's a control rather than a label, so there is
+    // something to aim at — 10px is a legible dot but not a clickable one, which is what
+    // `hitSlop` on the Pressable is really covering.
+    swatchEditable: {
+      width: 12, height: 12, borderRadius: 4,
+      borderWidth: 1, borderColor: t.border,
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
+
+    colorScrim: { flex: 1, backgroundColor: 'transparent' },
+    colorPanel: {
+      position:        'absolute',
+      width:           128,
+      flexDirection:   'row',
+      flexWrap:        'wrap',
+      gap:             6,
+      padding:         8,
+      borderRadius:    10,
+      backgroundColor: t.cardBg,
+      borderWidth:     1,
+      borderColor:     t.railBorder,
+      ...(Platform.OS === 'web' ? { boxShadow: '0 12px 28px rgba(0,0,0,0.18)' } as any : null),
+    } as ViewStyle,
+    colorCell: {
+      width: 22, height: 22, borderRadius: 6,
+      borderWidth: 2, borderColor: 'transparent',
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as ViewStyle,
+    // The current colour is ringed in the panel's own background, then outlined — a halo
+    // that reads on all eight hues, where a single accent ring would vanish on the cyan one.
+    colorCellCurrent: { borderColor: t.cardBg, outlineWidth: 2, outlineColor: t.textPrimary } as any,
+    colorCellHovered: { borderColor: t.textMuted },
     rowText: { flex: 1, minWidth: 0 },
     trackName: { fontFamily: Poppins.bold, fontSize: 13, color: t.textPrimary },
+    // The only hint that a selected row's name is clickable. Underline on hover rather than
+    // a permanent affordance — a pencil or a box on every selected row would compete with
+    // the name it decorates, which is the thing this panel exists to show.
+    trackNameEditable: { textDecorationLine: 'underline' },
+    // Sized and weighted like `trackName` so the row doesn't jump when the text becomes a
+    // field; negative margins cancel the field's own padding for the same reason.
+    trackNameInput: {
+      fontFamily:        Poppins.bold,
+      fontSize:          13,
+      color:             t.textPrimary,
+      backgroundColor:   t.bg,
+      borderWidth:       1,
+      borderColor:       t.accent,
+      borderRadius:      5,
+      paddingHorizontal: 5,
+      paddingVertical:   1,
+      marginVertical:    -2,
+      marginLeft:        -5,
+      ...(Platform.OS === 'web' ? { outlineStyle: 'none' } as any : null),
+    } as any,
     // Dimmed rather than hidden — a silenced track is still selectable and editable.
     trackNameSilenced: { color: t.textMuted },
     trackMeta: { fontFamily: SpaceGrotesk.regular, fontSize: 11, color: t.textMuted },
@@ -518,10 +774,7 @@ function createStyles(t: Theme) {
     },
     toggleMuted:  { backgroundColor: t.recordSoft,  borderColor: t.record },
     toggleSoloed: { backgroundColor: t.warningSoft, borderColor: t.warning },
-    toggleText:     { fontFamily: Poppins.bold, fontSize: 11, color: t.textMuted },
-    // Matches the guitar glyph beside it, which goes accent while the picker is open —
-    // mute and solo carry their own state in the icon now and need no text variant.
-    toggleTextOpen: { color: t.accent },
+
     convert: {
       alignSelf: 'flex-start',
       paddingHorizontal: 8, paddingVertical: 4,
@@ -532,7 +785,6 @@ function createStyles(t: Theme) {
     convertText: { fontFamily: Poppins.bold, fontSize: 11, color: t.accent },
     // Takes whatever the row has left after mute and solo, so the icon and the full word
     // fit at any panel width instead of being budgeted for the abbreviation it used to show.
-    toggleWide: { flex: 1, flexDirection: 'row', gap: 5, paddingHorizontal: 6 },
     toggleOpen: { backgroundColor: t.accentSoft, borderColor: t.accentDim },
 
     // ─── Instrument picker modal ──────────────────────────────────────────────

@@ -92,13 +92,24 @@ export function TopBar() {
             (pressed || hovered) && styles.logoRowHovered,
           ]}
           accessibilityRole="link"
-          accessibilityLabel="Harp2Tab home"
+          // The tag's text is inside this Pressable, and an accessibilityLabel on the
+          // parent replaces whatever the children say — so without naming it here, "beta"
+          // is a fact only sighted users get.
+          accessibilityLabel="Harp2Tab home, beta"
         >
           <Image
             source={require('../../assets/images/harp2tab-icon.png')}
             style={styles.logoIcon}
           />
           <Text style={styles.logoText}>Harp2Tab</Text>
+          {/* Set beside the wordmark rather than inside it: "Harp2Tab" is the product's
+              name and "Beta" is a fact about the build, and a reader should be able to take
+              the first without the second following it around. Small, outlined and muted —
+              it is a disclosure, not a badge to be proud of, and it must never out-shout the
+              name it qualifies. */}
+          <View style={styles.betaTag}>
+            <Text style={styles.betaTagText}>BETA</Text>
+          </View>
         </Pressable>
 
         {showBackToStudio && (
@@ -359,6 +370,24 @@ function createStyles(t: Theme) {
       fontFamily:    SpaceGrotesk.bold,
       color:         t.accent,
       letterSpacing: -0.3,
+    },
+    betaTag: {
+      // Nudged up so the tag sits against the wordmark's cap height rather than its
+      // baseline — level with the letters, the way a superscript reads.
+      marginTop:         -6,
+      marginLeft:        -2,
+      paddingHorizontal: 5,
+      paddingVertical:   1,
+      borderRadius:      4,
+      borderWidth:       1,
+      borderColor:       t.accentDim,
+      backgroundColor:   t.accentSoft,
+    },
+    betaTagText: {
+      fontSize:      9,
+      fontFamily:    Poppins.bold,
+      color:         t.accentDeep,
+      letterSpacing: 0.6,
     },
     iconBtn: {
       padding:      9,

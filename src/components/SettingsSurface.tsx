@@ -29,6 +29,7 @@
 
 import React, { useMemo } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { FONT } from '@/constants/keys';
 import { useTheme } from '@/hooks/useTheme';
@@ -136,10 +137,19 @@ interface ButtonProps {
   disabled?: boolean;
   /** Web buttons hug their text. Only set this where a button really is the whole row. */
   fullWidth?: boolean;
+  /**
+   * A leading glyph.
+   *
+   * For a button whose action is a *thing you do* rather than a setting you change —
+   * sending something, downloading something. The settings rows deliberately have no icons
+   * (see the note at the top of this file), so an icon here is a signal that this button is
+   * not one of them, and it stops meaning that if every button gets one.
+   */
+  icon?:      React.ComponentProps<typeof Ionicons>['name'];
 }
 
 export function Button({
-  label, onPress, variant = 'secondary', size = 'medium', disabled, fullWidth,
+  label, onPress, variant = 'secondary', size = 'medium', disabled, fullWidth, icon,
 }: ButtonProps) {
   const theme  = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
@@ -167,15 +177,28 @@ export function Button({
       accessibilityLabel={label}
       accessibilityState={{ disabled: !!disabled }}
     >
-      <Text
-        style={[
-          styles.btnText,
-          variant === 'primary'     && styles.btnTextPrimary,
-          variant === 'destructive' && styles.btnTextDestructive,
-        ]}
-      >
-        {label}
-      </Text>
+      <View style={styles.btnInner}>
+        {!!icon && (
+          <Ionicons
+            name={icon}
+            size={size === 'small' ? 14 : 15}
+            color={
+              variant === 'primary'     ? '#fff'
+              : variant === 'destructive' ? theme.record
+              : theme.textSub
+            }
+          />
+        )}
+        <Text
+          style={[
+            styles.btnText,
+            variant === 'primary'     && styles.btnTextPrimary,
+            variant === 'destructive' && styles.btnTextDestructive,
+          ]}
+        >
+          {label}
+        </Text>
+      </View>
     </Pressable>
   );
 }
@@ -310,6 +333,14 @@ function createStyles(t: Theme) {
     btnDestructive: { borderColor: t.record, backgroundColor: 'transparent' },
     btnDestructiveHovered: { backgroundColor: t.recordSoft },
     btnGhost: { borderColor: 'transparent', backgroundColor: 'transparent' },
+    // Wraps glyph and label so they stay together and centred when `fullWidth` stretches
+    // the button past its content.
+    btnInner: {
+      flexDirection:  'row',
+      alignItems:     'center',
+      justifyContent: 'center',
+      gap:            7,
+    },
     btnText: {
       fontSize:   FONT.sm,
       fontFamily: Poppins.semiBold,

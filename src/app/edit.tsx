@@ -1019,7 +1019,7 @@ function KeyTypeControl({ styles }: { styles: EditStyles }) {
   }
 
   return (
-    <View style={styles.sidebarKeyTypeGroup}>
+    <View style={styles.sidebarPickerPanel}>
       <View style={styles.sidebarTypeToggle}>
         {(['transpose', 'translate'] as const).map((mode) => (
           <Pressable
@@ -1056,7 +1056,10 @@ function KeyTypeControl({ styles }: { styles: EditStyles }) {
         ))}
       </View>
 
-      <KeyGrid selected={harmonicaKey} onSelect={handleSelectKey} onAccent />
+      {/* No `onAccent`. That variant draws cells at `rgba(255,255,255,0.12)` with a white
+          label — built for the cyan rail this sidebar used to be, and invisible on the plain
+          panel it is now. The default variant is the one Home's rail uses. */}
+      <KeyGrid selected={harmonicaKey} onSelect={handleSelectKey} />
 
       <ActionSheetModal
         visible={pending !== null}
@@ -1074,9 +1077,9 @@ function KeyTypeControl({ styles }: { styles: EditStyles }) {
 // Editable chart name, inline in the toolbar — self-contained (reads/writes the store
 // directly) so naming happens as you go instead of only being prompted for at save time.
 // Empty is a valid state (untitled); the placeholder shows what a save would default to.
-// variant='sidebar' is the same field sitting full-width on the list view's accent
-// sidebar (white-on-accent, matching the sidebar's other onAccent-styled controls)
-// instead of the compact dark-on-white toolbar trigger.
+// variant='sidebar' is the same field sitting full-width on the list view's sidebar,
+// carrying that rail's inset treatment (`bg` on a `railBorder` edge, matching its rows)
+// instead of the compact toolbar trigger.
 function ChartNameInput({ theme, styles, variant = 'toolbar' }: { theme: Theme; styles: EditStyles; variant?: 'toolbar' | 'sidebar' }) {
   const recordingTitle    = useAppStore(selectRecordingTitle);
   const setRecordingTitle = useAppStore((s) => s.setRecordingTitle);
@@ -1312,17 +1315,22 @@ function ExportMenu({ tabNotesLength, theme, styles, variant = 'toolbar', collap
           onPress={() => setOpen(true)}
           disabled={disabled}
           style={({ pressed, hovered }: any) => [
-            collapsed ? styles.sidebarIconBtn : styles.sidebarExportBtn,
+            // Accent-filled in both states — collapsing the rail must not demote its one
+            // primary action to just another outlined glyph. `sidebarRowPressed` is the
+            // outlined rows' hover and would wash the fill out, so this uses its own.
+            collapsed ? [styles.sidebarIconBtn, styles.sidebarIconBtnPrimary] : styles.sidebarExportBtn,
             disabled && styles.sidebarRowDisabled,
-            (pressed || hovered) && !disabled && styles.sidebarRowPressed,
+            (pressed || hovered) && !disabled && styles.sidebarExportBtnPressed,
           ]}
           accessibilityRole="button"
           accessibilityLabel="Export"
           accessibilityState={{ disabled }}
           {...(Platform.OS === 'web' ? ({ title: 'Export' } as any) : null)}
         >
-          <Ionicons name="share-outline" size={collapsed ? 18 : 16} color={disabled ? 'rgba(255,255,255,0.85)' : '#fff'} />
-          {!collapsed && <Text style={styles.sidebarRowText}>Export</Text>}
+          {/* White on the accent fill. `sidebarRowDisabled`'s opacity does the dimming, so
+              the disabled state doesn't need a second, paler white on top of it. */}
+          <Ionicons name="share-outline" size={collapsed ? 18 : 16} color="#fff" />
+          {!collapsed && <Text style={styles.sidebarExportText}>Export</Text>}
         </Pressable>
 
         {/* Centered modal, same reasoning as the New Recording key/type picker —
@@ -1405,6 +1413,10 @@ function SidebarAction({
   badge?: string;
   styles: EditStyles;
 }) {
+  // The rail is a plain panel now, so its glyphs are theme colours rather than white. Read
+  // here rather than threaded down beside `styles` — this is a component, and one hook is
+  // cheaper than a prop on every call site.
+  const theme = useTheme();
   const webTitle = Platform.OS === 'web' ? ({ title: badge ? `${label} — ${badge}` : label } as any) : null;
 
   if (collapsed) {
@@ -1422,7 +1434,7 @@ function SidebarAction({
         accessibilityState={{ disabled }}
         {...webTitle}
       >
-        <Ionicons name={icon} size={18} color="#fff" />
+        <Ionicons name={icon} size={18} color={theme.textSub} />
       </Pressable>
     );
   }
@@ -1441,7 +1453,7 @@ function SidebarAction({
       accessibilityState={{ disabled }}
     >
       <View style={styles.sidebarRowIconWrap}>
-        <Ionicons name={icon} size={16} color="#fff" />
+        <Ionicons name={icon} size={16} color={theme.textSub} />
       </View>
       <Text style={styles.sidebarRowText}>{label}</Text>
       {badge !== undefined && <Text style={styles.sidebarComingSoon}>{badge}</Text>}
@@ -1544,7 +1556,7 @@ function EditSidebar({
         accessibilityLabel={collapsed ? 'Expand sidebar' : 'Collapse sidebar to icons'}
         {...(Platform.OS === 'web' ? ({ title: collapsed ? 'Expand sidebar' : 'Collapse sidebar' } as any) : null)}
       >
-        <Ionicons name={collapsed ? 'chevron-forward' : 'chevron-back'} size={16} color="#fff" />
+        <Ionicons name={collapsed ? 'chevron-forward' : 'chevron-back'} size={16} color={theme.textSub} />
         {!collapsed && <Text style={styles.sidebarCollapseText}>Collapse</Text>}
       </Pressable>
 
@@ -1584,7 +1596,7 @@ function EditSidebar({
             message reappears the moment the sidebar is expanded again. */}
         {!!uploadError && !collapsed && (
           <View style={styles.sidebarUploadError} accessibilityRole="alert">
-            <Ionicons name="alert-circle-outline" size={13} color="#fff" />
+            <Ionicons name="alert-circle-outline" size={13} color={theme.warning} />
             <Text style={styles.sidebarUploadErrorText}>{uploadError}</Text>
           </View>
         )}
@@ -1713,7 +1725,7 @@ function EditSidebar({
             accessibilityLabel="Undo last action"
             accessibilityState={{ disabled: !canUndo }}
           >
-            <Ionicons name="arrow-undo" size={16} color="#fff" />
+            <Ionicons name="arrow-undo" size={16} color={theme.textSub} />
             <Text style={styles.sidebarRowHalfText}>Undo</Text>
           </Pressable>
           <Pressable
@@ -1729,7 +1741,7 @@ function EditSidebar({
             accessibilityLabel="Redo"
             accessibilityState={{ disabled: !canRedo }}
           >
-            <Ionicons name="arrow-redo" size={16} color="#fff" />
+            <Ionicons name="arrow-redo" size={16} color={theme.textSub} />
             <Text style={styles.sidebarRowHalfText}>Redo</Text>
           </Pressable>
         </View>

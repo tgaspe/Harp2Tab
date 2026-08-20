@@ -623,6 +623,8 @@ export default function StudioScreen() {
             if (t) updateTrack(id, { soloed: !t.soloed });
           }}
           onSetProgram={(id, program) => updateTrack(id, { program })}
+          onRenameTrack={(id, name) => updateTrack(id, { name })}
+          onSetTrackColor={(id, color) => updateTrack(id, { color })}
           onAddTrack={() => {
             const track = createTrack(project.tracks.length);
             mutate({ ...project, tracks: [...project.tracks, track] });

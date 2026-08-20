@@ -35,7 +35,7 @@ import { AuthModal } from '@/components/AuthModal';
 import { FeedbackModal } from '@/components/FeedbackModal';
 import { SliderInput } from '@/components/SliderInput';
 import { Toggle } from '@/components/Toggle';
-import { FieldRow, Section } from '@/components/SettingsSurface';
+import { Button, FieldRow, Section } from '@/components/SettingsSurface';
 import { useAuth } from '@/auth/useAuth';
 import { useTheme } from '@/hooks/useTheme';
 import { usePremium } from '@/hooks/usePremium';
@@ -47,6 +47,10 @@ import { FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_TOP, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
 import type { Theme } from '@/theme';
+
+/** Where support mail goes. Also the sender a reply arrives from, so it is worth someone
+ *  recognising it later rather than filing it as spam. */
+const SUPPORT_EMAIL = 'chewpacastudios@gmail.com';
 
 const THEME_SEGMENTS: Array<{ value: ThemeOverride; label: string }> = [
   { value: 'light', label: 'Light' },
@@ -87,6 +91,13 @@ export default function SettingsScreen() {
   function handleFeedback() {
     if (auth.user) setShowFeedback(true);
     else           setShowAuth(true);
+  }
+
+  function handleEmail() {
+    // Subject prefilled, body left alone — naming the app saves the reader a question when
+    // several projects land in the same inbox, but guessing at what someone wants to say
+    // just gives them text to delete.
+    void Linking.openURL(`mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent('Harp2Tab support')}`);
   }
 
   async function handleRate() {
@@ -338,21 +349,62 @@ export default function SettingsScreen() {
                 title="Support"
                 description="Something broken, or something missing? It reaches the developer directly."
               >
+                {/* The one filled button on the page, passed through `control` rather than
+                    `action` because `action` is fixed to the secondary variant on purpose:
+                    every other button here ends a setting — Recalibrate, Reset, Read policy
+                    — and those should stay quiet and identical to each other. This is the
+                    only row asking the reader for something rather than offering them
+                    something, so it takes the accent and the only icon on the settings
+                    surface. If a second primary ever lands on this page, both should go back
+                    to secondary; one is what makes it mean anything. */}
                 {Platform.OS === 'web' ? (
                   <FieldRow
                     first
                     label="Feedback"
-                    hint="Report a bug or suggest a feature."
-                    action={{ label: 'Send feedback', onPress: handleFeedback }}
+                    hint="Found a bug, or missing something you need? It reaches the developer directly."
+                    control={
+                      <Button
+                        label="Send feedback"
+                        icon="paper-plane-outline"
+                        variant="primary"
+                        size="small"
+                        onPress={handleFeedback}
+                      />
+                    }
                   />
                 ) : (
                   <FieldRow
                     first
                     label="Rating"
                     hint="Enjoying Harp2Tab? Leave a review on the Play Store."
-                    action={{ label: 'Rate the app', onPress: handleRate }}
+                    control={
+                      <Button
+                        label="Rate the app"
+                        icon="star-outline"
+                        variant="primary"
+                        size="small"
+                        onPress={handleRate}
+                      />
+                    }
                   />
                 )}
+
+                {/* Both platforms. The in-app form is the better route — it arrives with the
+                    account attached, so a reply can actually find you — but it needs an
+                    account, and someone who cannot sign in is exactly the person most likely
+                    to need support. This is the door that is never locked.
+
+                    The address is rendered as selectable text rather than hidden behind the
+                    button: plenty of people would rather paste it into their own mail client
+                    than hand the tab to a `mailto:` handler they may not have configured. */}
+                <FieldRow
+                  label="Email"
+                  action={{ label: 'Compose', onPress: handleEmail }}
+                >
+                  <Text style={styles.supportEmail} selectable numberOfLines={1}>
+                    {SUPPORT_EMAIL}
+                  </Text>
+                </FieldRow>
               </Section>
 
               <Section
@@ -474,6 +526,14 @@ function createStyles(t: Theme) {
       fontSize:   FONT.sm,
       fontFamily: Poppins.semiBold,
       color:      t.accentDeep,
+    },
+
+    // Matches `FieldRow`'s own `fieldValueText` — the row is rendering a value, it just
+    // needs to be selectable, which the built-in text path does not offer.
+    supportEmail: {
+      fontSize:   FONT.sm,
+      fontFamily: Poppins.medium,
+      color:      t.textPrimary,
     },
 
     // Controls stop well short of the body column's full width. A slider stretched across

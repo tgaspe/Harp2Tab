@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 /**
  * Cross-screen visual tokens.
  *
@@ -59,3 +60,15 @@ export const GROUP_LABEL = {
   fontFamily:    Poppins.semiBold,
   letterSpacing: 0,
 } as const;
+
+/**
+ * Whether the viewer has asked the OS for less motion.
+ *
+ * Read once at module load rather than subscribed to: it only picks which *kind* of hover
+ * feedback a control gets, and something silently changing its behaviour mid-session because
+ * a system preference flipped would be stranger than the staleness.
+ */
+export const PREFERS_REDUCED_MOTION =
+  Platform.OS === 'web'
+  && typeof window !== 'undefined'
+  && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;

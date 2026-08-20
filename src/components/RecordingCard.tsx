@@ -1,10 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, TextInput, View, type ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/hooks/useTheme';
 import { FONT } from '@/constants/keys';
 import { Poppins } from '@/constants/fonts';
-import { RADIUS } from '@/constants/ui';
+import { PREFERS_REDUCED_MOTION, RADIUS } from '@/constants/ui';
 import { NameRecordingModal } from '@/components/NameRecordingModal';
 import { ActionSheetModal } from '@/components/ActionSheetModal';
 import { CardMenu } from '@/components/CardMenu';
@@ -261,6 +261,15 @@ function createStyles(t: Theme) {
       borderColor:     t.border,
       paddingVertical: 10,
       paddingHorizontal: 14,
+      // On the base style, not on `cardHovered` — a transition declared only in the hover
+      // state animates the way in and snaps on the way out.
+      ...(isWeb && !PREFERS_REDUCED_MOTION
+        ? {
+            transitionProperty:       'transform',
+            transitionDuration:       '140ms',
+            transitionTimingFunction: 'ease-out',
+          } as any
+        : null),
     },
     /**
      * The play control, and only that.
@@ -290,7 +299,22 @@ function createStyles(t: Theme) {
       minWidth:      0,
       ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
     } as any,
-    cardHovered: { backgroundColor: t.cardHover, borderColor: t.border },
+    /**
+     * Hover grows the card instead of tinting it.
+     *
+     * 1.5% rather than the 2–3% a small tile could take: in list view this card is the full
+     * width of the library column, so a percentage is a much bigger number of pixels here
+     * than it looks — at 3% a 700px row would jump 20px and shoulder its neighbours.
+     *
+     * `zIndex` so the card that grew paints over the ones it now overlaps; the transition
+     * itself lives on `card`, so the card eases back down on the way out as well as up.
+     *
+     * Reduced motion keeps the old colour hover rather than losing hover feedback
+     * altogether — the point is to answer the cursor, and a tint answers it without moving.
+     */
+    cardHovered: PREFERS_REDUCED_MOTION
+      ? { backgroundColor: t.cardHover, borderColor: t.border }
+      : ({ transform: [{ scale: 1.015 }], zIndex: 1 } as ViewStyle),
     cardPressed: { opacity: 0.7 },
     info:  { gap: 3 },
     title: {

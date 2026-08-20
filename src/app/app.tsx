@@ -27,7 +27,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions, type ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WEB_SCREEN_PADDING_TOP, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
-import { GROUP_LABEL, RADIUS, SECTION_HEADING } from '@/constants/ui';
+import { PREFERS_REDUCED_MOTION, RADIUS, SECTION_HEADING } from '@/constants/ui';
 
 type SortOption = 'recent' | 'oldest' | 'title' | 'longest';
 const SORT_OPTIONS: { value: SortOption; label: string }[] = [
@@ -609,22 +609,6 @@ export default function KeySelectionScreen() {
    * itself below the fold on a laptop. A count of what's in the library is the only number
    * that earns a place directly under a heading that says "Library".
    */
-  /**
-   * The one document to offer back — whichever of the two libraries was touched last.
-   *
-   * Deliberately across *both* types rather than per-section: "where was I" has one answer,
-   * and making the user compare a tab's timestamp against a project's to find it is the work
-   * this is supposed to save. Resolved on `updatedAt`, not `createdAt` — the list below
-   * already sorts by creation, so keying this off the same field would just restate row one.
-   */
-  const resumeTarget: { kind: 'tab'; rec: TabRecording } | { kind: 'project'; project: MidiProject } | null = (() => {
-    const newestRec  = recordings.reduce<TabRecording | null>((best, r) => (!best || r.updatedAt > best.updatedAt ? r : best), null);
-    const newestProj = midiProjects.reduce<MidiProject | null>((best, p) => (!best || p.updatedAt > best.updatedAt ? p : best), null);
-    if (newestProj && (!newestRec || newestProj.updatedAt > newestRec.updatedAt)) return { kind: 'project', project: newestProj };
-    if (newestRec) return { kind: 'tab', rec: newestRec };
-    return null;
-  })();
-
   const resultCount = matchedProjects.length + filteredRecordings.length;
   const librarySummary = searching
     ? `${resultCount} result${resultCount === 1 ? '' : 's'} for “${librarySearch.trim()}”`
@@ -732,51 +716,6 @@ export default function KeySelectionScreen() {
                   </View>
                 )}
               </View>
-
-              {/* Where you were, offered back.
-                  Top of the column rather than filling the empty space at the bottom: this
-                  is the first thing worth acting on, and a "continue" affordance below a
-                  list you've already had to scan is a "continue" affordance that arrives
-                  too late to save anyone anything. */}
-              {resumeTarget && !searching && (
-                <Pressable
-                  onPress={() => {
-                    if (resumeTarget.kind === 'tab') handleOpenRecording(resumeTarget.rec);
-                    else router.push({ pathname: '/studio', params: { projectId: resumeTarget.project.id } });
-                  }}
-                  style={({ hovered }: any) => [styles.resumeBand, hovered && styles.resumeBandHovered]}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Resume ${resumeTarget.kind === 'tab' ? resumeTarget.rec.title : resumeTarget.project.title}`}
-                >
-                  {/* The chip takes the colours of whichever card this points at: cyan for a
-                      recording, yellow for a MIDI project, matching `RecordingCard`'s thumb
-                      and `ProjectCard`'s tile. The glyph already said which kind it was; the
-                      colour said "recording" either way.
-
-                      The tint is a fill *inside* the chip rather than the chip's own
-                      background because `projectSoft` is translucent — set directly it would
-                      blend with the band's `accentSoft` and come out muddy green. Over an
-                      opaque `bg` chip it composites to exactly the project card's tile. */}
-                  <View style={styles.resumeIconWrap}>
-                    {resumeTarget.kind === 'project' && <View style={styles.resumeIconTint} />}
-                    <Ionicons
-                      name={resumeTarget.kind === 'tab' ? 'musical-notes-outline' : 'layers-outline'}
-                      size={18}
-                      color={resumeTarget.kind === 'tab' ? theme.accent : theme.project}
-                    />
-                  </View>
-                  <View style={styles.resumeText}>
-                    <Text style={styles.resumeLabel}>Continue working</Text>
-                    <Text style={styles.resumeTitle} numberOfLines={1}>
-                      {resumeTarget.kind === 'tab' ? resumeTarget.rec.title : resumeTarget.project.title}
-                      <Text style={styles.resumeStamp}>
-                        {'   '}edited {timeAgo(resumeTarget.kind === 'tab' ? resumeTarget.rec.updatedAt : resumeTarget.project.updatedAt)}
-                      </Text>
-                    </Text>
-                  </View>
-                  <Ionicons name="arrow-forward" size={16} color={theme.accent} />
-                </Pressable>
-              )}
 
               {/* Projects sit above recordings because they're upstream of them: a
                   project is what a tab gets converted *out of*, so finding one is how you
@@ -1088,6 +1027,14 @@ function createStyles(t: Theme) {
     // on `cardBg` at radius 10 with 12px type against the tab card's `surface`/14/15px) had
     // the relationship backwards.
     projectCard: {
+      // See RecordingCard's `card`: on the base style so the card eases back down too.
+      ...(Platform.OS === 'web' && !PREFERS_REDUCED_MOTION
+        ? {
+            transitionProperty:       'transform',
+            transitionDuration:       '140ms',
+            transitionTimingFunction: 'ease-out',
+          } as any
+        : null),
       flexDirection: 'row',
       alignItems: 'center',
       // Fills whatever it's put in — a third of the row in grid view, the whole column in
@@ -1100,7 +1047,12 @@ function createStyles(t: Theme) {
       backgroundColor: t.cardBg,
       paddingRight: 6,
     },
-    projectCardHovered: { backgroundColor: t.cardHover },
+    // Grows on hover rather than tinting, matching RecordingCard beside it — see the long
+    // note on `cardHovered` there for why 1.5% and why the transition lives on the base
+    // style. The two card types in this library must answer the cursor the same way.
+    projectCardHovered: PREFERS_REDUCED_MOTION
+      ? { backgroundColor: t.cardHover }
+      : ({ transform: [{ scale: 1.015 }], zIndex: 1 } as ViewStyle),
     projectCardMain: {
       flex: 1,
       flexDirection: 'row',
@@ -1293,33 +1245,6 @@ function createStyles(t: Theme) {
       gap:            16,
     },
     pageHeaderText: { gap: 2, flexShrink: 1, minWidth: 0 },
-    // Accent-tinted rather than another neutral card: this is the one row on the page that
-    // is a shortcut rather than a listing, and it should not read as the first item of the
-    // library underneath it.
-    resumeBand: {
-      flexDirection:     'row',
-      alignItems:        'center',
-      gap:               14,
-      paddingVertical:   14,
-      paddingHorizontal: 16,
-      borderRadius:      RADIUS.md,
-      backgroundColor:   t.accentSoft,
-      borderWidth:       1,
-      borderColor:       t.accent,
-      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
-    } as ViewStyle,
-    resumeBandHovered: { borderColor: t.accentDim, backgroundColor: t.cardHover },
-    resumeIconWrap: {
-      width: 38, height: 38, borderRadius: RADIUS.sm,
-      backgroundColor: t.bg, alignItems: 'center', justifyContent: 'center',
-      // So the square tint below is clipped to the chip's corners.
-      overflow: 'hidden',
-    },
-    resumeIconTint: { ...StyleSheet.absoluteFillObject, backgroundColor: t.projectSoft },
-    resumeText:  { flex: 1, minWidth: 0, gap: 2 },
-    resumeLabel: { ...GROUP_LABEL, color: t.accentDeep },
-    resumeTitle: { fontSize: FONT.base, fontFamily: Poppins.semiBold, color: t.textPrimary },
-    resumeStamp: { fontSize: FONT.xs, fontFamily: Poppins.regular, color: t.textMuted },
     pageTitle: {
       fontSize:      FONT.xl,
       fontFamily:    SpaceGrotesk.bold,

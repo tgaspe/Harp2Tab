@@ -16,8 +16,8 @@
  * been used. On native the entry points live in the bottom action bar instead.
  *
  * Visually it is a plain `railBg` panel, not the accent fill it started as — see
- * `fullSidebar` below for why. `/edit` still runs the accent version off `theme.sidebarBg`;
- * the two want reconciling next time that screen is touched.
+ * `fullSidebar` below for why. `/edit`'s rail followed on 2026-08-19 and now shares these
+ * values; `theme.sidebarBg`, which was the accent fill both once used, is gone with it.
  */
 
 import React, { useState } from 'react';

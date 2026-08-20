@@ -47,20 +47,23 @@ export function createStyles(t: Theme) {
     // bar's own `glued` variant instead (cancels container's `gap`, not padding here).
     editShellEdgeWrap: { flex: 1, marginHorizontal: -24, marginTop: -WEB_SCREEN_PADDING_TOP },
     editShell: { flexDirection: 'row', flex: 1 },
-    // Mirrors Home's fullSidebar almost exactly (same width, accent fill, plain rows) —
-    // deliberately reusing that visual language rather than inventing a second sidebar
-    // style, so the two full-height accent rails read as the same UI pattern.
+    // Home's `fullSidebar`, values and all — same width, same plain `railBg` panel, same
+    // accent-tinted hairline. It used to be a solid `sidebarBg` fill with white text on
+    // translucent-white pills, which was the shape Home's rail started in too; Home moved
+    // off it because 300px of colour beside the content it supports had the emphasis
+    // backwards, and the note at the top of `AppSidebar` has been asking for this screen to
+    // follow ever since. Every row here now carries its own `railBorder` edge, which is what
+    // does the separating once the panel underneath stops doing it.
     // Box styling only — a ScrollView's own `style` can't carry padding or gap for its
     // content (those belong on contentContainerStyle below), and `flexGrow: 0` is what
-    // stops the ScrollView from expanding past its 280px column.
+    // stops the ScrollView from expanding past its column.
     editSidebar: {
-      width:             280,
+      width:             300,
       flexGrow:          0,
       flexShrink:        0,
-      backgroundColor:   t.sidebarBg,
+      backgroundColor:   t.railBg,
       borderRightWidth:  1,
-      // See Home's fullSidebar — inverted in dark mode for the same reason.
-      borderRightColor:  t.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.18)',
+      borderRightColor:  t.railBorder,
       // The rail slides rather than snapping between its two widths. Web-only; on native
       // this is a static width change, which is fine — there's no sidebar there.
       ...(Platform.OS === 'web'
@@ -82,20 +85,24 @@ export function createStyles(t: Theme) {
       paddingVertical:   20,
       alignItems:        'center',
     } as ViewStyle,
-    // Square icon button for the collapsed rail — same translucent-pill language as
-    // sidebarRow, just reduced to the glyph.
+    // Square icon button for the collapsed rail — `sidebarRow` reduced to its glyph, and
+    // now carrying the same inset treatment: one step *down* from the panel, edged with
+    // `railBorder`. The collapsed and expanded rails read as the same rail.
     sidebarIconBtn: {
       width:           SIDEBAR_ICON_BTN,
       height:          SIDEBAR_ICON_BTN,
       alignItems:      'center',
       justifyContent:  'center',
       borderRadius:    10,
-      backgroundColor: 'rgba(255,255,255,0.14)',
+      backgroundColor: t.bg,
       borderWidth:     1,
-      borderColor:     'rgba(255,255,255,0.22)',
+      borderColor:     t.railBorder,
       ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
     } as ViewStyle,
-    sidebarKeyBadgeText: { fontSize: FONT.md, fontFamily: Poppins.bold, color: '#fff' },
+    // Export when the rail is collapsed. Its fill has to survive collapsing — the point of
+    // a single primary is lost if narrowing the rail turns it into another outlined glyph.
+    sidebarIconBtnPrimary: { backgroundColor: t.accent, borderColor: t.accent },
+    sidebarKeyBadgeText: { fontSize: FONT.md, fontFamily: Poppins.bold, color: t.textPrimary },
     // Expanded-state collapse control — quieter than a full sidebarRow (no fill), since
     // it's chrome for the sidebar itself rather than one of the chart's actions.
     sidebarCollapseRow: {
@@ -108,7 +115,7 @@ export function createStyles(t: Theme) {
       borderRadius:      8,
       ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
     } as ViewStyle,
-    sidebarCollapseText: { fontSize: FONT.xs, fontFamily: Poppins.semiBold, color: 'rgba(255,255,255,0.9)' },
+    sidebarCollapseText: { fontSize: FONT.xs, fontFamily: Poppins.semiBold, color: t.textSub },
     sidebarSectionCollapsed: { gap: 10, alignItems: 'center' } as ViewStyle,
     // Tight vertical rhythm on purpose: this column already stacks a title, the piano
     // roll's own tool row and its bar ruler between the global TopBar above and the
@@ -202,21 +209,21 @@ export function createStyles(t: Theme) {
     sidebarSectionLabel: {
       fontSize:      FONT.xs,
       fontFamily:    Poppins.bold,
-      color:         '#fff',
+      color:         t.textSub,
       letterSpacing: 1,
       marginBottom:  2,
     },
     // alignSelf: 'stretch' rather than relying on the container's default — the collapsed
     // rail centers its children, and a zero-width divider would just vanish there.
-    sidebarDivider: { height: 1, alignSelf: 'stretch', backgroundColor: 'rgba(255,255,255,0.18)' },
+    sidebarDivider: { height: 1, alignSelf: 'stretch', backgroundColor: t.separator },
     chartNameInputSidebar: {
       fontSize:          13,
       fontFamily:        SpaceGrotesk.bold,
-      color:             '#fff',
-      backgroundColor:   'rgba(255,255,255,0.14)',
+      color:             t.textPrimary,
+      backgroundColor:   t.bg,
       borderRadius:      8,
       borderWidth:       1,
-      borderColor:       'rgba(255,255,255,0.22)',
+      borderColor:       t.railBorder,
       paddingHorizontal: 10,
       paddingVertical:   8,
       width:             '100%',
@@ -224,12 +231,24 @@ export function createStyles(t: Theme) {
     } as any,
 
     // Sidebar's always-visible key/type picker — same pattern as Home's own sidebar
-    // (plain selectable rows + KeyGrid's onAccent variant) instead of the toolbar's
+    // (plain selectable rows + KeyGrid's default variant) instead of the toolbar's
     // dropdown-behind-a-badge treatment, since there's no reason to hide it here.
-    sidebarKeyTypeGroup: { gap: 10 },
+    // Home's `sidebarPickerPanel`, and it is doing real work rather than decoration:
+    // `KeyGrid`'s cells are filled with `surface`, which in dark mode (#232329) is within a
+    // hair of the rail itself (#202027) — sat directly on the panel the grid would be a
+    // block of near-invisible squares held together by a 10%-alpha hairline. One step *down*
+    // to `bg` behind them is what gives every cell an edge.
+    sidebarPickerPanel: {
+      gap:             10,
+      padding:         12,
+      borderRadius:    12,
+      backgroundColor: t.bg,
+      borderWidth:     1,
+      borderColor:     t.railBorder,
+    },
     sidebarTypeToggle: {
       flexDirection:   'row',
-      backgroundColor: 'rgba(255,255,255,0.18)',
+      backgroundColor: t.surfaceAlt,
       borderRadius:    8,
       padding:         2,
       gap:             2,
@@ -241,29 +260,30 @@ export function createStyles(t: Theme) {
       borderRadius:      6,
       ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
     } as ViewStyle,
-    sidebarTypeSegActive: { backgroundColor: '#fff' },
-    // Full white, not 0.85 — the inactive segment sits on a translucent track over the
-    // cyan accent, where a faded white label all but disappears. The active segment is
-    // distinguished by its solid white pill, so the inactive one doesn't need to be dim
-    // as well to make the pairing read.
-    sidebarTypeText:       { fontSize: FONT.xs, fontFamily: Poppins.semiBold, color: '#fff' },
-    // accentDeep, not accent: this label sits on the solid white pill above, where
-    // plain accent is only 2.2:1 and the active segment ends up the *less* legible one.
-    sidebarTypeTextActive: { color: t.accentDeep },
-    // Sits under the Transpose/Translate toggle, on the accent sidebar. Dimmer than the
-    // segment labels (0.8 white rather than full) because it's a consequence, not a
-    // control — but the gap between the two toggles keeps it clearly attached to the one
-    // above rather than reading as a label for Diatonic/Chromatic below.
+    // The accent moved from the panel to the selection. On a plain rail the active segment
+    // no longer needs to be a white pill fighting a cyan ground — it can just *be* the
+    // accent, which is how Home's `sidebarTypeRowActive` marks the same choice.
+    sidebarTypeSegActive: { backgroundColor: t.accent },
+    sidebarTypeText:       { fontSize: FONT.xs, fontFamily: Poppins.semiBold, color: t.textSub },
+    // White on the accent fill. `accentDeep` was for the old white pill; on solid accent
+    // it is white that reads, exactly as on Home's primary row.
+    sidebarTypeTextActive: { color: '#fff' },
+    // Sits under the Transpose/Translate toggle. Quieter than the segment labels because
+    // it's a consequence, not a control — but the gap between the two toggles keeps it
+    // clearly attached to the one above rather than reading as a label for
+    // Diatonic/Chromatic below.
     sidebarKeyModeHint: {
       fontSize:   FONT.xs,
       fontFamily: Poppins.regular,
-      color:      'rgba(255,255,255,0.8)',
+      color:      t.textMuted,
       marginTop:  -4,
     },
 
-    // Sidebar action rows (Save / New Recording / Inspect Frames / Export trigger) —
-    // same translucent-pill pattern as Home's sidebarRow, so all four read as one
-    // consistent "quick actions" group.
+    // Sidebar action rows — Home's `sidebarRow` exactly: inset one step *down* from the
+    // panel (`bg`, under `surface`) so a row reads as a control cut into the rail rather
+    // than a card stacked on it, edged with `railBorder` rather than plain `border`. On a
+    // panel at the same fill the border is the only thing drawing the row, and a neutral
+    // hairline at that job reads as an accident instead of an edge.
     sidebarRow: {
       flexDirection:     'row',
       alignItems:        'center',
@@ -271,15 +291,16 @@ export function createStyles(t: Theme) {
       paddingVertical:   10,
       paddingHorizontal: 12,
       borderRadius:      10,
-      backgroundColor:   'rgba(255,255,255,0.14)',
+      backgroundColor:   t.bg,
       borderWidth:       1,
-      borderColor:       'rgba(255,255,255,0.22)',
+      borderColor:       t.railBorder,
       ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
     } as ViewStyle,
-    sidebarRowPressed:   { backgroundColor: 'rgba(255,255,255,0.22)' },
+    sidebarRowPressed:   { backgroundColor: t.surfaceAlt, borderColor: t.accent },
     sidebarRowDisabled:  { opacity: 0.55 },
-    // On-accent like the rest of the rail — a translucent white wash rather than the
-    // theme's warning colours, which are tuned for the app background, not this panel.
+    // The theme's warning colours now that the panel is a normal surface — they were
+    // avoided here only because they are tuned for the app background and the rail was not
+    // one. Same treatment as Home's own `uploadError`.
     sidebarUploadError: {
       flexDirection:     'row',
       alignItems:        'flex-start',
@@ -287,24 +308,28 @@ export function createStyles(t: Theme) {
       paddingHorizontal: 10,
       paddingVertical:   8,
       borderRadius:      8,
-      backgroundColor:   'rgba(255,255,255,0.16)',
+      backgroundColor:   t.warningSoft,
     },
     sidebarUploadErrorText: {
       flex:       1,
       fontSize:   FONT.xs,
       fontFamily: Poppins.regular,
-      color:      '#fff',
+      color:      t.textPrimary,
     },
     sidebarRowIconWrap:  { width: 20, alignItems: 'center', justifyContent: 'center' },
-    sidebarRowText:      { flex: 1, fontSize: FONT.sm, fontFamily: Poppins.semiBold, color: '#fff' },
+    sidebarRowText:      { flex: 1, fontSize: FONT.sm, fontFamily: Poppins.semiBold, color: t.textPrimary },
 
     // Undo/Redo side by side — a paired row instead of two full-width stacked rows,
     // since neither needs a trailing chevron/badge and both read fine as compact,
     // centered half-width buttons.
     sidebarRowSplit: { flexDirection: 'row', gap: 8 },
     sidebarRowHalf:  { flex: 1, justifyContent: 'center' },
-    sidebarRowHalfText: { fontSize: FONT.sm, fontFamily: Poppins.semiBold, color: '#fff' },
+    sidebarRowHalfText: { fontSize: FONT.sm, fontFamily: Poppins.semiBold, color: t.textPrimary },
 
+    // The one accent-filled object on the rail, which is the whole point of taking the
+    // accent off the panel behind it — the same role Start Recording plays on Home. Export
+    // is what you came to this screen to finish, and it was already the one action here
+    // with a style of its own rather than a plain `sidebarRow`.
     sidebarExportBtn: {
       flexDirection:     'row',
       alignItems:        'center',
@@ -312,20 +337,23 @@ export function createStyles(t: Theme) {
       paddingVertical:   10,
       paddingHorizontal: 12,
       borderRadius:      10,
-      backgroundColor:   'rgba(255,255,255,0.14)',
+      backgroundColor:   t.accent,
       borderWidth:       1,
-      borderColor:       'rgba(255,255,255,0.22)',
+      borderColor:       t.accent,
       ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
     } as ViewStyle,
+    sidebarExportBtnPressed: { backgroundColor: t.accentDim, borderColor: t.accentDim },
+    /** Label and glyph on the Export fill. */
+    sidebarExportText: { flex: 1, fontSize: FONT.sm, fontFamily: Poppins.semiBold, color: '#fff' },
 
     // "Soon" tag on the sidebar's disabled Upload row — same pattern as the coming-soon
     // badges on Home's own not-yet-wired upload buttons.
     sidebarComingSoon: {
       fontSize:          9,
       fontFamily:        Poppins.bold,
-      color:             'rgba(255,255,255,0.85)',
+      color:             t.textMuted,
       letterSpacing:     0.6,
-      backgroundColor:   'rgba(255,255,255,0.18)',
+      backgroundColor:   t.surfaceAlt,
       borderRadius:      6,
       paddingHorizontal: 5,
       paddingVertical:   2,

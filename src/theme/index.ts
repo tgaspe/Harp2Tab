@@ -10,25 +10,29 @@ export interface Theme {
    *  Plain `accent` is only ~2.2:1 against white, so it can't do either job. */
   accentDeep:  string;
   /** Fill for the web app shell's left rail (Home, Profile) — the *cleanest* surface in
-   *  the shell, and the lighter of the rail/library pair. The tint moved off the rail and
-   *  onto `libraryBg`: with the rail washed and the library plain, the supporting column
-   *  was the coloured one and the content it supports was the neutral one, which had the
-   *  emphasis backwards. Now the rail recedes by being plain and the library sits on a
-   *  faint wash, so the two regions still separate without the rail claiming the colour. */
+   *  the shell, and the lighter of the rail/library pair. The rail was once the washed one
+   *  and the library plain, which had the emphasis backwards: the supporting column was
+   *  carrying the colour and the content it supports was neutral. The rail recedes by being
+   *  plain instead, and `libraryBg` is the darker ground beside it. That separation is now
+   *  purely tonal — the wash the library used to carry is gone, so neither region is
+   *  tinted; see `libraryBg`. */
   railBg:      string;
   /** The rail's hairlines — its right edge *and* the borders of the controls sitting on it.
    *  Tinted with the accent rather than reusing `border`, which on a plain rail leaves the
    *  buttons as neutral outlines indistinguishable from the panel behind them. */
   railBorder:  string;
   /** Ground for the web library column (the scrolling half of the app shell, beside the
-   *  rail). A faint accent wash — the tint the rail used to carry. Cards on this page are
-   *  `cardBg`, so the wash is also what gives them an edge without a heavier border. */
+   *  rail). Cards on this page are `cardBg` — white in light mode — so this is what gives
+   *  them an edge without a heavier border, and it has to stay clear of `cardHover` too or
+   *  hovering a card sinks it into the page instead of lifting it.
+   *
+   *  A plain cool grey, not the accent wash it used to be. The old value read as a pale
+   *  blue panel rather than as ground, which put a colour on the largest surface in the app
+   *  and left the accent competing with its own background. This sits between `surface`
+   *  (#F4F4F5) and `surfaceAlt` (#E4E4E7), so it adds no hue the palette didn't already
+   *  have — the rail is white, the library is grey, and the only cyan on the page belongs
+   *  to controls. */
   libraryBg:   string;
-  /** Fill for the full-height sidebar rails (Home + Editor). Split from `accent`
-   *  because those rails are a large field of color carrying white text, while
-   *  `accent` also has to work as small text/icons on dark surfaces — one value
-   *  can't be both bright enough for the latter and calm enough for the former. */
-  sidebarBg:   string;
   record:      string;
   recordDim:   string;
   recordSoft:  string;
@@ -73,17 +77,9 @@ export const darkTheme: Theme = {
   accentDim:   '#09a8c4',
   accentSoft:  'rgba(12,192,223,0.14)',
   accentDeep:  '#0E7180',
-  // Deliberately *darker* than bg rather than brighter: at this page lightness a
-  // bright rail is the thing that glares, so the rail recedes and the white text
-  // on it does the work. Separation from bg is only ~2.4:1, which is why the rail
-  // also carries a light hairline on its right edge instead of the light-mode black one.
-  sidebarBg:   '#0A5F6D',
-  // Dark mode can't use a pale wash, so the tint goes the other way: a panel at roughly
-  // `surface`'s lightness, pulled toward cyan. Neutral `surface` beside a neutral top bar
-  // has the same welding problem here as it does in light mode.
-  // The dark counterpart of the light pair: the rail is the plain, slightly-raised
-  // neutral (white's role here) and the library is the faintly cool-tinted ground it
-  // sits beside — same relationship, inverted lightness.
+  // The dark counterpart of the light pair: the rail is the plain, slightly-raised neutral
+  // (white's role here) and the library is the ground it sits beside — same relationship,
+  // inverted lightness.
   railBg:      '#202027',
   railBorder:  'rgba(12,192,223,0.22)',
   libraryBg:   '#14191B',
@@ -123,11 +119,18 @@ export const lightTheme: Theme = {
   accentDim:   '#09a8c4',
   accentSoft:  'rgba(12,192,223,0.08)',
   accentDeep:  '#0E7180',
-  // Light mode keeps the bright rail — it already reads well against a white page.
-  sidebarBg:   '#0cc0df',
   railBg:      '#FFFFFF',
   railBorder:  'rgba(12,192,223,0.28)',
-  libraryBg:   '#F2F8FA',
+  // 1.08:1 against a white card. Slight, but the old '#F2F8FA' managed 1.07:1 *and* wore a
+  // blue cast to get there — this is the same weight of separation done with tone alone.
+  //
+  // This is the floor, and it is set by `cardHover` (#F4F4F5) sitting one hair above it:
+  // any lighter and a hovered card would be *darker* than the page it sits on, so pointing
+  // at a card would sink it instead of lifting it. Only `prefers-reduced-motion` viewers
+  // ever see that — everyone else gets the scale hover — but the fallback has to work, so
+  // the limit is real. Going lighter than this means dropping `cardHover` first to keep the
+  // gap; changing one without the other inverts the relationship.
+  libraryBg:   '#F3F3F5',
   record:      '#EF4444',
   recordDim:   '#DC2626',
   recordSoft:  'rgba(239,68,68,0.08)',
