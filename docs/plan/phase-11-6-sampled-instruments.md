@@ -1264,7 +1264,7 @@ reads, and nothing else:
 | `fineTune` / `coarseTune` | 52 / 51 | `tuneCents` (plus `shdr.correctionCents`) |
 | `initialAttenuation` | 48 | `gain` = `10 ** (-cB / 200)` |
 | `pan` | 17 | `pan`, from tenths of a percent to −1…1 |
-| `initialFilterFc` | 8 | `filterHz` = `8.176 * 2 ** (cents / 1200)`, omitted at or above 19912 cents (the SF2 default, i.e. no filter) |
+| `initialFilterFc` | 8 | `filterHz` = `8.176 * 2 ** (cents / 1200)`, omitted at or above **13500 cents** — the SF2 default, i.e. no filter. (Corrected during execution: the plan first wrote 19912, which is that default expressed in *Hz*. Comparing cents against a Hz threshold never omits anything, so every voice would carry an inaudible ~19.9 kHz filter node it didn't need.) |
 | `initialFilterQ` | 9 | `filterQ` = `10 ** (cB / 200)` |
 | `releaseVolEnv` | 38 | `releaseSec` = `2 ** (timecents / 1200)` |
 | `sampleModes` | 54 | loop on/off — 1 and 3 loop, 0 and 2 do not |

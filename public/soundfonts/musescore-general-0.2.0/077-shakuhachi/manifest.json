@@ -1,0 +1,26 @@
+{
+  "program": 77,
+  "name": "Shakuhachi",
+  "zones": [
+    {
+      "file": "shakhchi-c6.ogg",
+      "rootKey": 72,
+      "loKey": 0,
+      "hiKey": 127,
+      "sampleRate": 38000,
+      "loopStartFrames": -11358470,
+      "loopEndFrames": -11325966,
+      "tuneCents": 0,
+      "gain": 0.5623,
+      "pan": 0,
+      "releaseSec": 0.4,
+      "bytes": 24684,
+      "sha256": "bfbb3dbf11b8fad55606e8639525c39335c76d103b36ae396cf7cd43bac263ec"
+    }
+  ],
+  "source": {
+    "soundfont": "MuseScore General",
+    "version": "0.2.0",
+    "license": "MIT. FluidR3 (c) 2000-02, 2008 Frank Wen; FluidR3Mono (c) 2014-17 Michael Cowgill; MuseScore_General adaptation (c) 2018-19 S. Christian Collins; Temple Blocks (c) 2002 Ethan Winer; Drumline Cymbals (c) 2016 Michael Schorsch. These acknowledgements must be included in any derivative work — see LICENSE.txt."
+  }
+}

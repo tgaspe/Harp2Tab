@@ -1,0 +1,26 @@
+{
+  "program": 76,
+  "name": "Bottle Chiff",
+  "zones": [
+    {
+      "file": "bottle-chiff-c7.ogg",
+      "rootKey": 84,
+      "loKey": 0,
+      "hiKey": 127,
+      "sampleRate": 44100,
+      "loopStartFrames": -10725354,
+      "loopEndFrames": -10707128,
+      "tuneCents": 0,
+      "gain": 0.7079,
+      "pan": 0,
+      "releaseSec": 0.6,
+      "bytes": 13693,
+      "sha256": "c5f7deb8928c7a238c3497df719703cc59c18032f112dc53c287d89a415ead16"
+    }
+  ],
+  "source": {
+    "soundfont": "MuseScore General",
+    "version": "0.2.0",
+    "license": "MIT. FluidR3 (c) 2000-02, 2008 Frank Wen; FluidR3Mono (c) 2014-17 Michael Cowgill; MuseScore_General adaptation (c) 2018-19 S. Christian Collins; Temple Blocks (c) 2002 Ethan Winer; Drumline Cymbals (c) 2016 Michael Schorsch. These acknowledgements must be included in any derivative work — see LICENSE.txt."
+  }
+}

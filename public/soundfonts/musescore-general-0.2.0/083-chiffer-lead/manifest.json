@@ -1,0 +1,26 @@
+{
+  "program": 83,
+  "name": "Chiffer Lead",
+  "zones": [
+    {
+      "file": "chiffer-drone.ogg",
+      "rootKey": 93,
+      "loKey": 0,
+      "hiKey": 127,
+      "sampleRate": 44100,
+      "loopStartFrames": -11308224,
+      "loopEndFrames": -11308149,
+      "tuneCents": 0,
+      "gain": 1,
+      "pan": 0,
+      "releaseSec": 0.5,
+      "bytes": 7310,
+      "sha256": "181bffc25cbd9b11492305308727f7471b358f43f280b3437eec36031f2cc859"
+    }
+  ],
+  "source": {
+    "soundfont": "MuseScore General",
+    "version": "0.2.0",
+    "license": "MIT. FluidR3 (c) 2000-02, 2008 Frank Wen; FluidR3Mono (c) 2014-17 Michael Cowgill; MuseScore_General adaptation (c) 2018-19 S. Christian Collins; Temple Blocks (c) 2002 Ethan Winer; Drumline Cymbals (c) 2016 Michael Schorsch. These acknowledgements must be included in any derivative work — see LICENSE.txt."
+  }
+}

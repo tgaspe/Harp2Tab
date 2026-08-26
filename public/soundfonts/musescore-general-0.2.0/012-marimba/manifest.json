@@ -1,0 +1,89 @@
+{
+  "program": 12,
+  "name": "Marimba",
+  "zones": [
+    {
+      "file": "marimba-c4.ogg",
+      "rootKey": 48,
+      "loKey": 0,
+      "hiKey": 53,
+      "sampleRate": 44100,
+      "tuneCents": 0,
+      "gain": 0.2344,
+      "pan": 0,
+      "releaseSec": 3.85,
+      "bytes": 26421,
+      "sha256": "387441a22d0d438c2eb2d8e8e1d69782bc89c83e527a00763e896ddd8604a9cc"
+    },
+    {
+      "file": "marimba-c5.ogg",
+      "rootKey": 60,
+      "loKey": 54,
+      "hiKey": 65,
+      "sampleRate": 44100,
+      "tuneCents": 0,
+      "gain": 0.2344,
+      "pan": 0,
+      "releaseSec": 3.221,
+      "bytes": 22455,
+      "sha256": "6d95a4a5ed447b93ec2984ee39db637a643641c3a440d41fde80607fdf4ca158"
+    },
+    {
+      "file": "marimba-f-5.ogg",
+      "rootKey": 66,
+      "loKey": 66,
+      "hiKey": 71,
+      "sampleRate": 44100,
+      "tuneCents": 0,
+      "gain": 0.2344,
+      "pan": 0,
+      "releaseSec": 2.801,
+      "bytes": 22241,
+      "sha256": "8dbf0a1e72557c2defebbaebe89ad9cf078e03a998346311922106fc42b0f35f"
+    },
+    {
+      "file": "marimba-c6.ogg",
+      "rootKey": 72,
+      "loKey": 72,
+      "hiKey": 77,
+      "sampleRate": 44100,
+      "tuneCents": 0,
+      "gain": 0.2344,
+      "pan": 0,
+      "releaseSec": 2.451,
+      "bytes": 18094,
+      "sha256": "fe3663b6c64e6d6d1141305f8c99b61e007e8e76e76ea46fab5ad2ee22abae52"
+    },
+    {
+      "file": "marimba-f-6.ogg",
+      "rootKey": 78,
+      "loKey": 78,
+      "hiKey": 83,
+      "sampleRate": 44100,
+      "tuneCents": 0,
+      "gain": 0.2344,
+      "pan": 0,
+      "releaseSec": 2.101,
+      "bytes": 18279,
+      "sha256": "f2938ea1cde8a5a3a1c471f5a3dd422dd1b4488f6b950ad20154c0eb5d6d2b94"
+    },
+    {
+      "file": "marimba-c7.ogg",
+      "rootKey": 84,
+      "loKey": 84,
+      "hiKey": 108,
+      "sampleRate": 44100,
+      "tuneCents": 0,
+      "gain": 0.2344,
+      "pan": 0,
+      "releaseSec": 1.75,
+      "bytes": 16864,
+      "sha256": "295f18e95efe94135faea6ab51b9ec87e5780a82c55322a79737d2ff19b73977"
+    }
+  ],
+  "source": {
+    "soundfont": "MuseScore General",
+    "version": "0.2.0",
+    "license": "MIT. FluidR3 (c) 2000-02, 2008 Frank Wen; FluidR3Mono (c) 2014-17 Michael Cowgill; MuseScore_General adaptation (c) 2018-19 S. Christian Collins; Temple Blocks (c) 2002 Ethan Winer; Drumline Cymbals (c) 2016 Michael Schorsch. These acknowledgements must be included in any derivative work — see LICENSE.txt."
+  }
+}

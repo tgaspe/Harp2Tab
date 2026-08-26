@@ -6,10 +6,772 @@
       "name": "Grand Piano",
       "dir": "000-grand-piano",
       "bytes": 4874530
+    },
+    {
+      "program": 1,
+      "name": "Bright Grand Piano",
+      "dir": "001-bright-grand-piano",
+      "bytes": 4800188
+    },
+    {
+      "program": 2,
+      "name": "Electric Grand",
+      "dir": "002-electric-grand",
+      "bytes": 470568
+    },
+    {
+      "program": 3,
+      "name": "Honky-Tonk Piano",
+      "dir": "003-honky-tonk-piano",
+      "bytes": 4800188
+    },
+    {
+      "program": 4,
+      "name": "Tine Electric Piano",
+      "dir": "004-tine-electric-piano",
+      "bytes": 182664
+    },
+    {
+      "program": 5,
+      "name": "FM Electric Piano",
+      "dir": "005-fm-electric-piano",
+      "bytes": 60082
+    },
+    {
+      "program": 6,
+      "name": "Harpsichord",
+      "dir": "006-harpsichord",
+      "bytes": 282776
+    },
+    {
+      "program": 7,
+      "name": "Clavinet",
+      "dir": "007-clavinet",
+      "bytes": 83382
+    },
+    {
+      "program": 8,
+      "name": "Celesta",
+      "dir": "008-celesta",
+      "bytes": 67373
+    },
+    {
+      "program": 9,
+      "name": "Glockenspiel",
+      "dir": "009-glockenspiel",
+      "bytes": 100298
+    },
+    {
+      "program": 10,
+      "name": "Music Box",
+      "dir": "010-music-box",
+      "bytes": 36232
+    },
+    {
+      "program": 11,
+      "name": "Vibraphone",
+      "dir": "011-vibraphone",
+      "bytes": 81463
+    },
+    {
+      "program": 12,
+      "name": "Marimba",
+      "dir": "012-marimba",
+      "bytes": 124354
+    },
+    {
+      "program": 13,
+      "name": "Xylophone",
+      "dir": "013-xylophone",
+      "bytes": 163059
+    },
+    {
+      "program": 14,
+      "name": "Tubular Bells",
+      "dir": "014-tubular-bells",
+      "bytes": 23338
+    },
+    {
+      "program": 15,
+      "name": "Dulcimer",
+      "dir": "015-dulcimer",
+      "bytes": 155533
+    },
+    {
+      "program": 16,
+      "name": "Drawbar Organ",
+      "dir": "016-drawbar-organ",
+      "bytes": 18455
+    },
+    {
+      "program": 17,
+      "name": "Percussive Organ",
+      "dir": "017-percussive-organ",
+      "bytes": 455661
+    },
+    {
+      "program": 18,
+      "name": "Rock Organ",
+      "dir": "018-rock-organ",
+      "bytes": 578641
+    },
+    {
+      "program": 19,
+      "name": "Church Organ",
+      "dir": "019-church-organ",
+      "bytes": 622541
+    },
+    {
+      "program": 20,
+      "name": "Reed Organ",
+      "dir": "020-reed-organ",
+      "bytes": 44781
+    },
+    {
+      "program": 21,
+      "name": "Accordion",
+      "dir": "021-accordion",
+      "bytes": 247060
+    },
+    {
+      "program": 22,
+      "name": "Harmonica",
+      "dir": "022-harmonica",
+      "bytes": 103805
+    },
+    {
+      "program": 23,
+      "name": "Bandoneon",
+      "dir": "023-bandoneon",
+      "bytes": 179138
+    },
+    {
+      "program": 24,
+      "name": "Nylon String Guitar",
+      "dir": "024-nylon-string-guitar",
+      "bytes": 255987
+    },
+    {
+      "program": 25,
+      "name": "Steel String Guitar",
+      "dir": "025-steel-string-guitar",
+      "bytes": 338815
+    },
+    {
+      "program": 26,
+      "name": "Jazz Guitar",
+      "dir": "026-jazz-guitar",
+      "bytes": 133336
+    },
+    {
+      "program": 27,
+      "name": "Clean Guitar",
+      "dir": "027-clean-guitar",
+      "bytes": 128623
+    },
+    {
+      "program": 28,
+      "name": "Palm Muted Guitar",
+      "dir": "028-palm-muted-guitar",
+      "bytes": 98858
+    },
+    {
+      "program": 29,
+      "name": "Overdrive Guitar",
+      "dir": "029-overdrive-guitar",
+      "bytes": 576967
+    },
+    {
+      "program": 30,
+      "name": "Distortion Guitar",
+      "dir": "030-distortion-guitar",
+      "bytes": 490002
+    },
+    {
+      "program": 31,
+      "name": "Guitar Harmonics",
+      "dir": "031-guitar-harmonics",
+      "bytes": 89429
+    },
+    {
+      "program": 32,
+      "name": "Acoustic Bass",
+      "dir": "032-acoustic-bass",
+      "bytes": 141370
+    },
+    {
+      "program": 33,
+      "name": "Fingered Bass",
+      "dir": "033-fingered-bass",
+      "bytes": 165425
+    },
+    {
+      "program": 34,
+      "name": "Picked Bass",
+      "dir": "034-picked-bass",
+      "bytes": 223850
+    },
+    {
+      "program": 35,
+      "name": "Fretless Bass",
+      "dir": "035-fretless-bass",
+      "bytes": 192570
+    },
+    {
+      "program": 36,
+      "name": "Slap Bass",
+      "dir": "036-slap-bass",
+      "bytes": 307507
+    },
+    {
+      "program": 37,
+      "name": "Pop Bass",
+      "dir": "037-pop-bass",
+      "bytes": 331667
+    },
+    {
+      "program": 38,
+      "name": "Synth Bass 1",
+      "dir": "038-synth-bass-1",
+      "bytes": 58515
+    },
+    {
+      "program": 39,
+      "name": "Synth Bass 2",
+      "dir": "039-synth-bass-2",
+      "bytes": 67788
+    },
+    {
+      "program": 40,
+      "name": "Violin",
+      "dir": "040-violin",
+      "bytes": 345352
+    },
+    {
+      "program": 41,
+      "name": "Viola",
+      "dir": "041-viola",
+      "bytes": 390274
+    },
+    {
+      "program": 42,
+      "name": "Cello",
+      "dir": "042-cello",
+      "bytes": 206160
+    },
+    {
+      "program": 43,
+      "name": "Contrabass",
+      "dir": "043-contrabass",
+      "bytes": 447987
+    },
+    {
+      "program": 44,
+      "name": "Strings Tremolo",
+      "dir": "044-strings-tremolo",
+      "bytes": 634143
+    },
+    {
+      "program": 45,
+      "name": "Strings Pizzicato",
+      "dir": "045-strings-pizzicato",
+      "bytes": 311653
+    },
+    {
+      "program": 46,
+      "name": "Harp",
+      "dir": "046-harp",
+      "bytes": 171090
+    },
+    {
+      "program": 47,
+      "name": "Timpani",
+      "dir": "047-timpani",
+      "bytes": 130705
+    },
+    {
+      "program": 48,
+      "name": "Strings Fast",
+      "dir": "048-strings-fast",
+      "bytes": 634143
+    },
+    {
+      "program": 49,
+      "name": "Strings Slow",
+      "dir": "049-strings-slow",
+      "bytes": 634143
+    },
+    {
+      "program": 50,
+      "name": "Synth Strings 1",
+      "dir": "050-synth-strings-1",
+      "bytes": 481989
+    },
+    {
+      "program": 51,
+      "name": "Synth Strings 2",
+      "dir": "051-synth-strings-2",
+      "bytes": 481989
+    },
+    {
+      "program": 52,
+      "name": "Choir Aahs",
+      "dir": "052-choir-aahs",
+      "bytes": 545786
+    },
+    {
+      "program": 53,
+      "name": "Voice Oohs",
+      "dir": "053-voice-oohs",
+      "bytes": 154703
+    },
+    {
+      "program": 54,
+      "name": "Synth Voice",
+      "dir": "054-synth-voice",
+      "bytes": 179458
+    },
+    {
+      "program": 55,
+      "name": "Orchestra Hit",
+      "dir": "055-orchestra-hit",
+      "bytes": 27328
+    },
+    {
+      "program": 56,
+      "name": "Trumpet",
+      "dir": "056-trumpet",
+      "bytes": 68923
+    },
+    {
+      "program": 57,
+      "name": "Trombone",
+      "dir": "057-trombone",
+      "bytes": 96904
+    },
+    {
+      "program": 58,
+      "name": "Tuba",
+      "dir": "058-tuba",
+      "bytes": 59025
+    },
+    {
+      "program": 59,
+      "name": "Harmon Mute Trumpet",
+      "dir": "059-harmon-mute-trumpet",
+      "bytes": 70857
+    },
+    {
+      "program": 60,
+      "name": "French Horns",
+      "dir": "060-french-horns",
+      "bytes": 368972
+    },
+    {
+      "program": 61,
+      "name": "Brass Section",
+      "dir": "061-brass-section",
+      "bytes": 619513
+    },
+    {
+      "program": 62,
+      "name": "Synth Brass 1",
+      "dir": "062-synth-brass-1",
+      "bytes": 54085
+    },
+    {
+      "program": 63,
+      "name": "Synth Brass 2",
+      "dir": "063-synth-brass-2",
+      "bytes": 54085
+    },
+    {
+      "program": 64,
+      "name": "Soprano Sax",
+      "dir": "064-soprano-sax",
+      "bytes": 191036
+    },
+    {
+      "program": 65,
+      "name": "Alto Sax",
+      "dir": "065-alto-sax",
+      "bytes": 139182
+    },
+    {
+      "program": 66,
+      "name": "Tenor Sax",
+      "dir": "066-tenor-sax",
+      "bytes": 276910
+    },
+    {
+      "program": 67,
+      "name": "Baritone Sax",
+      "dir": "067-baritone-sax",
+      "bytes": 393436
+    },
+    {
+      "program": 68,
+      "name": "Oboe",
+      "dir": "068-oboe",
+      "bytes": 92100
+    },
+    {
+      "program": 69,
+      "name": "English Horn",
+      "dir": "069-english-horn",
+      "bytes": 237582
+    },
+    {
+      "program": 70,
+      "name": "Bassoon",
+      "dir": "070-bassoon",
+      "bytes": 175759
+    },
+    {
+      "program": 71,
+      "name": "Clarinet",
+      "dir": "071-clarinet",
+      "bytes": 79099
+    },
+    {
+      "program": 72,
+      "name": "Piccolo",
+      "dir": "072-piccolo",
+      "bytes": 98122
+    },
+    {
+      "program": 73,
+      "name": "Flute",
+      "dir": "073-flute",
+      "bytes": 145114
+    },
+    {
+      "program": 74,
+      "name": "Recorder",
+      "dir": "074-recorder",
+      "bytes": 73786
+    },
+    {
+      "program": 75,
+      "name": "Pan Flute",
+      "dir": "075-pan-flute",
+      "bytes": 94080
+    },
+    {
+      "program": 76,
+      "name": "Bottle Chiff",
+      "dir": "076-bottle-chiff",
+      "bytes": 13693
+    },
+    {
+      "program": 77,
+      "name": "Shakuhachi",
+      "dir": "077-shakuhachi",
+      "bytes": 24684
+    },
+    {
+      "program": 78,
+      "name": "Whistle",
+      "dir": "078-whistle",
+      "bytes": 8009
+    },
+    {
+      "program": 79,
+      "name": "Ocarina",
+      "dir": "079-ocarina",
+      "bytes": 89623
+    },
+    {
+      "program": 80,
+      "name": "Square Lead",
+      "dir": "080-square-lead",
+      "bytes": 57353
+    },
+    {
+      "program": 81,
+      "name": "Saw Lead",
+      "dir": "081-saw-lead",
+      "bytes": 54085
+    },
+    {
+      "program": 82,
+      "name": "Calliope Lead",
+      "dir": "082-calliope-lead",
+      "bytes": 26788
+    },
+    {
+      "program": 83,
+      "name": "Chiffer Lead",
+      "dir": "083-chiffer-lead",
+      "bytes": 7310
+    },
+    {
+      "program": 84,
+      "name": "Charang",
+      "dir": "084-charang",
+      "bytes": 96889
+    },
+    {
+      "program": 85,
+      "name": "Solo Vox",
+      "dir": "085-solo-vox",
+      "bytes": 137307
+    },
+    {
+      "program": 86,
+      "name": "5th Saw Wave",
+      "dir": "086-5th-saw-wave",
+      "bytes": 54085
+    },
+    {
+      "program": 87,
+      "name": "Bass & Lead",
+      "dir": "087-bass-lead",
+      "bytes": 57484
+    },
+    {
+      "program": 88,
+      "name": "Fantasia",
+      "dir": "088-fantasia",
+      "bytes": 392372
+    },
+    {
+      "program": 89,
+      "name": "Warm Pad",
+      "dir": "089-warm-pad",
+      "bytes": 634143
+    },
+    {
+      "program": 90,
+      "name": "Polysynth",
+      "dir": "090-polysynth",
+      "bytes": 481989
+    },
+    {
+      "program": 91,
+      "name": "Space Voice",
+      "dir": "091-space-voice",
+      "bytes": 137307
+    },
+    {
+      "program": 92,
+      "name": "Bowed Glass",
+      "dir": "092-bowed-glass",
+      "bytes": 489279
+    },
+    {
+      "program": 93,
+      "name": "Metal Pad",
+      "dir": "093-metal-pad",
+      "bytes": 485320
+    },
+    {
+      "program": 94,
+      "name": "Halo Pad",
+      "dir": "094-halo-pad",
+      "bytes": 367212
+    },
+    {
+      "program": 95,
+      "name": "Sweep Pad",
+      "dir": "095-sweep-pad",
+      "bytes": 481989
+    },
+    {
+      "program": 96,
+      "name": "Ice Rain",
+      "dir": "096-ice-rain",
+      "bytes": 481989
+    },
+    {
+      "program": 97,
+      "name": "Soundtrack",
+      "dir": "097-soundtrack",
+      "bytes": 481989
+    },
+    {
+      "program": 98,
+      "name": "Crystal",
+      "dir": "098-crystal",
+      "bytes": 30862
+    },
+    {
+      "program": 99,
+      "name": "Atmosphere",
+      "dir": "099-atmosphere",
+      "bytes": 461862
+    },
+    {
+      "program": 100,
+      "name": "Brightness",
+      "dir": "100-brightness",
+      "bytes": 367212
+    },
+    {
+      "program": 101,
+      "name": "Goblin",
+      "dir": "101-goblin",
+      "bytes": 21040
+    },
+    {
+      "program": 102,
+      "name": "Echo Drops",
+      "dir": "102-echo-drops",
+      "bytes": 582157
+    },
+    {
+      "program": 103,
+      "name": "Star Theme",
+      "dir": "103-star-theme",
+      "bytes": 503855
+    },
+    {
+      "program": 104,
+      "name": "Sitar",
+      "dir": "104-sitar",
+      "bytes": 94256
+    },
+    {
+      "program": 105,
+      "name": "Banjo",
+      "dir": "105-banjo",
+      "bytes": 150311
+    },
+    {
+      "program": 106,
+      "name": "Shamisen",
+      "dir": "106-shamisen",
+      "bytes": 55874
+    },
+    {
+      "program": 107,
+      "name": "Koto",
+      "dir": "107-koto",
+      "bytes": 26239
+    },
+    {
+      "program": 108,
+      "name": "Kalimba",
+      "dir": "108-kalimba",
+      "bytes": 57221
+    },
+    {
+      "program": 109,
+      "name": "Bagpipe",
+      "dir": "109-bagpipe",
+      "bytes": 163984
+    },
+    {
+      "program": 110,
+      "name": "Fiddle",
+      "dir": "110-fiddle",
+      "bytes": 345352
+    },
+    {
+      "program": 111,
+      "name": "Shenai",
+      "dir": "111-shenai",
+      "bytes": 35321
+    },
+    {
+      "program": 112,
+      "name": "Tinker Bell",
+      "dir": "112-tinker-bell",
+      "bytes": 6098
+    },
+    {
+      "program": 113,
+      "name": "Agogo",
+      "dir": "113-agogo",
+      "bytes": 8513
+    },
+    {
+      "program": 114,
+      "name": "Steel Drums",
+      "dir": "114-steel-drums",
+      "bytes": 33664
+    },
+    {
+      "program": 115,
+      "name": "Woodblock",
+      "dir": "115-woodblock",
+      "bytes": 8589
+    },
+    {
+      "program": 116,
+      "name": "Taiko Drum",
+      "dir": "116-taiko-drum",
+      "bytes": 15432
+    },
+    {
+      "program": 117,
+      "name": "Melodic Tom",
+      "dir": "117-melodic-tom",
+      "bytes": 17134
+    },
+    {
+      "program": 118,
+      "name": "Synth Drum",
+      "dir": "118-synth-drum",
+      "bytes": 13212
+    },
+    {
+      "program": 119,
+      "name": "Reverse Cymbal",
+      "dir": "119-reverse-cymbal",
+      "bytes": 35257
+    },
+    {
+      "program": 120,
+      "name": "Fret Noise",
+      "dir": "120-fret-noise",
+      "bytes": 8455
+    },
+    {
+      "program": 121,
+      "name": "Breath Noise",
+      "dir": "121-breath-noise",
+      "bytes": 7942
+    },
+    {
+      "program": 122,
+      "name": "Sea Shore",
+      "dir": "122-sea-shore",
+      "bytes": 29083
+    },
+    {
+      "program": 123,
+      "name": "Bird Tweet",
+      "dir": "123-bird-tweet",
+      "bytes": 23169
+    },
+    {
+      "program": 124,
+      "name": "Telephone",
+      "dir": "124-telephone",
+      "bytes": 54803
+    },
+    {
+      "program": 125,
+      "name": "Helicopter",
+      "dir": "125-helicopter",
+      "bytes": 15428
+    },
+    {
+      "program": 126,
+      "name": "Applause",
+      "dir": "126-applause",
+      "bytes": 57433
+    },
+    {
+      "program": 127,
+      "name": "Gun Shot",
+      "dir": "127-gun-shot",
+      "bytes": 10363
     }
   ],
   "drums": {
     "dir": "drums",
-    "bytes": 0
+    "bytes": 1305750
   }
 }

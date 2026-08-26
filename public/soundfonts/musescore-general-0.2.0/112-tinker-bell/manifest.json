@@ -1,0 +1,24 @@
+{
+  "program": 112,
+  "name": "Tinker Bell",
+  "zones": [
+    {
+      "file": "tinker-bell.ogg",
+      "rootKey": 102,
+      "loKey": 0,
+      "hiKey": 49,
+      "sampleRate": 44100,
+      "tuneCents": 0,
+      "gain": 0.7079,
+      "pan": 0,
+      "releaseSec": 4,
+      "bytes": 6098,
+      "sha256": "da726360f22d0327240ed2efc858d5906db79a0ee901c5302bca3c99e452f054"
+    }
+  ],
+  "source": {
+    "soundfont": "MuseScore General",
+    "version": "0.2.0",
+    "license": "MIT. FluidR3 (c) 2000-02, 2008 Frank Wen; FluidR3Mono (c) 2014-17 Michael Cowgill; MuseScore_General adaptation (c) 2018-19 S. Christian Collins; Temple Blocks (c) 2002 Ethan Winer; Drumline Cymbals (c) 2016 Michael Schorsch. These acknowledgements must be included in any derivative work — see LICENSE.txt."
+  }
+}

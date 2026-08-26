@@ -1,0 +1,26 @@
+{
+  "program": 122,
+  "name": "Sea Shore",
+  "zones": [
+    {
+      "file": "sea-shore.ogg",
+      "rootKey": 68,
+      "loKey": 0,
+      "hiKey": 127,
+      "sampleRate": 44100,
+      "loopStartFrames": -11923538,
+      "loopEndFrames": -11852379,
+      "tuneCents": -1200,
+      "gain": 0.7499,
+      "pan": 0,
+      "releaseSec": 4,
+      "bytes": 29083,
+      "sha256": "1f8f657243ceaf29ce8431533b5612213c00d9a169bc5098bb86f9102a22dd83"
+    }
+  ],
+  "source": {
+    "soundfont": "MuseScore General",
+    "version": "0.2.0",
+    "license": "MIT. FluidR3 (c) 2000-02, 2008 Frank Wen; FluidR3Mono (c) 2014-17 Michael Cowgill; MuseScore_General adaptation (c) 2018-19 S. Christian Collins; Temple Blocks (c) 2002 Ethan Winer; Drumline Cymbals (c) 2016 Michael Schorsch. These acknowledgements must be included in any derivative work — see LICENSE.txt."
+  }
+}

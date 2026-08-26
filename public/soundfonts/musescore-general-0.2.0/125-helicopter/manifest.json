@@ -1,0 +1,26 @@
+{
+  "program": 125,
+  "name": "Helicopter",
+  "zones": [
+    {
+      "file": "heli.ogg",
+      "rootKey": 60,
+      "loKey": 0,
+      "hiKey": 127,
+      "sampleRate": 32000,
+      "loopStartFrames": -5725949,
+      "loopEndFrames": -5711407,
+      "tuneCents": 39,
+      "gain": 0.5623,
+      "pan": 1,
+      "releaseSec": 3,
+      "bytes": 15428,
+      "sha256": "a0c1f976aa688e1d7166b405b27b1d80dd8a7015767467a84a3a02d8ef52d0dc"
+    }
+  ],
+  "source": {
+    "soundfont": "MuseScore General",
+    "version": "0.2.0",
+    "license": "MIT. FluidR3 (c) 2000-02, 2008 Frank Wen; FluidR3Mono (c) 2014-17 Michael Cowgill; MuseScore_General adaptation (c) 2018-19 S. Christian Collins; Temple Blocks (c) 2002 Ethan Winer; Drumline Cymbals (c) 2016 Michael Schorsch. These acknowledgements must be included in any derivative work — see LICENSE.txt."
+  }
+}

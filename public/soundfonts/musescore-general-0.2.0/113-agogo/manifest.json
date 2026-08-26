@@ -1,0 +1,24 @@
+{
+  "program": 113,
+  "name": "Agogo",
+  "zones": [
+    {
+      "file": "high-agogo.ogg",
+      "rootKey": 78,
+      "loKey": 0,
+      "hiKey": 108,
+      "sampleRate": 44100,
+      "tuneCents": 0,
+      "gain": 0.2239,
+      "pan": 0,
+      "releaseSec": 1.39,
+      "bytes": 8513,
+      "sha256": "4a1a968f01e9c058ff82425f45af276a3d64860cd37cddd7a6f5db652b0270e8"
+    }
+  ],
+  "source": {
+    "soundfont": "MuseScore General",
+    "version": "0.2.0",
+    "license": "MIT. FluidR3 (c) 2000-02, 2008 Frank Wen; FluidR3Mono (c) 2014-17 Michael Cowgill; MuseScore_General adaptation (c) 2018-19 S. Christian Collins; Temple Blocks (c) 2002 Ethan Winer; Drumline Cymbals (c) 2016 Michael Schorsch. These acknowledgements must be included in any derivative work — see LICENSE.txt."
+  }
+}

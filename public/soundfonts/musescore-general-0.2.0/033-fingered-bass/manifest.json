@@ -1,0 +1,101 @@
+{
+  "program": 33,
+  "name": "Fingered Bass",
+  "zones": [
+    {
+      "file": "finger-bass-eo.ogg",
+      "rootKey": 28,
+      "loKey": 0,
+      "hiKey": 28,
+      "sampleRate": 22050,
+      "loopStartFrames": -19029687,
+      "loopEndFrames": -19029152,
+      "tuneCents": 0,
+      "gain": 1,
+      "pan": 0,
+      "releaseSec": 0.2,
+      "bytes": 30765,
+      "sha256": "c54a479130529b1e7a0b2404391ec3fbb4e0edef7bc7099058bb08c1a07bb2a1"
+    },
+    {
+      "file": "finger-bass-e2.ogg",
+      "rootKey": 30,
+      "loKey": 29,
+      "hiKey": 32,
+      "sampleRate": 22050,
+      "loopStartFrames": -19008298,
+      "loopEndFrames": -19007822,
+      "tuneCents": -4,
+      "gain": 1,
+      "pan": 0,
+      "releaseSec": 0.2,
+      "bytes": 26638,
+      "sha256": "6254e3e4c64b96cdd13db984395bef67d0cd798c196b983298f12e2327036c60"
+    },
+    {
+      "file": "finger-bass-a1.ogg",
+      "rootKey": 34,
+      "loKey": 33,
+      "hiKey": 37,
+      "sampleRate": 22050,
+      "loopStartFrames": -18978097,
+      "loopEndFrames": -18977718,
+      "tuneCents": 0,
+      "gain": 1,
+      "pan": 0,
+      "releaseSec": 0.2,
+      "bytes": 23748,
+      "sha256": "ef36ca814d940cafcdca18bd2f02c04fbb9a30a74359ea236108dcbccc328750"
+    },
+    {
+      "file": "finger-bass-d1.ogg",
+      "rootKey": 39,
+      "loKey": 38,
+      "hiKey": 42,
+      "sampleRate": 22050,
+      "loopStartFrames": -18921100,
+      "loopEndFrames": -18920532,
+      "tuneCents": 2,
+      "gain": 1,
+      "pan": 0,
+      "releaseSec": 0.2,
+      "bytes": 25241,
+      "sha256": "2cbc32d38e73a1cc3a3726ef46402fd8c5d16296968590742138c67d1db98ee4"
+    },
+    {
+      "file": "finger-bass-go.ogg",
+      "rootKey": 43,
+      "loKey": 43,
+      "hiKey": 47,
+      "sampleRate": 22050,
+      "loopStartFrames": -18838248,
+      "loopEndFrames": -18837572,
+      "tuneCents": 1,
+      "gain": 1,
+      "pan": 0,
+      "releaseSec": 0.2,
+      "bytes": 35478,
+      "sha256": "c5d34bf53a44c162fef7d27d293ede26a7388794ececf25e8ed7dbcd6a1181a6"
+    },
+    {
+      "file": "finger-bass-g5.ogg",
+      "rootKey": 48,
+      "loKey": 48,
+      "hiKey": 84,
+      "sampleRate": 22050,
+      "loopStartFrames": -18845796,
+      "loopEndFrames": -18845290,
+      "tuneCents": 0,
+      "gain": 1,
+      "pan": 0,
+      "releaseSec": 0.2,
+      "bytes": 23555,
+      "sha256": "0072f040456e2c8ee7d4c6220a54d4f9bf490360d8251c835caa70009ceac20e"
+    }
+  ],
+  "source": {
+    "soundfont": "MuseScore General",
+    "version": "0.2.0",
+    "license": "MIT. FluidR3 (c) 2000-02, 2008 Frank Wen; FluidR3Mono (c) 2014-17 Michael Cowgill; MuseScore_General adaptation (c) 2018-19 S. Christian Collins; Temple Blocks (c) 2002 Ethan Winer; Drumline Cymbals (c) 2016 Michael Schorsch. These acknowledgements must be included in any derivative work — see LICENSE.txt."
+  }
+}

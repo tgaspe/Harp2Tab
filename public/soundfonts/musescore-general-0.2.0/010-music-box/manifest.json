@@ -1,0 +1,86 @@
+{
+  "program": 10,
+  "name": "Music Box",
+  "zones": [
+    {
+      "file": "celeste-d-4.ogg",
+      "rootKey": 63,
+      "loKey": 0,
+      "hiKey": 72,
+      "sampleRate": 33000,
+      "loopStartFrames": -4034055,
+      "loopEndFrames": -4033842,
+      "tuneCents": 0,
+      "gain": 0.5623,
+      "pan": -0.3,
+      "releaseSec": 3.5,
+      "bytes": 7651,
+      "sha256": "cbb8466a50ca42941ca3011558f2caaeff1cb032aff9c71f92c147bfab5c360e"
+    },
+    {
+      "file": "celeste-a4.ogg",
+      "rootKey": 69,
+      "loKey": 73,
+      "hiKey": 80,
+      "sampleRate": 33000,
+      "loopStartFrames": -4027450,
+      "loopEndFrames": -4027224,
+      "tuneCents": 10,
+      "gain": 0.5623,
+      "pan": -0.3,
+      "releaseSec": 3.251,
+      "bytes": 7389,
+      "sha256": "e975fd0b0066882ddf340545af8f183a1e91fe1dc920b780d510831ed6b46c39"
+    },
+    {
+      "file": "celeste-f-5.ogg",
+      "rootKey": 78,
+      "loKey": 81,
+      "hiKey": 90,
+      "sampleRate": 33000,
+      "loopStartFrames": -4011493,
+      "loopEndFrames": -4011269,
+      "tuneCents": 13,
+      "gain": 0.5623,
+      "pan": -0.3,
+      "releaseSec": 2.9,
+      "bytes": 7158,
+      "sha256": "0413ff5f1427a24547a2c2cf038f59e1deb7fb696b076dc41f71ca64a55d5b0d"
+    },
+    {
+      "file": "celeste-d-6.ogg",
+      "rootKey": 87,
+      "loKey": 91,
+      "hiKey": 97,
+      "sampleRate": 33000,
+      "loopStartFrames": -4021744,
+      "loopEndFrames": -4021531,
+      "tuneCents": 10,
+      "gain": 0.5623,
+      "pan": -0.3,
+      "releaseSec": 2.551,
+      "bytes": 6778,
+      "sha256": "af4d4e1de37d9f3ec0b09df444b73dffc337876065583e4f7756ca8d422574e9"
+    },
+    {
+      "file": "celeste-d-7.ogg",
+      "rootKey": 99,
+      "loKey": 98,
+      "hiKey": 125,
+      "sampleRate": 33000,
+      "loopStartFrames": -4002537,
+      "loopEndFrames": -4002164,
+      "tuneCents": 10,
+      "gain": 0.5623,
+      "pan": -0.3,
+      "releaseSec": 2.2,
+      "bytes": 7256,
+      "sha256": "3556ea9d1039a49fd0d6a34471ea407a6d0e3848c5d2d0fe204df31739210e43"
+    }
+  ],
+  "source": {
+    "soundfont": "MuseScore General",
+    "version": "0.2.0",
+    "license": "MIT. FluidR3 (c) 2000-02, 2008 Frank Wen; FluidR3Mono (c) 2014-17 Michael Cowgill; MuseScore_General adaptation (c) 2018-19 S. Christian Collins; Temple Blocks (c) 2002 Ethan Winer; Drumline Cymbals (c) 2016 Michael Schorsch. These acknowledgements must be included in any derivative work — see LICENSE.txt."
+  }
+}

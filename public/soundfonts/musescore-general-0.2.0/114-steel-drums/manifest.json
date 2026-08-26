@@ -1,0 +1,63 @@
+{
+  "program": 114,
+  "name": "Steel Drums",
+  "zones": [
+    {
+      "file": "steel-drum-f-5.ogg",
+      "rootKey": 66,
+      "loKey": 0,
+      "hiKey": 66,
+      "sampleRate": 24000,
+      "tuneCents": 0,
+      "gain": 1,
+      "pan": 0,
+      "releaseSec": 4,
+      "bytes": 8505,
+      "sha256": "5c431d05f3d7c2430a1bba475df6de7b8fe74ad9c7f92a8a54ffb513f903745b"
+    },
+    {
+      "file": "steel-drum-c6.ogg",
+      "rootKey": 72,
+      "loKey": 67,
+      "hiKey": 72,
+      "sampleRate": 34000,
+      "tuneCents": 0,
+      "gain": 1,
+      "pan": 0,
+      "releaseSec": 4,
+      "bytes": 9709,
+      "sha256": "7af45807ee5d4808d36b4f28cc2f144d27a0da1e5692f521610b6e667cdac246"
+    },
+    {
+      "file": "steel-drum-f-6.ogg",
+      "rootKey": 78,
+      "loKey": 73,
+      "hiKey": 78,
+      "sampleRate": 44100,
+      "tuneCents": 0,
+      "gain": 1,
+      "pan": 0,
+      "releaseSec": 4,
+      "bytes": 8331,
+      "sha256": "247764047856400d86cfcf961b74a5a1327f216b0a942a647c896d36360f9820"
+    },
+    {
+      "file": "steel-drum-c7.ogg",
+      "rootKey": 84,
+      "loKey": 79,
+      "hiKey": 127,
+      "sampleRate": 34000,
+      "tuneCents": 0,
+      "gain": 1,
+      "pan": 0,
+      "releaseSec": 4,
+      "bytes": 7119,
+      "sha256": "86e93798bb96b0c4a88773add08b4a26c517142d0e3fca2b33826d0033a1cf92"
+    }
+  ],
+  "source": {
+    "soundfont": "MuseScore General",
+    "version": "0.2.0",
+    "license": "MIT. FluidR3 (c) 2000-02, 2008 Frank Wen; FluidR3Mono (c) 2014-17 Michael Cowgill; MuseScore_General adaptation (c) 2018-19 S. Christian Collins; Temple Blocks (c) 2002 Ethan Winer; Drumline Cymbals (c) 2016 Michael Schorsch. These acknowledgements must be included in any derivative work — see LICENSE.txt."
+  }
+}

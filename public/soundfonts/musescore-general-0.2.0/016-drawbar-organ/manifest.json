@@ -1,0 +1,28 @@
+{
+  "program": 16,
+  "name": "Drawbar Organ",
+  "zones": [
+    {
+      "file": "drawbar-organ.ogg",
+      "rootKey": 72,
+      "loKey": 0,
+      "hiKey": 127,
+      "sampleRate": 32000,
+      "loopStartFrames": -8751847,
+      "loopEndFrames": -8713928,
+      "tuneCents": -2400,
+      "gain": 1,
+      "pan": 0,
+      "filterHz": 7798,
+      "filterQ": 1.122,
+      "releaseSec": 0.18,
+      "bytes": 18455,
+      "sha256": "9677f5cd75385b3bb614559328f81dc73d171612628504ddc16061dd73c7b475"
+    }
+  ],
+  "source": {
+    "soundfont": "MuseScore General",
+    "version": "0.2.0",
+    "license": "MIT. FluidR3 (c) 2000-02, 2008 Frank Wen; FluidR3Mono (c) 2014-17 Michael Cowgill; MuseScore_General adaptation (c) 2018-19 S. Christian Collins; Temple Blocks (c) 2002 Ethan Winer; Drumline Cymbals (c) 2016 Michael Schorsch. These acknowledgements must be included in any derivative work — see LICENSE.txt."
+  }
+}

@@ -1,0 +1,101 @@
+{
+  "program": 34,
+  "name": "Picked Bass",
+  "zones": [
+    {
+      "file": "picked-bass-e0.ogg",
+      "rootKey": 28,
+      "loKey": 0,
+      "hiKey": 28,
+      "sampleRate": 22050,
+      "loopStartFrames": -18738016,
+      "loopEndFrames": -18737484,
+      "tuneCents": -8,
+      "gain": 1,
+      "pan": 0,
+      "releaseSec": 0.2,
+      "bytes": 45562,
+      "sha256": "9c5b46a52c1d9e0ca29b2454b73aa471811fc06541c1b919e2b926e138f5c571"
+    },
+    {
+      "file": "picked-bass-e2.ogg",
+      "rootKey": 30,
+      "loKey": 29,
+      "hiKey": 32,
+      "sampleRate": 22050,
+      "loopStartFrames": -18730712,
+      "loopEndFrames": -18730238,
+      "tuneCents": -10,
+      "gain": 1,
+      "pan": 0,
+      "releaseSec": 0.2,
+      "bytes": 36727,
+      "sha256": "1219cdeb1ff95425f04ddda19626339735b5b37b03d38943ec7a6c21fa31326f"
+    },
+    {
+      "file": "picked-bass-a1.ogg",
+      "rootKey": 34,
+      "loKey": 33,
+      "hiKey": 37,
+      "sampleRate": 22050,
+      "loopStartFrames": -18671810,
+      "loopEndFrames": -18671431,
+      "tuneCents": 0,
+      "gain": 1,
+      "pan": 0,
+      "releaseSec": 0.2,
+      "bytes": 35246,
+      "sha256": "6b2c88b944598f9f6089f7800e4796b5786f3252c7a1771bea76dc07c85ec16d"
+    },
+    {
+      "file": "picked-bass-d1.ogg",
+      "rootKey": 39,
+      "loKey": 38,
+      "hiKey": 42,
+      "sampleRate": 22050,
+      "loopStartFrames": -18604552,
+      "loopEndFrames": -18603984,
+      "tuneCents": 1,
+      "gain": 1,
+      "pan": 0,
+      "releaseSec": 0.2,
+      "bytes": 37092,
+      "sha256": "fa6c6a4107f11abaf71a0f1423717955dc24147c335d5f39ef540bcc5c1dc1dc"
+    },
+    {
+      "file": "picked-bass-go.ogg",
+      "rootKey": 43,
+      "loKey": 43,
+      "hiKey": 47,
+      "sampleRate": 22050,
+      "loopStartFrames": -18524393,
+      "loopEndFrames": -18523718,
+      "tuneCents": 0,
+      "gain": 1,
+      "pan": 0,
+      "releaseSec": 0.2,
+      "bytes": 40031,
+      "sha256": "50d66c84046d03f59e2b6781b9aad2b75d28eec8b4ee0f896f4427e291f8cc2a"
+    },
+    {
+      "file": "picked-bass-g5.ogg",
+      "rootKey": 48,
+      "loKey": 48,
+      "hiKey": 84,
+      "sampleRate": 22050,
+      "loopStartFrames": -6114096,
+      "loopEndFrames": -6113590,
+      "tuneCents": -3,
+      "gain": 1,
+      "pan": 0,
+      "releaseSec": 0.2,
+      "bytes": 29192,
+      "sha256": "1966c7d58e448cf87e7463e3127e3bcbe272c77222cc323cf50441c3f71f4808"
+    }
+  ],
+  "source": {
+    "soundfont": "MuseScore General",
+    "version": "0.2.0",
+    "license": "MIT. FluidR3 (c) 2000-02, 2008 Frank Wen; FluidR3Mono (c) 2014-17 Michael Cowgill; MuseScore_General adaptation (c) 2018-19 S. Christian Collins; Temple Blocks (c) 2002 Ethan Winer; Drumline Cymbals (c) 2016 Michael Schorsch. These acknowledgements must be included in any derivative work — see LICENSE.txt."
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "program": 79,
+  "name": "Ocarina",
+  "zones": [
+    {
+      "file": "ocare1.ogg",
+      "rootKey": 52,
+      "loKey": 0,
+      "hiKey": 52,
+      "sampleRate": 44100,
+      "loopStartFrames": -12352431,
+      "loopEndFrames": -12331560,
+      "tuneCents": 0,
+      "gain": 1,
+      "pan": 0,
+      "releaseSec": 0.3,
+      "bytes": 23860,
+      "sha256": "9cd800b0804a70edc25ab40f37213279dbd0ac9615a117d24a72cc608dca0de7"
+    },
+    {
+      "file": "ocard2.ogg",
+      "rootKey": 62,
+      "loKey": 53,
+      "hiKey": 67,
+      "sampleRate": 44100,
+      "loopStartFrames": -12376272,
+      "loopEndFrames": -12355420,
+      "tuneCents": 0,
+      "gain": 1,
+      "pan": 0,
+      "releaseSec": 0.3,
+      "bytes": 24432,
+      "sha256": "a8dd13f4a68f3f1e31d92088bd87895d4491adda7fb971ef95e7c159d2e2c36c"
+    },
+    {
+      "file": "ocare3.ogg",
+      "rootKey": 76,
+      "loKey": 68,
+      "hiKey": 92,
+      "sampleRate": 44100,
+      "loopStartFrames": -12399619,
+      "loopEndFrames": -12379852,
+      "tuneCents": 0,
+      "gain": 1,
+      "pan": 0,
+      "releaseSec": 0.3,
+      "bytes": 23879,
+      "sha256": "64f66b7da0e99b204857076c51fc16265becb83e70a82a492b5c18fcf3ec8c2b"
+    },
+    {
+      "file": "ocara4.ogg",
+      "rootKey": 93,
+      "loKey": 93,
+      "hiKey": 108,
+      "sampleRate": 44100,
+      "loopStartFrames": -12443730,
+      "loopEndFrames": -12423731,
+      "tuneCents": 0,
+      "gain": 1,
+      "pan": 0,
+      "releaseSec": 0.3,
+      "bytes": 17452,
+      "sha256": "8057d2624e46afdae312754c9df631fce8097f2c964bbc028dc49d899ad63206"
+    }
+  ],
+  "source": {
+    "soundfont": "MuseScore General",
+    "version": "0.2.0",
+    "license": "MIT. FluidR3 (c) 2000-02, 2008 Frank Wen; FluidR3Mono (c) 2014-17 Michael Cowgill; MuseScore_General adaptation (c) 2018-19 S. Christian Collins; Temple Blocks (c) 2002 Ethan Winer; Drumline Cymbals (c) 2016 Michael Schorsch. These acknowledgements must be included in any derivative work — see LICENSE.txt."
+  }
+}

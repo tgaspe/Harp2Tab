@@ -154,7 +154,10 @@ function header(name: string): SampleHeader {
 }
 
 function resolved(name: string, index: number, loKey: number, hiKey: number): ResolvedZone {
-  return { sample: header(name), sampleIndex: index, loKey, hiKey, loVel: 0, hiVel: 127, rootKey: 60, loops: false };
+  return {
+    sample: header(name), sampleIndex: index, loKey, hiKey, loVel: 0, hiVel: 127,
+    rootKey: 60, loops: false, tuneCents: 0, gain: 1, pan: 0, releaseSec: 0.1,
+  };
 }
 
 function stereoPairsCollapseToOneZone(): void {
@@ -169,6 +172,16 @@ function stereoPairsCollapseToOneZone(): void {
   check('stereo: a pair is one zone', paired.length === 1, '2 zones -> 1');
   check('stereo: left is the primary', paired[0]?.sample.name === 'Piano MF Bv1(L)', 'file is (L)');
   check('stereo: right is carried', paired[0]?.right?.name === 'Piano MF Bv1(R)', 'fileRight is (R)');
+  // SF2 stores the stereo image AS pan (-500 on the L half, +500 on the R), and the
+  // scheduler already hard-pans the two sources apart. Inheriting the L pan would pan the
+  // summed voice hard left too and collapse the note to one side.
+  const panned = pairStereo([
+    { ...resolved('Kit Kick(L)', 0, 36, 36), pan: -1 },
+    { ...resolved('Kit Kick(R)', 1, 36, 36), pan: 1 },
+  ]);
+  check('stereo: a pair is panned centre', panned[0]?.pan === 0, 'pair pan neutralised');
+  check('stereo: a mono zone keeps its pan',
+    pairStereo([{ ...resolved('Woodblock', 0, 60, 60), pan: -0.5 }])[0]?.pan === -0.5, 'mono pan kept');
 }
 
 function loneChannelsAndMonoSurvive(): void {
