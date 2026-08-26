@@ -6,11 +6,11 @@
  * the free-tier gate each of them has to pass through. Home and `/profile` now render this
  * one component; anything else that grows a shell gets it for free.
  *
- * It owns its own state deliberately. The three "start something" actions all have to clear
- * `resolveSessionGate` first, and two of the three outcomes are UI (the rating prompt, the
- * paywall) — a version that reported gate results back to the host screen would make every
- * host re-implement the same two branches. The rating modal is rendered here for the same
- * reason.
+ * It owns its own state deliberately — the host screen is never asked to interpret a gate
+ * result. What it no longer owns is the *logic*: the pick-and-import handlers moved to
+ * `useUploadEntry` once Home's drop target became a third caller of the same sequence, and
+ * the one part that must never drift between callers is the free-tier gate. The rail still
+ * renders the rating modal, because the modal is one of the gate's two UI outcomes.
  *
  * Web-only chrome: callers gate on `Platform.OS === 'web'`, matching how the rail has always
  * been used. On native the entry points live in the bottom action bar instead.
@@ -26,19 +26,16 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { KeyGrid } from '@/components/KeyGrid';
 import { RatingModal } from '@/components/RatingModal';
-import { AudioImportError } from '@/audio/audioImport';
-import { pickAudioFile } from '@/audio/pickAudioFile';
-import { pickMidiFile } from '@/audio/pickMidiFile';
-import { setPendingImport } from '@/audio/pendingImport';
 import { createProject } from '@/audio/midiProject';
 import { Poppins } from '@/constants/fonts';
 import { FONT } from '@/constants/keys';
 import { GROUP_LABEL, RADIUS } from '@/constants/ui';
 import { useTheme } from '@/hooks/useTheme';
 import { usePremium } from '@/hooks/usePremium';
+import { useUploadEntry } from '@/hooks/useUploadEntry';
 import { selectHarmonicaType, selectKey, useAppStore } from '@/store/useAppStore';
 import { useMidiProjectsStore } from '@/store/useMidiProjectsStore';
-import { computeEffectiveLimit, resolveSessionGate } from '@/store/sessionGate';
+import { computeEffectiveLimit } from '@/store/sessionGate';
 import { FREE_TIER_ENABLED, useSettingsStore } from '@/store/useSettingsStore';
 import type { Theme } from '@/theme';
 import type { HarmonicaKey, HarmonicaType } from '@/types';
@@ -61,7 +58,17 @@ export function AppSidebar() {
   const ratingStatus        = useSettingsStore((s) => s.ratingStatus);
   const hasCompletedOnboarding = useSettingsStore((s) => s.hasCompletedOnboarding);
 
-  const [showRatingModal, setShowRatingModal] = useState(false);
+  // Shared with Home and with Home's drop target — see `useUploadEntry`. The rail owns the
+  // rating modal it returns, same as it always did.
+  const {
+    uploadAudio,
+    uploadMidi,
+    checkGate,
+    uploadError,
+    showRatingModal,
+    setShowRatingModal,
+  } = useUploadEntry();
+
   // Open by default, collapsible.
   //
   // Shipping it collapsed left the rail as five rows above 500px of empty panel — the
@@ -69,17 +76,10 @@ export function AppSidebar() {
   // read as unfinished. It stays collapsible (the summary row above it says which harmonica
   // is selected, so folding it away loses nothing), it just doesn't start that way.
   const [pickerOpen, setPickerOpen] = useState(true);
-  // Only for failures that happen before the import screen exists (an oversized file
-  // rejected at pick time) — everything after that is reported on /import itself.
-  const [uploadError, setUploadError] = useState<string | null>(null);
-
   const effectiveLimit = computeEffectiveLimit(ratingStatus);
 
   function handleStart() {
-    if (!selectedKey) return;
-    const gate = resolveSessionGate({ isPurchased: premium, totalRecordingsUsed, ratingStatus });
-    if (gate === 'showRating') { setShowRatingModal(true); return; }
-    if (gate === 'showPaywall') { router.push('/paywall'); return; }
+    if (!selectedKey || !checkGate()) return;
     // Same first-recording calibration detour as Home's Record button — this rail is the
     // other way into a session, so it has to make the same stop. See `app.tsx:handleStart`.
     if (Platform.OS === 'web' && !hasCompletedOnboarding) {
@@ -88,48 +88,6 @@ export function AppSidebar() {
     }
     startRecording();
     router.push('/recording');
-  }
-
-  // Same shape as handleStart — the free-tier gate has to come first for every "start a
-  // new session" entry point, not just recording. The file dialog is opened here (inside
-  // the press handler) rather than on the import screen because browsers only allow it
-  // during a real user gesture.
-  async function handleUploadAudio() {
-    if (!selectedKey) return;
-    const gate = resolveSessionGate({ isPurchased: premium, totalRecordingsUsed, ratingStatus });
-    if (gate === 'showRating') { setShowRatingModal(true); return; }
-    if (gate === 'showPaywall') { router.push('/paywall'); return; }
-
-    try {
-      const picked = await pickAudioFile();
-      if (!picked) return; // dismissed the picker — nothing started, nothing consumed
-      setPendingImport(picked);
-      setUploadError(null);
-      router.push('/import');
-    } catch (err) {
-      // Only the pre-read size check can fail this early; everything else surfaces on the
-      // import screen, which has room to explain it properly.
-      setUploadError(err instanceof AudioImportError ? err.message : "That file couldn't be opened.");
-    }
-  }
-
-  // Same shape again for the third entry point. The `kind` param is what tells /import to
-  // parse rather than transcribe — everything either side of that step is shared.
-  async function handleUploadMidi() {
-    if (!selectedKey) return;
-    const gate = resolveSessionGate({ isPurchased: premium, totalRecordingsUsed, ratingStatus });
-    if (gate === 'showRating') { setShowRatingModal(true); return; }
-    if (gate === 'showPaywall') { router.push('/paywall'); return; }
-
-    try {
-      const picked = await pickMidiFile();
-      if (!picked) return; // dismissed the picker — nothing started, nothing consumed
-      setPendingImport(picked);
-      setUploadError(null);
-      router.push({ pathname: '/import', params: { kind: 'midi' } });
-    } catch (err) {
-      setUploadError(err instanceof AudioImportError ? err.message : "That file couldn't be opened.");
-    }
   }
 
   /**
@@ -170,7 +128,7 @@ export function AppSidebar() {
           <Text style={styles.sidebarSectionLabel}>Quick actions</Text>
 
           <Pressable
-            onPress={handleUploadAudio}
+            onPress={uploadAudio}
             disabled={!selectedKey}
             style={({ pressed, hovered }: any) => [
               styles.sidebarRow,
@@ -188,7 +146,7 @@ export function AppSidebar() {
           </Pressable>
 
           <Pressable
-            onPress={handleUploadMidi}
+            onPress={uploadMidi}
             disabled={!selectedKey}
             style={({ pressed, hovered }: any) => [
               styles.sidebarRow,

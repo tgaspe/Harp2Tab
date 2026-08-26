@@ -4,18 +4,17 @@ import { AppSidebar } from '@/components/AppSidebar';
 import { KeyGrid } from '@/components/KeyGrid';
 import { RatingModal } from '@/components/RatingModal';
 import { RecordingCard } from '@/components/RecordingCard';
+import { DropOverlay } from '@/components/DropOverlay';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { FONT, HARMONICA_KEYS } from '@/constants/keys';
 import { useTheme } from '@/hooks/useTheme';
 import { usePlayback } from '@/hooks/usePlayback';
 import { usePremium } from '@/hooks/usePremium';
+import { useFileDrop } from '@/hooks/useFileDrop';
+import { useUploadEntry } from '@/hooks/useUploadEntry';
 import { selectHarmonicaType, selectKey, useAppStore } from '@/store/useAppStore';
 import { FREE_TIER_ENABLED, useSettingsStore } from '@/store/useSettingsStore';
-import { computeEffectiveLimit, resolveSessionGate } from '@/store/sessionGate';
-import { AudioImportError } from '@/audio/audioImport';
-import { pickAudioFile } from '@/audio/pickAudioFile';
-import { pickMidiFile } from '@/audio/pickMidiFile';
-import { setPendingImport } from '@/audio/pendingImport';
+import { computeEffectiveLimit } from '@/store/sessionGate';
 import { selectRecordings, useRecordingsStore } from '@/store/useRecordingsStore';
 import { selectMidiProjects, useMidiProjectsStore } from '@/store/useMidiProjectsStore';
 import { createProject } from '@/audio/midiProject';
@@ -270,10 +269,23 @@ export default function KeySelectionScreen() {
   const deleteRecording      = useRecordingsStore((s) => s.deleteRecording);
   const renameRecording      = useRecordingsStore((s) => s.renameRecording);
   const toggleFavorite       = useRecordingsStore((s) => s.toggleFavorite);
-  const [showRatingModal, setShowRatingModal] = useState(false);
-  // Only for failures that happen before the import screen exists (an oversized file
-  // rejected at pick time) — everything after that is reported on /import itself.
-  const [uploadError, setUploadError] = useState<string | null>(null);
+  // The free-tier gate, the pickers, and the hand-off to /import — shared with the web rail
+  // and, below, with the page's drop target, so all three can't drift apart on the gate.
+  const {
+    uploadAudio,
+    uploadMidi,
+    importDroppedFiles,
+    checkGate,
+    uploadError,
+    showRatingModal,
+    setShowRatingModal,
+  } = useUploadEntry();
+
+  // The whole page is a drop target, not just the two upload buttons. `useFileDrop` listens
+  // on `window`, so this covers the page's gutters and empty space too — a near-miss that
+  // fell through to the browser would navigate the tab away to the file.
+  const { dragging } = useFileDrop({ onFiles: importDroppedFiles, enabled: Platform.OS === 'web' });
+
   // Web-only: lets a recording row's play button preview it without leaving Home or
   // touching the shared editing session in useAppStore — this hook instance is fully
   // self-contained (play() takes notes as an argument), so previewing here can't clobber
@@ -321,10 +333,7 @@ export default function KeySelectionScreen() {
   const effectiveLimit = computeEffectiveLimit(ratingStatus);
 
   function handleStart() {
-    if (!selectedKey) return;
-    const gate = resolveSessionGate({ isPurchased: premium, totalRecordingsUsed, ratingStatus });
-    if (gate === 'showRating') { setShowRatingModal(true); return; }
-    if (gate === 'showPaywall') { router.push('/paywall'); return; }
+    if (!selectedKey || !checkGate()) return;
     // Web: first recording ever, so calibrate first. The gate is resolved before this on
     // purpose — someone who is about to hit the paywall should see it rather than spend
     // eight seconds blowing into a microphone for a session they can't start. Onboarding
@@ -335,29 +344,6 @@ export default function KeySelectionScreen() {
     }
     startRecording();
     router.push('/recording');
-  }
-
-  // Same shape as handleStart — the free-tier gate has to come first for every "start a
-  // new session" entry point, not just recording. The file dialog is opened here (inside
-  // the press handler) rather than on the import screen because browsers only allow it
-  // during a real user gesture.
-  async function handleUploadAudio() {
-    if (!selectedKey) return;
-    const gate = resolveSessionGate({ isPurchased: premium, totalRecordingsUsed, ratingStatus });
-    if (gate === 'showRating') { setShowRatingModal(true); return; }
-    if (gate === 'showPaywall') { router.push('/paywall'); return; }
-
-    try {
-      const picked = await pickAudioFile();
-      if (!picked) return; // dismissed the picker — nothing started, nothing consumed
-      setPendingImport(picked);
-      setUploadError(null);
-      router.push('/import');
-    } catch (err) {
-      // Only the pre-read size check can fail this early; everything else surfaces on the
-      // import screen, which has room to explain it properly.
-      setUploadError(err instanceof AudioImportError ? err.message : "That file couldn't be opened.");
-    }
   }
 
   /**
@@ -371,25 +357,6 @@ export default function KeySelectionScreen() {
     const project = createProject({ title: 'Untitled project' });
     saveProject(project);
     router.push({ pathname: '/studio', params: { projectId: project.id } });
-  }
-
-  // Same shape again for the third entry point. The `kind` param is what tells /import to
-  // parse rather than transcribe — everything either side of that step is shared.
-  async function handleUploadMidi() {
-    if (!selectedKey) return;
-    const gate = resolveSessionGate({ isPurchased: premium, totalRecordingsUsed, ratingStatus });
-    if (gate === 'showRating') { setShowRatingModal(true); return; }
-    if (gate === 'showPaywall') { router.push('/paywall'); return; }
-
-    try {
-      const picked = await pickMidiFile();
-      if (!picked) return; // dismissed the picker — nothing started, nothing consumed
-      setPendingImport(picked);
-      setUploadError(null);
-      router.push({ pathname: '/import', params: { kind: 'midi' } });
-    } catch (err) {
-      setUploadError(err instanceof AudioImportError ? err.message : "That file couldn't be opened.");
-    }
   }
 
   function handleOpenRecording(recording: TabRecording) {
@@ -492,7 +459,7 @@ export default function KeySelectionScreen() {
 
       <View style={styles.uploadRow}>
         <Pressable
-          onPress={handleUploadAudio}
+          onPress={uploadAudio}
           disabled={!selectedKey}
           style={({ pressed, hovered }: any) => [
             styles.uploadBtn,
@@ -507,7 +474,7 @@ export default function KeySelectionScreen() {
           <Text style={[styles.uploadBtnText, !!selectedKey && styles.uploadBtnTextEnabled]}>Upload Audio</Text>
         </Pressable>
         <Pressable
-          onPress={handleUploadMidi}
+          onPress={uploadMidi}
           disabled={!selectedKey}
           style={({ pressed, hovered }: any) => [
             styles.uploadBtn,
@@ -629,6 +596,10 @@ export default function KeySelectionScreen() {
         onClose={() => setShowRatingModal(false)}
         onUpgrade={() => router.push('/paywall')}
       />
+      {/* Outside `container` so it covers the rail as well as the library column — the drop
+          target is the window, and an overlay that stopped at the content's edge would
+          claim less ground than actually accepts a file. */}
+      <DropOverlay visible={dragging} />
       <View style={[
         styles.container,
         Platform.OS === 'web' && styles.containerFlush,
@@ -716,6 +687,13 @@ export default function KeySelectionScreen() {
                   </View>
                 )}
               </View>
+
+              {/* The same banner the native layout carries inside `startAndUpload`, which
+                  the web layout never renders — so before drag-and-drop existed, a web
+                  upload failure on this page had nowhere to appear. It sits directly under
+                  the page header rather than beside the rail's buttons because the thing it
+                  now reports on is a drop, and a drop lands anywhere on the page. */}
+              {uploadErrorBanner}
 
               {/* Projects sit above recordings because they're upstream of them: a
                   project is what a tab gets converted *out of*, so finding one is how you
