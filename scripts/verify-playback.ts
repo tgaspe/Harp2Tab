@@ -55,10 +55,24 @@ class FakeNode {
   }
   stop(when = 0) { if (!Number.isFinite(when)) throw new Error(`bad stop time ${when}`); }
 }
+/* Browsers cap concurrent AudioContexts per page — Chrome at six — and construction throws
+ * past it: "The number of hardware contexts provided (6) is greater than or equal to the
+ * maximum bound (6)". `close()` is async, so creating one per playback call and closing the
+ * old one without awaiting piles them up faster than they are released. */
+const MAX_HARDWARE_CONTEXTS = 6;
+let liveContexts = 0;
+let contextsCreated = 0;
+
 class FakeContext {
   currentTime = 0;
   destination = new FakeNode('destination');
   state = 'running';
+  constructor() {
+    if (liveContexts >= MAX_HARDWARE_CONTEXTS) {
+      throw new Error(`Failed to construct 'AudioContext': The number of hardware contexts provided (${liveContexts}) is greater than or equal to the maximum bound (${MAX_HARDWARE_CONTEXTS}).`);
+    }
+    liveContexts++; contextsCreated++;
+  }
   createGain() { return new FakeNode('gain'); }
   createOscillator() { return new FakeNode('oscillator'); }
   createBufferSource() { return new FakeNode('buffer'); }
@@ -70,7 +84,11 @@ class FakeContext {
   }
   suspend() { return Promise.resolve(); }
   resume() { return Promise.resolve(); }
-  close() { return Promise.resolve(); }
+  close() {
+    // Async, exactly as in the browser: the slot is not freed on the turn `close()` is
+    // called, which is the whole reason a per-playback context piles up.
+    return new Promise<void>((resolve) => { setTimeout(() => { liveContexts--; resolve(); }, 0); });
+  }
 }
 
 const ASSETS = path.join(__dirname, '..', 'public');
@@ -202,6 +220,28 @@ async function main(): Promise<void> {
   (globalThis as any).fetch = realFetch;
   check('a manifest with no zones does not reject the preload', poisoned === null,
     poisoned ?? 'resolved');
+
+  // ── Repeated restarts must not exhaust the browser's context budget ───────
+  // Every solo toggle, seek, tempo change and live edit reschedules. If each one builds a
+  // fresh AudioContext, a handful of clicks hits the per-page cap and every later play is
+  // silent — which is what "add tracks until no sound comes out" looks like from outside.
+  stopPlayback();
+  await new Promise((r) => setTimeout(r, 5));
+  const before = contextsCreated;
+  let exhausted: string | null = null;
+  started = [];
+  for (let i = 0; i < 12; i++) {
+    try {
+      await playNotes(solo, { bpm: 120, metronomeEnabled: false, rate: 1 }, 0);
+    } catch (error) {
+      exhausted = error instanceof Error ? error.message : String(error);
+      break;
+    }
+  }
+  check('12 restarts do not exhaust the context budget', exhausted === null,
+    exhausted ?? `${contextsCreated - before} contexts for 12 restarts`);
+  check('the last restart still scheduled voices', started.length > 0,
+    `${started.length} voices on the final pass`);
 
   for (const result of results) {
     console.log(`${result.passed ? 'PASS' : 'FAIL'}  ${result.name} — ${result.detail}`);

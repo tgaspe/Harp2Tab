@@ -18,7 +18,39 @@ const AMPLITUDE = 0.3;
  *  sampled track and an oscillator track in the same project sit level with each other. */
 const AMPLITUDE_SAMPLED = 0.5;
 
+/**
+ * One context for the whole session, not one per playback.
+ *
+ * Browsers cap concurrent AudioContexts per page — Chrome at six — and `close()` is
+ * asynchronous, so building a fresh one on every play and closing the old one without
+ * awaiting piles them up faster than they are released. Every solo toggle, seek, tempo
+ * change and live edit reschedules, so half a dozen clicks was enough to hit the cap;
+ * construction then throws, and since `playNotes` is called without `await` that surfaces as
+ * an unhandled rejection and the app goes permanently silent.
+ *
+ * Reusing one context also means the output stage below is built once rather than leaking a
+ * compressor onto `destination` per play.
+ */
 let audioContext: AudioContext | null = null;
+let outputStage: AudioNode | null = null;
+
+function playbackGraph(): { ctx: AudioContext; output: AudioNode } {
+  if (!audioContext || !outputStage) {
+    const ctx = new AudioContext();
+    // One output stage for both the sampled and the oscillator path. A dozen sampled tracks
+    // clip where a dozen sine waves did not, and compressing only the sampled path would
+    // make the *fallback* audibly louder than the real thing, which is precisely backwards.
+    // The metronome deliberately bypasses it: a reference click should not duck under a loud
+    // bar.
+    const compressor = ctx.createDynamicsCompressor();
+    compressor.threshold.value = -12;
+    compressor.ratio.value = 4;
+    compressor.connect(ctx.destination);
+    audioContext = ctx;
+    outputStage = compressor;
+  }
+  return { ctx: audioContext, output: outputStage };
+}
 /** Oscillators and buffer sources both, under their common supertype — `stopPlayback` only
  *  needs `stop()`, and keeping one list means a sampled voice can never be left running by a
  *  code path that forgot about it. */
@@ -131,19 +163,12 @@ export async function playNotes(notes: TabNote[], options?: PlaybackOptions, sta
   stopPlayback();
   if (notes.length === 0) return;
 
-  const ctx = new AudioContext();
-  audioContext = ctx;
+  const { ctx, output: compressor } = playbackGraph();
+  // A context built outside a user gesture starts suspended, and `pausePlayback` suspends
+  // this one deliberately — either way a fresh schedule needs it running.
+  if (ctx.state === 'suspended') void ctx.resume();
   const now = ctx.currentTime;
   const rate = options?.rate ?? 1;
-
-  // One output stage for both paths. A dozen sampled tracks clip where a dozen sine waves
-  // did not, and compressing only the sampled path would make the *fallback* audibly louder
-  // than the real thing, which is precisely backwards. The metronome deliberately bypasses
-  // it (see `scheduleMetronome`): a reference click should not duck under a loud bar.
-  const compressor = ctx.createDynamicsCompressor();
-  compressor.threshold.value = -12;
-  compressor.ratio.value = 4;
-  compressor.connect(ctx.destination);
 
   for (const n of notes) {
     const noteEnd = n.start_time + n.duration;
@@ -279,11 +304,18 @@ export async function playNotes(notes: TabNote[], options?: PlaybackOptions, sta
 // above, so it can't be paused/stopped by playback controls and doesn't touch
 // isPlaying/isPaused state. Closed once the tone finishes so repeated clicks don't leak
 // contexts.
+/** Preview keeps its own context, so pausing the transport (which suspends the playback
+ *  context) can't silence a click on a note. Reused rather than per-click, for the same
+ *  budget reason as `playbackGraph`. */
+let previewContext: AudioContext | null = null;
+
 export function previewNote(noteName: string, durationMs = 180, program = DEFAULT_PROGRAM): void {
   const freq = noteNameToFrequency(noteName);
   if (freq <= 0) return;
 
-  const ctx = new AudioContext();
+  if (!previewContext) previewContext = new AudioContext();
+  const ctx = previewContext;
+  if (ctx.state === 'suspended') void ctx.resume();
   const now = ctx.currentTime;
   const durSec  = durationMs / 1000;
   const fadeSec = Math.min(0.01, durSec / 4);
@@ -308,7 +340,6 @@ export function previewNote(noteName: string, durationMs = 180, program = DEFAUL
 
     const loop = loopSecondsFor(zone);
     const right = zone.fileRight ? cachedBuffer(program, zone.fileRight) : null;
-    let live = 0;
     for (const source of buildSources(ctx, buffer, right, gain, playbackRateFor(zone, midiKey))) {
       if (loop) {
         source.loop = true;
@@ -317,10 +348,6 @@ export function previewNote(noteName: string, durationMs = 180, program = DEFAUL
       }
       source.start(now);
       source.stop(now + durSec + 0.02);
-      live++;
-      // Only the last source standing closes the context, or a stereo pair would close it
-      // out from under its own other half.
-      source.onended = () => { if (--live === 0) ctx.close(); };
     }
     return;
   }
@@ -341,7 +368,6 @@ export function previewNote(noteName: string, durationMs = 180, program = DEFAUL
   gain.connect(ctx.destination);
   osc.start(now);
   osc.stop(now + durSec + 0.02);
-  osc.onended = () => { ctx.close(); };
 }
 
 export function pausePlayback(): void {
@@ -357,6 +383,7 @@ export function stopPlayback(): void {
     try { voice.stop(); } catch { /* already stopped */ }
   });
   activeVoices = [];
-  audioContext?.close();
-  audioContext = null;
+  // The context is deliberately kept. Closing it here is what used to exhaust the browser's
+  // context budget — see `playbackGraph`. Stopped voices are collected once they end, and an
+  // idle context costs nothing.
 }
