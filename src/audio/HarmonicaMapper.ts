@@ -265,6 +265,9 @@ export interface GridRow extends PlayablePosition {
  * the note stays in the store and in every export while vanishing from the grid, with no
  * way to see or fix it. The ladder is widened to cover them and stays gapless, since
  * everything downstream indexes rows positionally and steps between adjacent ones.
+ *
+ * The diatonic 3 blow / -2 draw pair is the deliberate exception to one row per pitch:
+ * both fundamental positions are shown, with 3 immediately above -2.
  */
 export function getGridRows(
   key: HarmonicaKey,
@@ -291,6 +294,11 @@ export function getGridRows(
   for (let midi = high; midi >= low; midi--) {
     const note = midiToNoteName(midi);
     const tab  = noteToTab(note, key, harmonicaType) ?? '';
+    // Hole 3 blow and hole 2 draw are the same pitch. Keep the alternate immediately
+    // above the canonical -2 row so either real playing position can be drawn/edited.
+    if (harmonicaType === 'diatonic' && midi - transpose === 67) {
+      rows.push({ tab: '3', note, midi, playable: true });
+    }
     rows.push({ tab, note, midi, playable: tab !== '' });
   }
   return rows;

@@ -389,6 +389,24 @@ function isNaturalNote(note: string): boolean {
 // silently relabel the unit — see the field's own docs in `types/index.ts`.
 type NoteUpdate = Partial<Pick<TabNote, 'tab' | 'note' | 'start_time' | 'duration' | 'velocity'>>;
 
+// Most pitches have one row, but equivalent harp positions may intentionally have their
+// own rows (notably 3 blow and -2 draw). Prefer the exact tab+pitch identity, then fall
+// back to pitch for legacy/unplayable notes whose stored tab does not match the ladder.
+function findNoteRowIndex(positions: readonly GridRow[], note: Pick<TabNote, 'tab' | 'note'>): number {
+  const exact = positions.findIndex((row) => row.note === note.note && row.tab === note.tab);
+  return exact >= 0 ? exact : positions.findIndex((row) => row.note === note.note);
+}
+
+// Transpose controls move by pitch, not by the number of visible rows. Search from the
+// bottom so a target pitch with alternate rows resolves to its canonical row (-2, which
+// is intentionally rendered after 3); Studio and all other pitches remain unchanged.
+function findCanonicalMidiRowIndex(positions: readonly GridRow[], midi: number): number {
+  for (let index = positions.length - 1; index >= 0; index--) {
+    if (positions[index].midi === midi) return index;
+  }
+  return -1;
+}
+
 // Icon-only toolbar button with a hover tooltip (web). Every glyph-only control in the
 // tool row goes through this — zoom, fit, transpose — because a bare chevron or
 // circled-arrow icon says nothing about what it does, and the transpose ones additionally
@@ -985,10 +1003,10 @@ export function PianoRoll({
   // Shared by the marquee hit-test and the group-selection bounding box — content-space
   // {left, top, width, height} for a note, or null if its pitch doesn't match any row
   // (shouldn't normally happen, but positions can lag a stale note during a key change).
-  // Matched by pitch (note), not tab — an unplayable note has tab: '', which isn't
-  // unique across rows, but its pitch always is.
+  // Exact tab+pitch matching keeps equivalent harp positions on their own rows; the
+  // helper falls back to pitch for stale or unplayable data.
   function noteBounds(note: TabNote): { left: number; top: number; width: number; height: number } | null {
-    const rowIndex = positions.findIndex((p) => p.note === note.note);
+    const rowIndex = findNoteRowIndex(positions, note);
     if (rowIndex === -1) return null;
     const left = (note.start_time / 1000) * pxPerSecond;
     const width = noteWidthPx(note.duration, pxPerSecond);
@@ -1212,7 +1230,7 @@ export function PianoRoll({
     // Renamed off `rows` once that became a prop — this is the set of row *indices* the
     // notes occupy, not the row list itself.
     const occupiedRows = notes
-      .map((n) => positions.findIndex((p) => p.note === n.note))
+      .map((n) => findNoteRowIndex(positions, n))
       .filter((i) => i >= 0);
     if (occupiedRows.length === 0 || gridViewportHeight === 0) return;
     const centerPx = ((Math.min(...occupiedRows) + Math.max(...occupiedRows) + 1) / 2) * rowH;
@@ -1383,8 +1401,8 @@ export function PianoRoll({
     toastTimeoutRef.current = setTimeout(() => setToastMessage(null), 2500);
   }
 
-  // Shared by Arrow Up/Down (rowDelta=±1), Shift+Arrow Up/Down (±12), and the semitone/
-  // octave toolbar buttons below — moves every currently-selected note (via
+  // Shared by Arrow Up/Down (±1 semitone), Shift+Arrow Up/Down (±12), and the semitone/
+  // octave toolbar buttons below — moves every currently-selected note by pitch (via
   // getSelectionNotes, which already abstracts over pencil's single selectedId vs.
   // selection-mode's marquee set) up/down the chromatic row grid, committed as one bulk
   // updateNotes call. A note that can't move the full distance without falling off the
@@ -1394,15 +1412,17 @@ export function PianoRoll({
   // ever called there once success is already guaranteed. Shift+Arrow has no such
   // disabled-button concept (a keyboard shortcut can't grey itself out), so it always
   // uses this same skip-and-report behavior regardless of scale.
-  function shiftSelectionByRows(rowDelta: number) {
+  function shiftSelectionByRows(semitoneDelta: number) {
     const targets = getSelectionNotes();
     if (targets.length === 0) return;
     const updates: { id: string; changes: NoteUpdate }[] = [];
     let skipped = 0;
     for (const n of targets) {
-      const rowIndex = positions.findIndex((p) => p.note === n.note);
-      const newRow = rowIndex + rowDelta;
-      if (rowIndex === -1 || newRow < 0 || newRow >= positions.length) { skipped++; continue; }
+      const rowIndex = findNoteRowIndex(positions, n);
+      const newRow = rowIndex === -1
+        ? -1
+        : findCanonicalMidiRowIndex(positions, positions[rowIndex].midi - semitoneDelta);
+      if (newRow === -1) { skipped++; continue; }
       const p = positions[newRow];
       updates.push({ id: n.id, changes: { tab: p.tab, note: p.note } });
     }
@@ -1419,9 +1439,11 @@ export function PianoRoll({
     const targets = getSelectionNotes();
     if (targets.length === 0) return false;
     return targets.every((n) => {
-      const rowIndex = positions.findIndex((p) => p.note === n.note);
-      const newRow = rowIndex + direction * 12;
-      return rowIndex !== -1 && newRow >= 0 && newRow < positions.length;
+      const rowIndex = findNoteRowIndex(positions, n);
+      return rowIndex !== -1 && findCanonicalMidiRowIndex(
+        positions,
+        positions[rowIndex].midi - direction * 12,
+      ) !== -1;
     });
   }
 
@@ -2275,7 +2297,7 @@ export function PianoRoll({
                   // GroupSelectionOverlay instead, so they visually move with the drag in
                   // real time rather than staying frozen until the gesture commits.
                   if (mouseMode === 'selection' && selectedIds.includes(note.id)) return null;
-                  const rowIndex = positions.findIndex((p) => p.note === note.note);
+                  const rowIndex = findNoteRowIndex(positions, note);
                   if (rowIndex === -1) return null;
                   return (
                     <PianoRollNoteBlock
@@ -3413,12 +3435,12 @@ function PianoRollNoteBlock({
 
     const changes: NoteUpdate = {};
     if (newStart !== note.start_time) changes.start_time = newStart;
-    // Compared by pitch, not by tab: rows are unique by `note` but *not* by `tab` — the
-    // Studio's chromatic ladder gives every row tab: '', and the editor's ladder gives
-    // that to every unplayable row. Gating on tab meant those drags committed the
-    // horizontal move and silently dropped the vertical one, snapping the note back to
-    // its original row.
-    if (newPos.note !== note.note) { changes.tab = newPos.tab; changes.note = newPos.note; }
+    // Compare both fields: equivalent positions can share a pitch while occupying
+    // distinct rows (3 blow / -2 draw).
+    if (newPos.note !== note.note || newPos.tab !== note.tab) {
+      changes.tab = newPos.tab;
+      changes.note = newPos.note;
+    }
     if (Object.keys(changes).length > 0) onUpdate(note.id, changes);
   }
 
@@ -3634,7 +3656,7 @@ function GroupSelectionOverlay({
     const rowDelta = Math.round(dyPx / rowHeight);
     const updates: { id: string; changes: NoteUpdate }[] = [];
     for (const note of selectedNotes) {
-      const rowIndex = positions.findIndex((p) => p.note === note.note);
+      const rowIndex = findNoteRowIndex(positions, note);
       if (rowIndex === -1) continue;
       const rawStart = Math.max(0, Math.round(note.start_time + dtMs));
       const newStart = snapMsToGridInMap(map, rawStart, snapDivision);
@@ -3642,8 +3664,10 @@ function GroupSelectionOverlay({
       const newPos = positions[newRow];
       const changes: NoteUpdate = {};
       if (newStart !== note.start_time) changes.start_time = newStart;
-      // By pitch, not by tab — see commitMove for why tab isn't a usable row identity.
-      if (newPos.note !== note.note) { changes.tab = newPos.tab; changes.note = newPos.note; }
+      if (newPos.note !== note.note || newPos.tab !== note.tab) {
+        changes.tab = newPos.tab;
+        changes.note = newPos.note;
+      }
       if (Object.keys(changes).length > 0) updates.push({ id: note.id, changes });
     }
     applyMany(updates);
@@ -3752,7 +3776,7 @@ function GroupSelectionOverlay({
         </Animated.View>
       </GestureDetector>
       {selectedNotes.map((note) => {
-        const rowIndex = positions.findIndex((p) => p.note === note.note);
+        const rowIndex = findNoteRowIndex(positions, note);
         if (rowIndex === -1) return null;
         const left  = (note.start_time / 1000) * pxPerSecond;
         const width = noteWidthPx(note.duration, pxPerSecond);

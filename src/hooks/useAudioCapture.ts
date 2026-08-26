@@ -6,7 +6,8 @@ import { createNoteDetector } from '@/audio/NoteDetector';
 import { pushFrame } from '@/audio/frameBuffer';
 import { selectHarmonicaType, selectIsPaused, selectIsRecording, selectKey, selectRecordingId, useAppStore } from '@/store/useAppStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
-import { useEffect, useRef, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { PermissionsAndroid, Platform } from 'react-native';
 
 export function useAudioCapture(): { permissionDenied: boolean } {
@@ -27,7 +28,12 @@ export function useAudioCapture(): { permissionDenied: boolean } {
   const detectorRef  = useRef<ReturnType<typeof createNoteDetector> | null>(null);
   const startMsRef   = useRef(0);
 
-  useEffect(() => {
+  // Recording routes remain mounted when another page is pushed over them. Tying capture
+  // only to the global `isRecording` flag lets every old RecordingScreen in the stack wake
+  // up for a later take; each adds an onAudioFrame listener and every detected note is then
+  // appended once per hidden screen. Focus owns the subscription, so exactly the visible
+  // recording route can capture while dormant stack entries stay inert.
+  useFocusEffect(useCallback(() => {
     if (!isRecording || !selectedKey) {
       stopCapture();
       return;
@@ -107,7 +113,7 @@ export function useAudioCapture(): { permissionDenied: boolean } {
       detectorRef.current?.flush(startMsRef.current);
       detectorRef.current = null;
     };
-  }, [isRecording]);
+  }, [isRecording]));
 
   // Keep the ref in sync so the frame listener (captured once above) always
   // sees the latest pause state, and clear in-flight detection state on every
