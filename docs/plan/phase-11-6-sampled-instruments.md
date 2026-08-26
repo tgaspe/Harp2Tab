@@ -1575,5 +1575,30 @@ Until that exists, no native UI may promise "MuseScore sound".
 
 1–2–3–4 in order: the first four tasks exist to get *one* instrument audible before anything
 is built at scale, because Task 4's listening test is what tells you whether the manifest
-shape from Task 2 is right. 5 before 6, because the converter has to emit a drum kit. 7, 8, 9
-in any order after 6. Native is a separate milestone with its own plan.
+shape from Task 2 is right. 5 before 6, because the converter has to emit a drum kit. 8 and 9
+after 6. Native is a separate milestone with its own plan.
+
+**Corrected during execution (2026-08-26): Task 7 moves ahead of Task 6, and Task 5 merges
+into Task 4.** Task 4's listening test cannot make a sound until something calls
+`ensureProgramsLoaded`, and nothing does until Task 7 — so as written, the milestone that
+gates the whole phase was untestable. Task 5's scheduler branch also has to land with Task
+4's, because the two share the note loop and `TabNote.percussion` is what makes Task 4
+compile. Executed order: 1, 2, 3, 4+5, 7, then 6, 8, 9.
+
+## Execution log
+
+- **Tasks 1, 2, 3, 4, 5, 7 are complete and committed** (`19c8473`…`4228992` plus the
+  transport preload). `verify-soundfont.ts` is at 30 cases; `verify-midi-studio.ts` (81),
+  `verify-midi-import.ts` (31) and `verify-export.ts` (42) are unchanged.
+- **Two things the plan did not anticipate, both found against the real file:**
+  - **SF2 stereo pairs.** MuseScore General ships the grand piano and every drum kit as
+    `(L)`/`(R)` mono samples sharing one key range — 35 of 309 presets, 149 of 1247 samples.
+    Treated as two zones they overlap, the thinning keeps whichever sorts first, and the
+    instrument plays one channel: a thin, slightly-wrong piano rather than an obvious bug.
+    `SampleZone.fileRight` and `pairStereo` handle it; three harness cases lock it in.
+  - **`trackToTabNotes` is the only birth site** for a `TabNote` from a track, not the two
+    the plan named. `midiProject` builds `MidiTrackData`, which already carries the channel.
+- **Still open:** Task 4 Steps 6–8 (the listening tests), Task 6 (the full converter and the
+  drum kit), Task 8 (previews), Task 9 (ship). Only the grand piano exists as an asset, so
+  every other program — and every drum note — currently takes the oscillator fallback, which
+  is the designed behaviour and is what Task 5 Step 6 asks you to confirm.

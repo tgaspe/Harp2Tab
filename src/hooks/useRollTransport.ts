@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
 import { usePlayback } from '@/hooks/usePlayback';
+import { ensureProgramsLoaded } from '@/audio/soundfont';
 import { PLAYBACK_RATES, barDurationMs, type TempoMap } from '@/audio/tempo';
 import type { TabNote } from '@/types';
 
@@ -38,6 +39,11 @@ import type { TabNote } from '@/types';
  * to collapse a burst into one rebuild, short enough that an edit still reads as immediate.
  */
 const RESCHEDULE_DEBOUNCE_MS = 120;
+
+/** How long a sample load may take before the transport admits it is loading. A warm cache
+ *  resolves in a microtask, and an indicator that flashes on every play press is worse than
+ *  no indicator at all. */
+const LOADING_INDICATOR_MS = 300;
 
 export interface LoopRegion { startMs: number; endMs: number }
 
@@ -89,18 +95,49 @@ export function useRollTransport({
    *  `usePlayback` captured at `play()` time, which is the stale copy being replaced. */
   const staleWhilePausedRef = useRef(false);
 
+  /** Bumped by every `restart`, so an in-flight instrument load whose press has been
+   *  superseded resolves into a no-op instead of starting stale audio. */
+  const playGenerationRef = useRef(0);
+  const [instrumentsLoading, setInstrumentsLoading] = useState(false);
+
   /** One `play()` call site, so no rule can forget the loop region or the tempo map.
    *  `metronome` is an override for the toggle below, which has to restart with the *new*
    *  value before React has re-rendered with it. */
   const restart = useCallback((atMs: number, metronome = metronomeEnabled) => {
     // Whatever was scheduled is gone; these notes are what the engine now holds.
     staleWhilePausedRef.current = false;
-    play(
-      notes,
-      { bpm, metronomeEnabled: metronome, rate: playbackRate, tempoMap },
-      atMs,
-      loopRegion ?? undefined,
-    );
+    const generation = ++playGenerationRef.current;
+
+    /* Sampled instruments have to be resident *before* the clock starts. `usePlayback.play`
+     * back-dates `startedAtRef` and starts the rAF ticker synchronously without awaiting
+     * `playNotes` (`usePlayback.ts:140-150`), so anything awaited further down would run the
+     * playhead over silence and shift the end timeout by the load time. What loads is a
+     * handful of instruments, not a piece of audio — see the plan's "No streaming
+     * scheduler". `ensureProgramsLoaded` never rejects: a failed load resolves and every
+     * note falls back to its oscillator, silently. */
+    const programs = [...new Set(
+      notes.map((n) => n.program).filter((p): p is number => p !== undefined),
+    )];
+    const ready = ensureProgramsLoaded(programs, notes.some((n) => n.percussion === true));
+
+    const slowTimer = setTimeout(() => {
+      if (playGenerationRef.current === generation) setInstrumentsLoading(true);
+    }, LOADING_INDICATOR_MS);
+
+    void ready.then(() => {
+      clearTimeout(slowTimer);
+      // A newer press (or a live edit) superseded this load while it was in flight. Starting
+      // now would play the notes as they were before the edit, over a playhead already
+      // running for the newer schedule.
+      if (playGenerationRef.current !== generation) return;
+      setInstrumentsLoading(false);
+      play(
+        notes,
+        { bpm, metronomeEnabled: metronome, rate: playbackRate, tempoMap },
+        atMs,
+        loopRegion ?? undefined,
+      );
+    });
   }, [play, notes, bpm, metronomeEnabled, playbackRate, tempoMap, loopRegion]);
 
   /* ── Rescheduling around live edits ────────────────────────────────────────────────────
@@ -230,6 +267,10 @@ export function useRollTransport({
     onPlayToggle, onSeek, onSkipBar, onCycleRate, onToggleMetronome,
     onStop,
     loopEnabled, setLoopEnabled, playbackRate,
+    /** True only while a sample load has been running longer than `LOADING_INDICATOR_MS`.
+     *  Playback is never blocked on it — the transport stays live, and a load that fails
+     *  falls back to oscillators without ever setting this. */
+    instrumentsLoading,
   };
 }
 
