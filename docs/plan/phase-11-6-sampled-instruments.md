@@ -7,6 +7,34 @@
 > (recommended) or `superpowers:executing-plans` to implement this plan task by task. Steps
 > use checkbox (`- [ ]`) syntax for tracking.
 
+> ## ⚠️ Superseded, 2026-08-26 — read this first
+>
+> **The sampler this plan specifies was built, shipped, and then removed.** Web playback is
+> now one `spessasynth_lib` AudioWorklet synthesizer fed MIDI events, the approach
+> [Signal](https://github.com/ryohey/signal) takes: the app loads the pinned
+> `MuseScore_General-0.2.0.sf3` as-is and never builds an audio node per note.
+>
+> Everything below about **provenance, licence, attribution and hosting** still governs what
+> ships — see [`soundfont-source.md`](soundfont-source.md). Everything about the **conversion
+> pipeline, manifests, the resolver and the sample cache** describes deleted code
+> (`scripts/build-soundfont.ts`, `src/audio/soundfont/`, `scripts/verify-soundfont.ts`,
+> `public/soundfonts/musescore-general-0.2.0/`). It is kept as the design record.
+>
+> **Why it was replaced.** Three walls, all properties of hand-rolling a synthesizer rather
+> than bugs that could be fixed:
+> 1. **Node count.** One dense track (3,840 notes) cost **19,200 audio nodes** in a single
+>    synchronous pass. Nothing threw — the audio thread gave up partway through the song.
+> 2. **Fidelity.** SF2 voices are shaped by filter *envelopes*, LFOs, velocity layers and
+>    modulators. The plan's static manifest could carry none of them, which forced the
+>    `FILTER_MIN_HARMONICS` judgement and the single-velocity-layer cut.
+> 3. **Loop points.** Reconstructing them from `shdr` by hand against Vorbis-compressed
+>    sample data produced held notes that retriggered their own attack.
+>
+> **What survived the rewrite:** the pinned source and its licence obligations, the
+> percussion flag on `TabNote`, the shared-AudioContext fix, the oscillator fallback in
+> `timbre.ts`, and `scripts/verify-playback.ts`.
+
+
 **Goal:** Replace the Studio's oscillator test tones with real MuseScore General samples on
 web, for every GM program *and the drum kit*, loading only the instruments a project
 actually uses and falling back silently to the existing oscillators whenever a sample
@@ -1603,7 +1631,12 @@ compile. Executed order: 1, 2, 3, 4+5, 7, then 6, 8, 9.
   (`timbre.ts`) makes it audible instead of a stand-in sine. This also lands the half of Task
   8 that `previewNote` needed — it takes an optional program now — so Task 8 is reduced to
   the TrackList picker.
-- **Still open:** Task 4 Steps 6–8 (the listening tests), Task 6 (the full converter and the
-  drum kit), Task 8 (previews), Task 9 (ship). Only the grand piano exists as an asset, so
-  every other program — and every drum note — currently takes the oscillator fallback, which
-  is the designed behaviour and is what Task 5 Step 6 asks you to confirm.
+- **Tasks 6 and 7 shipped, then were superseded.** The full 128-program conversion was built
+  and validated (39.0 MB, clean) before the synth rewrite replaced it. Three bugs found and
+  fixed along the way are worth remembering, because two of them are not sampler-specific:
+  **transport rate must never fold into pitch**; **an AudioContext per playback exhausts the
+  browser's six-context cap**, which made the app permanently silent after a handful of solo
+  clicks; and a **mid-note seek has to reconcile nominal, wall-clock and buffer time**.
+- **Still open:** Task 8's TrackList instrument picker, and Task 9's deploy. The hosting
+  headers are in `firebase.json`; the `expo export` check and the cross-browser pass are not
+  done. Safari is the one to watch — it is the strictest about starting an AudioWorklet.
