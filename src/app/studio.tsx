@@ -736,6 +736,7 @@ export default function StudioScreen() {
           this screen doesn't have. Left in place they drag the bar out of its own box and
           the controls stop looking vertically centred. */}
       <WebTransportBar
+          instrumentsLoading={transport.instrumentsLoading}
         tabNotesLength={audibleNotes.length}
         isPlaying={transport.isPlaying}
         isPaused={transport.isPaused}

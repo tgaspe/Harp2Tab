@@ -1,5 +1,5 @@
 import React from 'react';
-import { Pressable, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Platform, Pressable, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Divider, IconButton, Tooltip } from '@/components/EditControls';
 import type { Theme } from '@/theme';
@@ -18,7 +18,12 @@ export function WebTransportBar({
   currentTimeMs, totalTimeMs, formatElapsed,
   loopEnabled, onToggleLoop, playbackRate, onCycleRate,
   bpm, setBpm, metronomeEnabled, onToggleMetronome, history, glued, containerStyle, compact, theme, styles,
+  instrumentsLoading = false,
 }: {
+  /** Sampled instruments are still arriving. Shown rather than hidden because the alternative
+   *  is a play press that looks like it did nothing; the transport is never disabled by it,
+   *  and playback starts on oscillators if the samples are slow. */
+  instrumentsLoading?: boolean;
   tabNotesLength: number;
   isPlaying: boolean;
   isPaused: boolean;
@@ -133,10 +138,22 @@ export function WebTransportBar({
             (pressed || hovered) && !disabled && styles.webPlayCircleHover,
           ]}
           accessibilityRole="button"
-          accessibilityLabel={isPlaying && !isPaused ? 'Pause' : isPaused ? 'Resume' : 'Play tab'}
-          accessibilityState={{ disabled }}
+          accessibilityLabel={
+            instrumentsLoading && !isPlaying ? 'Loading instruments'
+              : isPlaying && !isPaused ? 'Pause' : isPaused ? 'Resume' : 'Play tab'
+          }
+          accessibilityState={{ disabled, busy: instrumentsLoading }}
+          {...(Platform.OS === 'web' && instrumentsLoading && !isPlaying
+            ? ({ title: 'Loading instruments…' } as any)
+            : null)}
         >
-          <Ionicons name={isPlaying && !isPaused ? 'pause' : 'play'} size={compact ? 14 : 17} color={disabled ? theme.textMuted : '#fff'} />
+          <Ionicons
+            name={instrumentsLoading && !isPlaying
+              ? 'ellipsis-horizontal'
+              : isPlaying && !isPaused ? 'pause' : 'play'}
+            size={compact ? 14 : 17}
+            color={disabled ? theme.textMuted : '#fff'}
+          />
         </Pressable>
         <IconButton icon="play-skip-forward" label="Forward one bar" onPress={onSkipForward} disabled={disabled} tooltipPlacement={tip} theme={theme} styles={styles} iconSize={13} />
       </View>

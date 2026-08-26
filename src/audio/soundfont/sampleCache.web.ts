@@ -36,6 +36,10 @@ const MAX_UNPINNED_BUFFERS = 128;
  *  a new one is prepared. */
 let pinnedKeys: Set<string> = new Set();
 
+/** In-flight sample requests. Enough to saturate a real connection, few enough not to bury
+ *  the dev server. */
+const MAX_CONCURRENT_FETCHES = 8;
+
 /**
  * Decoding-only context, deliberately not the playing one: `playNotes` builds a fresh
  * `AudioContext` on every call (`Playback.web.ts:58`) and closes it in `stopPlayback`, so a
@@ -176,10 +180,18 @@ export async function ensureNotesLoaded(requests: NoteRequest[]): Promise<void> 
 
   // Pin before loading, or `touch` evicts each arrival to make room for the next.
   pinnedKeys = needed;
-  await Promise.all([...needed].map((key) => {
-    const slash = key.indexOf('/');
-    return sampleBufferFor(Number(key.slice(0, slash)), key.slice(slash + 1));
-  }));
+
+  // Bounded, not `Promise.all` over the lot. A project can reach fifty-odd files, and
+  // firing them all at once is enough to stall Metro's dev server — which used to hang the
+  // transport, back when playback waited on this.
+  const queue = [...needed];
+  const workers = Array.from({ length: Math.min(MAX_CONCURRENT_FETCHES, queue.length) }, async () => {
+    for (let key = queue.pop(); key !== undefined; key = queue.pop()) {
+      const slash = key.indexOf('/');
+      await sampleBufferFor(Number(key.slice(0, slash)), key.slice(slash + 1));
+    }
+  });
+  await Promise.all(workers);
 }
 
 /** Keyed by file rather than by zone, so the two halves of a stereo pair are ordinary cache

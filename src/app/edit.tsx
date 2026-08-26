@@ -883,6 +883,7 @@ export default function EditScreen() {
 
         {Platform.OS === 'web' ? (
           <WebTransportBar
+          instrumentsLoading={transport.instrumentsLoading}
             // Audible: there is nothing to play when the gate has hidden everything.
             tabNotesLength={audibleCount}
             isPlaying={isPlaying}

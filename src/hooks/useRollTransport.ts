@@ -47,6 +47,11 @@ const RESCHEDULE_DEBOUNCE_MS = 120;
  *  no indicator at all. */
 const LOADING_INDICATOR_MS = 300;
 
+/** The longest the transport will wait for samples before starting anyway on oscillators.
+ *  Generous enough for a cold cache on a normal connection, short enough that a stalled
+ *  request costs a duller-sounding pass rather than a transport that never starts. */
+const PRELOAD_DEADLINE_MS = 2500;
+
 export interface LoopRegion { startMs: number; endMs: number }
 
 export interface RollTransportInput {
@@ -132,7 +137,16 @@ export function useRollTransport({
       if (playGenerationRef.current === generation) setInstrumentsLoading(true);
     }, LOADING_INDICATOR_MS);
 
-    void ready.then(() => {
+    /* Whichever comes first: the samples, or the deadline.
+     *
+     * Pressing play must start the transport, full stop. Waiting on the network without a
+     * bound means one stalled request is indistinguishable from a broken app — no sound, no
+     * playhead, nothing to see. Anything not resident by the deadline plays as an
+     * oscillator, which is precisely what the fallback is for, and the next press gets the
+     * real instruments from the warm cache. */
+    const deadline = new Promise<void>((resolve) => { setTimeout(resolve, PRELOAD_DEADLINE_MS); });
+
+    void Promise.race([ready, deadline]).then(() => {
       clearTimeout(slowTimer);
       // A newer press (or a live edit) superseded this load while it was in flight. Starting
       // now would play the notes as they were before the edit, over a playhead already
