@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from 'react-native-reanimated';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '@/hooks/useTheme';
 import { getGridRows, noteNameToMidi, type GridRow } from '@/audio/HarmonicaMapper';
 import { getFrames } from '@/audio/frameBuffer';
@@ -732,6 +732,17 @@ export function PianoRoll({
   const mouseModeRef   = useRef(mouseMode);   mouseModeRef.current   = mouseMode;
   const selectedIdsRef = useRef(selectedIds); selectedIdsRef.current = selectedIds;
 
+  // Filters and Studio track changes replace `notes` without remounting the shared roll.
+  // A marquee selection is a selection of what this roll can currently edit, so discard
+  // ids that disappeared instead of reporting or bulk-editing hidden/previous-track notes.
+  useEffect(() => {
+    const available = new Set(notes.map((note) => note.id));
+    setSelectedIds((previous) => {
+      const next = previous.filter((id) => available.has(id));
+      return next.length === previous.length ? previous : next;
+    });
+  }, [notes]);
+
   function handleSetMouseMode(mode: 'pencil' | 'selection') {
     setMouseMode(mode);
     setSelectedIds([]);
@@ -918,6 +929,23 @@ export function PianoRoll({
   // can't derive its enabled/disabled state from it.
   const selectionCount = mouseMode === 'pencil' ? (selectedId ? 1 : 0) : selectedIds.length;
   const hasSelection = selectionCount > 0;
+  const allNotesSelected = mouseMode === 'selection'
+    && notes.length > 0
+    && notes.every((note) => selectedIds.includes(note.id));
+
+  /**
+   * Select only this roll's editable input. In the tab editor that is the notes surviving
+   * both filters; in the Studio it is the visible notes on the selected track. Background
+   * lanes never enter `notes`, so this cannot silently reach into another track.
+   */
+  function handleSelectAllToggle() {
+    if (allNotesSelected) {
+      setSelectedIds([]);
+      return;
+    }
+    setMouseMode('selection');
+    setSelectedIds(notes.map((note) => note.id));
+  }
 
   /**
    * How far the content runs — across *every* lane, not just the editable one.
@@ -1468,6 +1496,12 @@ export function PianoRoll({
       // Copy/duplicate/paste — work regardless of tool/selection model (see
       // getSelectionNotes above), same as the tool shortcuts just below.
       if (e.ctrlKey || e.metaKey) {
+        if (e.key === 'a' || e.key === 'A') {
+          e.preventDefault();
+          setMouseMode('selection');
+          setSelectedIds(notesRef.current.map((note) => note.id));
+          return;
+        }
         if (e.key === 'd' || e.key === 'D') { e.preventDefault(); handleDuplicate(); return; }
         if (e.key === 'c' || e.key === 'C') { e.preventDefault(); handleCopy(); return; }
         if (e.key === 'v' || e.key === 'V') { e.preventDefault(); handlePaste(); return; }
@@ -1980,6 +2014,35 @@ export function PianoRoll({
               <Text style={[styles.toolToggleText, mouseMode === 'selection' && styles.toolToggleTextActive]}>Select</Text>
             </Pressable>
           </View>
+
+          {/* An action beside the tool switch, not a third segment: Pencil/Select persist
+              as modes, while this applies once to the exact editable set on screen. */}
+          <Pressable
+            onPress={handleSelectAllToggle}
+            disabled={notes.length === 0}
+            style={[
+              styles.selectAllBtn,
+              allNotesSelected && styles.selectAllBtnActive,
+              notes.length === 0 && styles.zoomBtnDisabled,
+            ]}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: notes.length === 0 }}
+            accessibilityLabel={allNotesSelected ? 'Clear note selection' : 'Select all visible notes'}
+          >
+            <MaterialCommunityIcons
+              name={allNotesSelected ? 'select-off' : 'select-all'}
+              size={14}
+              color={allNotesSelected ? '#fff' : theme.textSub}
+            />
+            <Text style={[styles.selectAllBtnText, allNotesSelected && styles.selectAllBtnTextActive]}>
+              {allNotesSelected ? 'Clear' : 'Select all'}
+            </Text>
+          </Pressable>
+          {mouseMode === 'selection' && selectedIds.length > 0 && (
+            <Text style={styles.selectionCountText} numberOfLines={1}>
+              {selectedIds.length} selected
+            </Text>
+          )}
 
           <View style={styles.toolbarDivider} />
 
@@ -2586,6 +2649,8 @@ const TOOL_HELP: ToolHelpEntry[] = [
     desc: 'Click empty grid to create a note. Click an existing note to select it. Drag a note to move it, drag its left/right edge to resize. Right-click a note to delete it.' },
   { icon: 'scan-outline', title: 'Selection tool [2]',
     desc: 'Drag to marquee-select multiple notes. Click a note to select just it. Shift+click toggles one note in/out of the selection; Shift+drag adds a marquee to the existing selection instead of replacing it. Once notes are selected, drag the group to move it together, or its edge handles to stretch it. Right-click inside the selection deletes all of it.' },
+  { icon: 'scan-outline', title: 'Select all',
+    desc: 'Selects every visible note in this roll — only the active track in Studio, and never notes hidden by the velocity or duration filters. Once all are selected, the same button clears the selection.' },
   { icon: 'magnet-outline', title: 'Snap',
     desc: 'On/off — whether placing, moving, or dragging a note quantizes to the grid at all, or lands wherever you drop it.' },
   { icon: 'grid-outline', title: 'Grid (1/4, 1/8, 1/16)',
@@ -2613,6 +2678,7 @@ const SHORTCUTS: [string, string][] = [
   ['↑ / ↓', 'Shift the selected note(s) a semitone'],
   ['Shift+↑ / Shift+↓', 'Shift the selected note(s) an octave'],
   ['Backspace / Delete', 'Delete the selected note(s)'],
+  ['Ctrl/Cmd+A', 'Select all visible notes'],
   ['Ctrl/Cmd+C / V / D', 'Copy / paste / duplicate'],
   ['Ctrl/Cmd+Z', 'Undo'],
   ['Shift+Ctrl/Cmd+Z, or Ctrl/Cmd+Y', 'Redo'],
@@ -4022,6 +4088,28 @@ function createStyles(t: Theme) {
     toolToggleSegActive: { backgroundColor: t.accent },
     toolToggleText:       { fontSize: FONT.xs, fontFamily: Poppins.semiBold, color: t.textSub },
     toolToggleTextActive: { color: '#fff' },
+    selectAllBtn: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      justifyContent:    'center',
+      height:            CONTROL_H,
+      gap:               6,
+      paddingHorizontal: 10,
+      borderRadius:      8,
+      backgroundColor:   t.surface,
+      borderWidth:       1,
+      borderColor:       t.border,
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as any,
+    selectAllBtnActive: { backgroundColor: t.accent, borderColor: t.accent },
+    selectAllBtnText: { fontSize: FONT.xs, fontFamily: Poppins.semiBold, color: t.textSub },
+    selectAllBtnTextActive: { color: '#fff' },
+    selectionCountText: {
+      maxWidth:   84,
+      fontSize:   FONT.xs,
+      fontFamily: Poppins.semiBold,
+      color:      t.textMuted,
+    },
     snapBtn: {
       flexDirection:     'row',
       alignItems:        'center',
