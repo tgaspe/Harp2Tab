@@ -1167,14 +1167,17 @@ function ChartTitle({ tabNotesLength, theme, styles }: { tabNotesLength: number;
 }
 
 // Export as an inline dropdown instead of a separate screen — self-contained like
-// KeyTypeControl above, reading tabNotes/key/type/format straight from the store. Web
-// can always trigger a browser download in place; there's no navigation-worthy content
-// on the /export route that isn't just "pick a format, then Save or Share" — the
-// full-page version stays for native, where Sharing.shareAsync/StorageAccessFramework
-// need their own screen.
-function ExportMenu({ tabNotesLength, theme, styles, variant = 'toolbar', collapsed = false }: { tabNotesLength: number; theme: Theme; styles: EditStyles; variant?: 'toolbar' | 'sidebar'; collapsed?: boolean }) {
+// KeyTypeControl above. It reads key/type/format from the store and the rendered note set
+// through `useAudibleNotes`, matching the separate export screen. Web can always trigger a
+// browser download in place; there's no navigation-worthy content on the /export route
+// that isn't just "pick a format, then Save or Share" — the full-page version stays for
+// native, where Sharing.shareAsync/StorageAccessFramework need their own screen.
+function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: { theme: Theme; styles: EditStyles; variant?: 'toolbar' | 'sidebar'; collapsed?: boolean }) {
   const selectedKey     = useAppStore(selectKey);
-  const tabNotes        = useAppStore(selectTabNotes);
+  // Export is a rendered view of the current chart, not a session backup. Hidden notes
+  // remain in the store/library so lowering either floor restores them, but they must not
+  // reappear in a file after the editor, playback and note count have excluded them.
+  const { notes: tabNotes } = useAudibleNotes();
   const harmonicaType   = useAppStore(selectHarmonicaType);
   const exportFormat    = useAppStore(selectExportFmt);
   const recordingTitle  = useAppStore(selectRecordingTitle);
@@ -1189,7 +1192,10 @@ function ExportMenu({ tabNotesLength, theme, styles, variant = 'toolbar', collap
   // only where it genuinely does something else. Fixed for the page's lifetime.
   const canShare = useMemo(() => canShareFiles(), []);
 
-  const disabled = tabNotesLength === 0;
+  // Derived from the same array that is handed to every generator. Taking this as a prop
+  // allowed callers that legitimately needed the raw session count for Save/Inspect to
+  // accidentally keep Export enabled when both filters had hidden the whole chart.
+  const disabled = tabNotes.length === 0;
 
   async function doSave() {
     if (!selectedKey || tabNotes.length === 0 || isExporting) return;
@@ -1684,7 +1690,6 @@ function EditSidebar({
         />
 
         <ExportMenu
-          tabNotesLength={tabNotesLength}
           collapsed={collapsed}
           theme={theme}
           styles={styles}
@@ -1846,9 +1851,8 @@ function WebToolbar({
             everything else here is a neutral, icon-only utility. Opens inline instead of
             navigating to a separate page — on web there's no reason to leave the editor
             just to pick a format and download. */}
-        <ExportMenu tabNotesLength={tabNotesLength} theme={theme} styles={styles} />
+        <ExportMenu theme={theme} styles={styles} />
       </View>
     </View>
   );
 }
-
