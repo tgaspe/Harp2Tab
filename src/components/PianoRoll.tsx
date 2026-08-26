@@ -10,6 +10,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { useFocusEffect } from 'expo-router';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from 'react-native-reanimated';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -753,7 +754,20 @@ export function PianoRoll({
   // there's no cross-thread staleness concern despite it being a plain ref rather than a
   // Reanimated shared value. Drives the selection tool's additive click/drag-marquee.
   const shiftHeldRef = useRef(false);
-  useEffect(() => {
+  /**
+   * All three of this file's `window` key listeners bind on **focus**, not on mount — see
+   * `useUndoRedoShortcuts`, which had to learn the same lesson. Screens are pushed rather
+   * than replaced, so a roll on a screen you navigated away from is still mounted and its
+   * effects are still running; with a mount-scoped listener, the editor left behind kept
+   * answering Delete and Ctrl+D against the same store, and a second editor in the stack
+   * ran every shortcut twice. A roll that isn't on the screen you're looking at should not
+   * be listening to your keyboard.
+   *
+   * Shift-tracking gets the same treatment despite touching nothing but its own ref, so the
+   * rule holds for the whole file rather than for two of three listeners. Cleared on the way
+   * out, which also fixes the ref sticking `true` when the keyup lands somewhere else.
+   */
+  useFocusEffect(useCallback(() => {
     if (Platform.OS !== 'web' || viewOnly) return;
     function onKeyDown(e: KeyboardEvent) { if (e.key === 'Shift') shiftHeldRef.current = true; }
     function onKeyUp(e: KeyboardEvent) { if (e.key === 'Shift') shiftHeldRef.current = false; }
@@ -762,8 +776,9 @@ export function PianoRoll({
     return () => {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
+      shiftHeldRef.current = false;
     };
-  }, [viewOnly]);
+  }, [viewOnly]));
 
   // Marquee drag preview — driven entirely on the UI thread via shared values (like the
   // note-block drag previews below) rather than React state, since onUpdate fires at
@@ -1475,7 +1490,7 @@ export function PianoRoll({
     });
   }
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     // Every shortcut below either edits or picks a tool, so a view-only roll registers
     // none of them — and being window-level, they'd otherwise be live for a screen that
     // has no visible control doing the same thing.
@@ -1575,7 +1590,7 @@ export function PianoRoll({
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [positions, onUpdate, onDelete, onSelect, deleteMany, viewOnly]);
+  }, [positions, onUpdate, onDelete, onSelect, deleteMany, viewOnly]));
 
   // Modifier + scroll to zoom, cursor-anchored so the timestamp under the pointer stays
   // fixed on screen as the scale changes (the same technique used by Signal/most DAWs) —
@@ -1754,7 +1769,7 @@ export function PianoRoll({
   // Escape aborts whatever's in progress: a live drag snaps back to the dock without
   // dropping a pin; with no active drag, it clears an already-dropped first pin instead
   // of leaving the user stuck waiting to place a second one they no longer want.
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     // No dock to drag a pin out of when the roll is view-only, so nothing to abort.
     if (Platform.OS !== 'web' || viewOnly) return;
     function onKeyDown(e: KeyboardEvent) {
@@ -1768,7 +1783,7 @@ export function PianoRoll({
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [viewOnly]);
+  }, [viewOnly]));
 
   // A plain Pressable nested inside a gesture-heavy ancestor is untested territory in
   // this file — every other interactive element inside one (resize handles, etc.) is

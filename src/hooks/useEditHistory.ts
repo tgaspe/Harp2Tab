@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { Platform } from 'react-native';
 
 /**
@@ -79,9 +80,19 @@ export function useEditHistory<T>(
  * Screen-level rather than scoped to the piano roll, since undo/redo apply to the tab
  * editor's list view too. Skips text inputs so the browser's native field-undo still works
  * in the rename/tempo fields instead of being hijacked by the document's history.
+ *
+ * **Bound on focus, not on mount** — the same rule `edit.tsx` and `studio.tsx` already follow
+ * for their header actions, and for the same reason: screens are pushed rather than replaced,
+ * so a screen left behind stays mounted with its effects alive. A `useEffect` here put one
+ * live `window` listener on *every* mounted instance, and they all share the one history:
+ * two editors in the stack (the title in the TopBar pushes `/app` rather than popping to it,
+ * so `/app → /edit → /app → /edit` is an ordinary afternoon) turned each Ctrl+Z into two
+ * undos, and a Ctrl+Z in the editor also quietly undid an edit in the Studio mounted beneath
+ * it. Focus is what "this screen's shortcut" actually means; mount only approximated it while
+ * a single screen was ever mounted at a time.
  */
 export function useUndoRedoShortcuts({ undo, redo }: Pick<EditHistory, 'undo' | 'redo'>) {
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     if (Platform.OS !== 'web') return;
 
     function isTextInput(target: EventTarget | null): boolean {
@@ -103,5 +114,5 @@ export function useUndoRedoShortcuts({ undo, redo }: Pick<EditHistory, 'undo' | 
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [undo, redo]);
+  }, [undo, redo]));
 }

@@ -197,8 +197,7 @@ export default function ImportScreen() {
   const harmonicaType  = useAppStore(selectHarmonicaType);
   const startImportedSession = useAppStore((s) => s.startImportedSession);
   const selectKey_           = useAppStore((s) => s.selectKey);
-  const addTabNotes          = useAppStore((s) => s.addTabNotes);
-  const setBpm               = useAppStore((s) => s.setBpm);
+  const commitImportedNotes  = useAppStore((s) => s.commitImportedNotes);
   const incrementRecordingCount = useSettingsStore((s) => s.incrementRecordingCount);
   const saveProject             = useMidiProjectsStore((s) => s.saveProject);
   const tabNotes                = useAppStore((s) => s.tabNotes);
@@ -661,10 +660,12 @@ export default function ImportScreen() {
     }
 
     selectKey_(key);
-    // Set before the notes land: setBpm re-times whatever is already in the session to keep
-    // its bar positions, which would drag these notes off the timings the file states.
-    if (bpm) setBpm(Math.round(bpm));
-    addTabNotes(tabbed);
+    // Tempo and notes land together, in one action that is not undo-tracked. Doing it as
+    // `setBpm` + `addTabNotes` made the import two undoable edits over an empty session, so
+    // Ctrl+Z in the editor could delete the whole imported tab (and `setBpm` had to run first
+    // to avoid re-timing the arriving notes off the timings the file states — a constraint
+    // that only existed because the two were separate steps).
+    commitImportedNotes(tabbed, bpm);
 
     // The free-tier session is consumed here, on success — not when the file was picked.
     incrementRecordingCount();

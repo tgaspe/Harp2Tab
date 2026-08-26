@@ -132,6 +132,7 @@ interface AppActions {
   setDurationFloorMs:  (value: number) => void;
   applyDetectedTempo:  (bpm: number, offsetMs: number) => void;
   loadRecording:  (recording: TabRecording) => void;
+  commitImportedNotes: (notes: Omit<TabNote, 'id'>[], bpm: number | null) => void;
   reset:          () => void;
 }
 
@@ -235,6 +236,36 @@ export const useAppStore = create<AppState & AppActions>()(
         s.durationFloorMs    = 0;
       }),
 
+    /**
+     * Lands a converted MIDI track in the session `startImportedSession` just opened.
+     *
+     * Exists because the obvious spelling of it — `setBpm()` then `addTabNotes()` — makes the
+     * *import itself* two undoable edits. Both push a snapshot of the session as it was a
+     * moment earlier, which is empty, so a user who drew a few notes and pressed Ctrl+Z past
+     * them fell straight through into "Nothing to edit yet" with the whole imported tab gone.
+     * `useEditHistory`'s own note states the rule for MIDI projects — history must never make
+     * Ctrl+Z able to un-import a file — and this is the tab session's side of it.
+     *
+     * Establishing the session rather than editing it, so it clears history/future outright,
+     * exactly as `loadRecording` does for a library entry.
+     *
+     * `bpm` is assigned, not applied: `setBpm` re-times existing notes to hold their bar
+     * positions, which is right for a user turning the dial and wrong here — these notes
+     * arrive already carrying the timings the file states, and the tempo is a description of
+     * them rather than a change to them. Landing both together is what makes that safe;
+     * ordering the two calls was the old way to approximate it.
+     */
+    commitImportedNotes: (notes, bpm) =>
+      set((s) => {
+        if (bpm !== null) s.bpm = Math.max(20, Math.min(400, Math.round(bpm)));
+        s.tabNotes = notes.map((note) => ({
+          ...note,
+          id: `note-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        }));
+        s.history  = [];
+        s.future   = [];
+      }),
+
     stopRecording: () =>
       set((s) => {
         s.isRecording = false;
@@ -293,7 +324,13 @@ export const useAppStore = create<AppState & AppActions>()(
     addTabNote: (note) =>
       set((s) => {
         if (s.isPaused) return;
-        pushHistory(s);
+        // Nothing to undo *to* while a take is being captured: each note here is the session
+        // being created, not an edit to one. Snapshotting them buried the editor's real
+        // history under one entry per detected note — and the deepest of those restores the
+        // empty session the take started from, so holding Ctrl+Z in the editor erased the
+        // whole take note by note. The editor's own additions (Add Note, the roll's pencil)
+        // come through here too and stay undoable; only live capture is exempt.
+        if (!s.isRecording) pushHistory(s);
         const id = `note-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         s.tabNotes.push({ ...note, id });
       }),
