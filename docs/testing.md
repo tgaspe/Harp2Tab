@@ -24,8 +24,7 @@ written that way. Read that before changing one.
 | `verify-entitlement.ts` | 54 | The entitlement resolver — RevenueCat event → document → access — with an injected clock, so renewals and expiries don't take a month to test |
 | `verify-firestore-rules.ts` | 24 | `firestore.rules` against the emulator. **Needs a second terminal**, see below |
 | `verify-hsa.ts` | 17 | The HSA v2 engine (Phase 16): chunked CQT equals whole-file CQT, the poly pass frame-for-frame against the Python reference, `detectReattacks` unit cases, `resegment` purity, and the round trip on a real take |
-| `verify-soundfont.ts` | 36 | Sampled-instrument resolution (11-6): zone boundaries, semitone/octave playback rates, cents folding, loop offsets against the sample's own rate, drum keys selected rather than transposed, SF2 stereo pairs collapsing to one zone, percussion surviving the Studio flatten, and the nominal/wall/buffer clock conversion behind a mid-note seek |
-| `verify-playback.ts` | 11 | The web scheduler (11-6) against a faked Web Audio and the real sound packages on disk: a multi-track project schedules every note as samples, a malformed manifest doesn't poison the preload, the `.web.ts` platform split is the one under test, and repeated restarts do not exhaust the browser's AudioContext budget |
+| `verify-playback.ts` | 17 | The web scheduler (11-6): MIDI channel allocation (percussion never takes a melodic channel), note-on/note-off event building across a seek, a dense 3,840-note track, and that repeated restarts don't exhaust the browser's AudioContext budget |
 
 ### Firestore rules
 

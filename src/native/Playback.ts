@@ -60,3 +60,7 @@ export function stopPlayback(): void {
   player?.remove();
   player = null;
 }
+
+/** Native has no worklet and no synth — `synthesizeWav` renders its own oscillator voices.
+ *  Present so the two platforms' modules export the same surface. */
+export async function warmSynth(): Promise<void> { /* no-op */ }

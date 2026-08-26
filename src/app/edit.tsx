@@ -35,9 +35,7 @@ import { pickMidiFile } from '@/audio/pickMidiFile';
 import { useRollTransport, formatElapsed } from '@/hooks/useRollTransport';
 import { useUndoRedoShortcuts } from '@/hooks/useEditHistory';
 import { useSaveShortcut } from '@/hooks/keyboardShortcuts';
-import { previewNote } from '@/native/Playback';
-import { ensureProgramsLoaded } from '@/audio/soundfont';
-import { DEFAULT_PROGRAM } from '@/audio/timbre';
+import { previewNote, warmSynth } from '@/native/Playback';
 import { noteToTab } from '@/audio/HarmonicaMapper';
 import { generateForFormat, singlePart } from '@/export/generators';
 import { canShareFiles, contentToBlob, exportFileName, triggerWebDownload } from '@/export/webDownload';
@@ -104,11 +102,10 @@ export default function EditScreen() {
     onStop: stop, loopEnabled, setLoopEnabled, playbackRate,
   } = transport;
 
-  // Warm the harmonica on arrival. A tab session is one harmonica and nothing else, the
-  // package is ~100 KB, and doing it here means the first note click already sounds like the
-  // instrument rather than like the sine that stands in until it lands. Never rejects; a
+  // Warm the synth on arrival, so the first note click already sounds like a harmonica
+  // rather than like the sine that stands in until the soundfont lands. Never rejects; a
   // failure just leaves the oscillator fallback in place.
-  useEffect(() => { void ensureProgramsLoaded([DEFAULT_PROGRAM], false); }, []);
+  useEffect(() => { void warmSynth(); }, []);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [justSaved, setJustSaved] = useState(false);

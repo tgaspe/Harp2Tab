@@ -1,22 +1,32 @@
 import { noteNameToMidi } from '@/audio/HarmonicaMapper';
 import {
-  cachedBuffer, cachedDrumBuffer, cachedDrumKit, cachedManifest,
-  drumZoneForKey, DRUM_PROGRAM, ensureProgramsLoaded, loopSecondsFor, playbackRateFor,
-  sampleOffsetSecFor, zoneForKey,
-} from '@/audio/soundfont';
+  currentSynth, loadSynth, PERCUSSION_CHANNEL, synthAttempted,
+} from '@/audio/synth/SoundFontSynth';
+import type { Synth } from '@/audio/synth/types';
 import { noteNameToFrequency } from '@/audio/synthesizeWav';
 import { constantTempoMap, gridLines, type PlaybackOptions } from '@/audio/tempo';
 import { DEFAULT_PROGRAM, velocityGain, voiceForProgram } from '@/audio/timbre';
 import { noteVelocity } from '@/audio/velocity';
 import type { TabNote } from '@/types';
 
-// Web gets real-time OscillatorNode scheduling — no pre-render/file-write round-trip
-// needed like the native path, since Web Audio can schedule tones directly.
+/*
+ * Web playback is a General MIDI synthesizer fed a stream of MIDI events, not a graph of
+ * per-note audio nodes. The node-per-note design it replaced cost 19,200 nodes for a single
+ * dense track and the audio thread gave up partway through a song; here the graph is one
+ * worklet node whatever the song is. See `SoundFontSynth.web.ts` for why the whole sampler
+ * went with it.
+ *
+ * The oscillator path below survives untouched as the fallback, for the moment before the
+ * soundfont has loaded and for any browser where the worklet won't start.
+ */
+
 const AMPLITUDE = 0.3;
-/** Samples are recorded well below full scale, where the oscillators were trimmed to 0.3
- *  against a bare destination. Set by ear against the fallback (Task 4 Step 8) so that a
- *  sampled track and an oscillator track in the same project sit level with each other. */
-const AMPLITUDE_SAMPLED = 0.5;
+
+/** How often the scheduler wakes, and how far past that it looks. Events are handed to the
+ *  synth with an absolute context time, so the window only has to outlast the timer's own
+ *  jitter — it is not what makes the timing accurate. Matching Signal's player. */
+const TIMER_INTERVAL_MS = 50;
+const LOOK_AHEAD_MS = 100;
 
 /**
  * One context for the whole session, not one per playback.
@@ -27,34 +37,21 @@ const AMPLITUDE_SAMPLED = 0.5;
  * change and live edit reschedules, so half a dozen clicks was enough to hit the cap;
  * construction then throws, and since `playNotes` is called without `await` that surfaces as
  * an unhandled rejection and the app goes permanently silent.
- *
- * Reusing one context also means the output stage below is built once rather than leaking a
- * compressor onto `destination` per play.
  */
 let audioContext: AudioContext | null = null;
-let outputStage: AudioNode | null = null;
 
-function playbackGraph(): { ctx: AudioContext; output: AudioNode } {
-  if (!audioContext || !outputStage) {
-    const ctx = new AudioContext();
-    // One output stage for both the sampled and the oscillator path. A dozen sampled tracks
-    // clip where a dozen sine waves did not, and compressing only the sampled path would
-    // make the *fallback* audibly louder than the real thing, which is precisely backwards.
-    // The metronome deliberately bypasses it: a reference click should not duck under a loud
-    // bar.
-    const compressor = ctx.createDynamicsCompressor();
-    compressor.threshold.value = -12;
-    compressor.ratio.value = 4;
-    compressor.connect(ctx.destination);
-    audioContext = ctx;
-    outputStage = compressor;
-  }
-  return { ctx: audioContext, output: outputStage };
+function playbackContext(): AudioContext {
+  if (!audioContext) audioContext = new AudioContext();
+  // A context built outside a user gesture starts suspended, and `pausePlayback` suspends
+  // this one deliberately — either way a fresh schedule needs it running.
+  if (audioContext.state === 'suspended') void audioContext.resume();
+  return audioContext;
 }
-/** Oscillators and buffer sources both, under their common supertype — `stopPlayback` only
- *  needs `stop()`, and keeping one list means a sampled voice can never be left running by a
- *  code path that forgot about it. */
+
+/** Oscillator voices and metronome clicks, so `stopPlayback` can silence them. Synth notes
+ *  are not in here — they are stopped through the synth itself. */
 let activeVoices: AudioScheduledSourceNode[] = [];
+let schedulerTimer: ReturnType<typeof setInterval> | null = null;
 
 function scheduleMetronome(
   ctx: AudioContext,
@@ -89,6 +86,8 @@ function scheduleMetronome(
     gain.gain.setValueAtTime(accented ? 0.5 : 0.35, startSec);
     gain.gain.exponentialRampToValueAtTime(0.0001, startSec + 0.03);
     osc.connect(gain);
+    // Deliberately straight to the destination: a reference click should not duck under a
+    // loud bar the way it would through the synth's own output.
     gain.connect(ctx.destination);
     osc.start(startSec);
     osc.stop(startSec + 0.04);
@@ -96,175 +95,140 @@ function scheduleMetronome(
   }
 }
 
-/**
- * One buffer source, or two panned hard apart when the zone came from an SF2 stereo pair.
- *
- * A pair is two mono samples, so playing only the left — which is what happens if you treat
- * `fileRight` as optional decoration — gives a thin, slightly-off instrument rather than an
- * obvious defect. If the right channel isn't in the cache the left plays alone, which is
- * still better than silence.
- */
-function buildSources(
-  ctx: AudioContext,
-  left: AudioBuffer,
-  right: AudioBuffer | null,
-  destination: AudioNode,
-  playbackRate: number,
-): AudioBufferSourceNode[] {
-  const make = (buffer: AudioBuffer, pan: number | null): AudioBufferSourceNode => {
-    const source = ctx.createBufferSource();
-    source.buffer = buffer;
-    source.playbackRate.value = playbackRate;
-    if (pan === null) {
-      source.connect(destination);
-    } else {
-      const panner = ctx.createStereoPanner();
-      panner.pan.value = pan;
-      source.connect(panner);
-      panner.connect(destination);
-    }
-    return source;
-  };
-  return right ? [make(left, -1), make(right, 1)] : [make(left, null)];
+// ── MIDI event scheduling ─────────────────────────────────────────────────────
+
+export interface MidiEvent {
+  /** Nominal project time, ms — unscaled by playback rate, like every position in this file. */
+  atMs: number;
+  channel: number;
+  key: number;
+  /** Absent for a note-off. */
+  velocity?: number;
 }
 
-/** Gain → optional low-pass → optional pan → output.
+/**
+ * Programs get a MIDI channel each, because a channel is what carries an instrument in MIDI.
  *
- *  The filter is SF2's `initialFilterFc`, and it is not optional polish: for a lot of
- *  MuseScore General that filter is most of the timbre, and omitting it is what makes a
- *  sampled GM set sound bright and synthetic in a way that is hard to diagnose later. */
-function connectVoiceTail(
+ * Channel 9 is reserved: GM puts percussion there, keyed by note rather than transposed by
+ * it, and the synth applies that rule from the channel alone. A project with more distinct
+ * instruments than the remaining fifteen channels reuses channel 0 for the overflow, which
+ * makes those tracks share a sound rather than fall silent.
+ */
+export function assignChannels(notes: TabNote[]): Map<number, number> {
+  const channels = new Map<number, number>();
+  let next = 0;
+  for (const n of notes) {
+    if (n.percussion) continue;
+    const program = n.program ?? DEFAULT_PROGRAM;
+    if (channels.has(program)) continue;
+    if (next === PERCUSSION_CHANNEL) next++;
+    if (next > 15) continue;
+    channels.set(program, next++);
+  }
+  return channels;
+}
+
+/** Note-ons and note-offs in time order, ready for the window loop to walk once. */
+export function buildEvents(notes: TabNote[], channels: Map<number, number>, startAtMs: number): MidiEvent[] {
+  const events: MidiEvent[] = [];
+  for (const n of notes) {
+    const noteEnd = n.start_time + n.duration;
+    if (noteEnd <= startAtMs) continue; // fully before the seek point
+    const key = noteNameToMidi(n.note);
+    if (key === null) continue;
+
+    const channel = n.percussion
+      ? PERCUSSION_CHANNEL
+      : channels.get(n.program ?? DEFAULT_PROGRAM) ?? 0;
+
+    /* A note straddling the seek point is re-struck at the seek position rather than
+     * resumed part-way through. The sampler this replaced could start a buffer at an offset;
+     * MIDI has no way to say "this note is already half over", so the choice is a fresh
+     * attack or silence. Signal's player makes the same one. */
+    events.push({ atMs: Math.max(n.start_time, startAtMs), channel, key, velocity: noteVelocity(n) ?? 100 });
+    events.push({ atMs: noteEnd, channel, key });
+  }
+  return events.sort((a, b) => a.atMs - b.atMs);
+}
+
+function startScheduler(
   ctx: AudioContext,
-  gain: GainNode,
-  pan: number,
-  filterHz: number | undefined,
-  filterQ: number | undefined,
-  output: AudioNode,
+  synth: Synth,
+  events: MidiEvent[],
+  startAtMs: number,
+  rate: number,
 ): void {
-  let tail: AudioNode = gain;
-  if (filterHz !== undefined) {
-    const filter = ctx.createBiquadFilter();
-    filter.type = 'lowpass';
-    filter.frequency.value = filterHz;
-    filter.Q.value = filterQ ?? 1;
-    tail.connect(filter);
-    tail = filter;
-  }
-  if (pan !== 0) {
-    const panner = ctx.createStereoPanner();
-    panner.pan.value = pan;
-    tail.connect(panner);
-    tail = panner;
-  }
-  tail.connect(output);
+  const originSec = ctx.currentTime;
+  let index = 0;
+
+  const pump = (): void => {
+    // `ctx.currentTime` freezes while the context is suspended, so a paused transport
+    // simply stops finding events in range — the timer can keep ticking harmlessly.
+    const horizonSec = ctx.currentTime + LOOK_AHEAD_MS / 1000;
+    while (index < events.length) {
+      const event = events[index];
+      const timeSec = originSec + (event.atMs - startAtMs) / 1000 / rate;
+      if (timeSec > horizonSec) break;
+      // Absolute context time, so the synth places the event to the sample even though this
+      // loop only wakes every 50 ms.
+      const at = { time: Math.max(timeSec, ctx.currentTime) };
+      if (event.velocity === undefined) synth.noteOff(event.channel, event.key, at);
+      else synth.noteOn(event.channel, event.key, event.velocity, at);
+      index++;
+    }
+    if (index >= events.length && schedulerTimer) {
+      clearInterval(schedulerTimer);
+      schedulerTimer = null;
+    }
+  };
+
+  pump();
+  if (index < events.length) schedulerTimer = setInterval(pump, TIMER_INTERVAL_MS);
 }
 
 export async function playNotes(notes: TabNote[], options?: PlaybackOptions, startAtMs = 0): Promise<void> {
   stopPlayback();
   if (notes.length === 0) return;
 
-  const { ctx, output: compressor } = playbackGraph();
-  // A context built outside a user gesture starts suspended, and `pausePlayback` suspends
-  // this one deliberately — either way a fresh schedule needs it running.
-  if (ctx.state === 'suspended') void ctx.resume();
+  const ctx = playbackContext();
   const now = ctx.currentTime;
   const rate = options?.rate ?? 1;
 
+  const synth = currentSynth();
+  if (synth) {
+    const channels = assignChannels(notes);
+    for (const [program, channel] of channels) synth.programChange(channel, program);
+    startScheduler(ctx, synth, buildEvents(notes, channels, startAtMs), startAtMs, rate);
+  } else {
+    // The soundfont isn't up yet. Play the oscillator voices this file has always had, and
+    // start the load so the next press is the real thing.
+    if (!synthAttempted()) void loadSynth(ctx);
+    scheduleOscillators(ctx, notes, startAtMs, rate);
+  }
+
+  if (options?.metronomeEnabled) {
+    const totalMs = notes.reduce((max, n) => Math.max(max, n.start_time + n.duration), 0);
+    scheduleMetronome(ctx, now, totalMs, options, rate, startAtMs);
+  }
+}
+
+/** The pre-synth engine, kept whole as the fallback. Distinguishable rather than realistic —
+ *  see `timbre.ts` for what these voices are for. */
+function scheduleOscillators(ctx: AudioContext, notes: TabNote[], startAtMs: number, rate: number): void {
+  const now = ctx.currentTime;
   for (const n of notes) {
     const noteEnd = n.start_time + n.duration;
-    if (noteEnd <= startAtMs) continue; // fully before the seek point
+    if (noteEnd <= startAtMs) continue;
 
     const freq = noteNameToFrequency(n.note);
     if (freq <= 0) continue;
 
-    // Notes straddling the seek point start partway through rather than jumping to
-    // wherever they'd naturally begin, so playback picks up exactly at the seek point.
     const effectiveStart = Math.max(n.start_time, startAtMs);
     const startSec = now + (effectiveStart - startAtMs) / 1000 / rate;
-    const durSec    = (noteEnd - effectiveStart) / 1000 / rate;
-    const fadeSec   = Math.min(0.01, durSec / 4);
-
-    const midiKey = noteNameToMidi(n.note);
-
-    // ── Percussion ────────────────────────────────────────────────────────────
-    // Ahead of the melodic branch because a drum note's `program` is meaningless: channel 9
-    // names a drum by pitch, so resolving it as an instrument would play a room full of
-    // pianos for a drum part.
-    if (n.percussion) {
-      const kit = cachedDrumKit();
-      const drum = kit && midiKey !== null ? drumZoneForKey(kit, midiKey) : null;
-      const drumBuffer = drum ? cachedDrumBuffer(drum) : null;
-
-      if (drum && drumBuffer) {
-        const gain = ctx.createGain();
-        const peak = AMPLITUDE_SAMPLED * drum.gain * velocityGain(noteVelocity(n));
-        gain.gain.setValueAtTime(0, startSec);
-        gain.gain.linearRampToValueAtTime(peak, startSec + 0.002);
-        connectVoiceTail(ctx, gain, drum.pan, undefined, undefined, compressor);
-
-        // Selected, never transposed, and never stopped at `startSec + durSec`: a drum
-        // sample is a one-shot whose length is a property of the sound, so cutting a crash
-        // off at its notated duration is the most obvious way to make a kit sound wrong.
-        // `stopPlayback` still kills it, because it goes into `activeVoices`.
-        for (const source of buildSources(ctx, drumBuffer, drum.fileRight ? cachedBuffer(DRUM_PROGRAM, drum.fileRight) : null, gain, 1)) {
-          source.start(startSec);
-          activeVoices.push(source);
-        }
-        continue;
-      }
-      // No kit loaded — fall through to the oscillator, which is what a drum note does today.
-    }
-
-    // ── Sampled melodic voice ─────────────────────────────────────────────────
-    // A note with no program of its own is a tab session's note, and a tab session is one
-    // harmonica. The oscillator branch below still reads `n.program` directly, so its own
-    // no-program default (`DEFAULT_VOICE`) is unchanged.
-    const program = n.program ?? DEFAULT_PROGRAM;
-    const manifest = cachedManifest(program);
-    const zone = manifest && midiKey !== null ? zoneForKey(manifest, midiKey) : null;
-    const buffer = zone ? cachedBuffer(program, zone.file) : null;
-
-    if (zone && buffer && midiKey !== null) {
-      // Pitch and tuning ONLY. `rate` divides the scheduled times above exactly as it does
-      // for the oscillator path; folding it in here would transpose the project up an
-      // octave at 2x speed, which the oscillator path has never done.
-      const pitchRate = playbackRateFor(zone, midiKey);
-
-      const gain = ctx.createGain();
-      const peak = AMPLITUDE_SAMPLED * zone.gain * velocityGain(noteVelocity(n));
-      // No ADSR here: the attack and decay are already in the recording, and re-applying the
-      // oscillator envelope on top of them would blunt exactly what makes a sample sound
-      // real. Only a 2 ms declick in and the zone's own release out.
-      const attack  = Math.min(0.002, durSec / 4);
-      const release = Math.min(zone.releaseSec, Math.max(0.002, durSec - attack));
-      gain.gain.setValueAtTime(0, startSec);
-      gain.gain.linearRampToValueAtTime(peak, startSec + attack);
-      gain.gain.setValueAtTime(peak, startSec + Math.max(attack, durSec - release));
-      gain.gain.linearRampToValueAtTime(0, startSec + durSec);
-
-      connectVoiceTail(ctx, gain, zone.pan, zone.filterHz, zone.filterQ, compressor);
-
-      const right = zone.fileRight ? cachedBuffer(program, zone.fileRight) : null;
-      const loop = loopSecondsFor(zone);
-      // A sample seeked into mid-note starts partway through itself, matching what the
-      // oscillator path already does with `effectiveStart`.
-      const offsetSec = sampleOffsetSecFor(effectiveStart - n.start_time, rate, pitchRate);
-      for (const source of buildSources(ctx, buffer, right, gain, pitchRate)) {
-        if (loop) {
-          source.loop = true;
-          source.loopStart = loop.start;
-          source.loopEnd = loop.end;
-        }
-        source.start(startSec, offsetSec);
-        source.stop(startSec + durSec + 0.02);
-        activeVoices.push(source);
-      }
-      continue;
-    }
+    const durSec   = (noteEnd - effectiveStart) / 1000 / rate;
+    const fadeSec  = Math.min(0.01, durSec / 4);
 
     const voice = voiceForProgram(n.program);
-    // Velocity is the note's dynamics — a tab session leaves it unset and every note plays
-    // at full level, exactly as before.
     const peak  = AMPLITUDE * voice.gain * velocityGain(noteVelocity(n));
 
     const osc  = ctx.createOscillator();
@@ -272,9 +236,6 @@ export async function playNotes(notes: TabNote[], options?: PlaybackOptions, sta
     osc.type = voice.type;
     osc.frequency.value = freq;
 
-    // ADSR, clamped so a short note still gets a complete envelope rather than an attack
-    // that outlasts it. The trailing ramp to zero doubles as the click-free fade the plain
-    // sine used to do by hand.
     const attack  = Math.min(voice.attackSec, durSec * 0.4);
     const decay   = Math.min(voice.decaySec, Math.max(0, durSec - attack) * 0.6);
     const release = Math.min(voice.releaseSec, Math.max(fadeSec, durSec - attack - decay));
@@ -287,72 +248,40 @@ export async function playNotes(notes: TabNote[], options?: PlaybackOptions, sta
     gain.gain.linearRampToValueAtTime(0, startSec + durSec);
 
     osc.connect(gain);
-    gain.connect(compressor);
+    gain.connect(ctx.destination);
     osc.start(startSec);
     osc.stop(startSec + durSec + 0.02);
     activeVoices.push(osc);
   }
-
-  if (options?.metronomeEnabled) {
-    const totalMs = notes.reduce((max, n) => Math.max(max, n.start_time + n.duration), 0);
-    scheduleMetronome(ctx, now, totalMs, options, rate, startAtMs);
-  }
 }
 
-// Single-tone preview (e.g. clicking a note in the piano-roll editor to hear it) — its
-// own one-shot AudioContext, entirely independent from the transport's `audioContext`
-// above, so it can't be paused/stopped by playback controls and doesn't touch
-// isPlaying/isPaused state. Closed once the tone finishes so repeated clicks don't leak
-// contexts.
-/** Preview keeps its own context, so pausing the transport (which suspends the playback
- *  context) can't silence a click on a note. Reused rather than per-click, for the same
- *  budget reason as `playbackGraph`. */
-let previewContext: AudioContext | null = null;
-
+/**
+ * Single-tone preview — clicking a note in the piano roll.
+ *
+ * Runs on the shared context and the shared synth, unlike the separate one-shot context this
+ * used to build. `stopAll` is deliberately not called here: a preview must not silence a
+ * running transport, and a short note released on its own is enough.
+ */
 export function previewNote(noteName: string, durationMs = 180, program = DEFAULT_PROGRAM): void {
-  const freq = noteNameToFrequency(noteName);
-  if (freq <= 0) return;
+  const ctx = playbackContext();
+  const key = noteNameToMidi(noteName);
+  const synth = currentSynth();
 
-  if (!previewContext) previewContext = new AudioContext();
-  const ctx = previewContext;
-  if (ctx.state === 'suspended') void ctx.resume();
-  const now = ctx.currentTime;
-  const durSec  = durationMs / 1000;
-  const fadeSec = Math.min(0.01, durSec / 4);
-
-  // Sampled when the instrument is already resident, so a click sounds like the transport
-  // does. Warming it is fire-and-forget: this preview stays a sine rather than waiting, and
-  // the next click is the real instrument. The tab editor warms the harmonica on mount, so
-  // in practice that only happens if the fetch is still in flight.
-  const midiKey = noteNameToMidi(noteName);
-  const manifest = cachedManifest(program);
-  const zone = manifest && midiKey !== null ? zoneForKey(manifest, midiKey) : null;
-  const buffer = zone ? cachedBuffer(program, zone.file) : null;
-
-  if (zone && buffer && midiKey !== null) {
-    const gain = ctx.createGain();
-    const peak = AMPLITUDE_SAMPLED * zone.gain;
-    gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(peak, now + 0.002);
-    gain.gain.setValueAtTime(peak, now + Math.max(0.002, durSec - zone.releaseSec));
-    gain.gain.linearRampToValueAtTime(0, now + durSec);
-    gain.connect(ctx.destination);
-
-    const loop = loopSecondsFor(zone);
-    const right = zone.fileRight ? cachedBuffer(program, zone.fileRight) : null;
-    for (const source of buildSources(ctx, buffer, right, gain, playbackRateFor(zone, midiKey))) {
-      if (loop) {
-        source.loop = true;
-        source.loopStart = loop.start;
-        source.loopEnd = loop.end;
-      }
-      source.start(now);
-      source.stop(now + durSec + 0.02);
-    }
+  if (synth && key !== null) {
+    const at = ctx.currentTime;
+    synth.programChange(15, program);
+    synth.noteOn(15, key, 100, { time: at });
+    synth.noteOff(15, key, { time: at + durationMs / 1000 });
     return;
   }
 
-  void ensureProgramsLoaded([program], false);
+  if (!synthAttempted()) void loadSynth(ctx);
+
+  const freq = noteNameToFrequency(noteName);
+  if (freq <= 0) return;
+  const now = ctx.currentTime;
+  const durSec  = durationMs / 1000;
+  const fadeSec = Math.min(0.01, durSec / 4);
 
   const osc  = ctx.createOscillator();
   const gain = ctx.createGain();
@@ -368,6 +297,7 @@ export function previewNote(noteName: string, durationMs = 180, program = DEFAUL
   gain.connect(ctx.destination);
   osc.start(now);
   osc.stop(now + durSec + 0.02);
+  activeVoices.push(osc);
 }
 
 export function pausePlayback(): void {
@@ -379,11 +309,23 @@ export function resumePlayback(): void {
 }
 
 export function stopPlayback(): void {
+  if (schedulerTimer) {
+    clearInterval(schedulerTimer);
+    schedulerTimer = null;
+  }
+  // Everything the synth is holding, including notes whose note-off was never reached
+  // because the transport stopped mid-phrase.
+  currentSynth()?.stopAll(true);
   activeVoices.forEach((voice) => {
     try { voice.stop(); } catch { /* already stopped */ }
   });
   activeVoices = [];
-  // The context is deliberately kept. Closing it here is what used to exhaust the browser's
-  // context budget — see `playbackGraph`. Stopped voices are collected once they end, and an
-  // idle context costs nothing.
+  // The context is deliberately kept — closing it is what used to exhaust the browser's
+  // context budget.
+}
+
+/** Warm the worklet and soundfont. Callers use this to get the load out of the way before
+ *  the first play rather than after it; it never rejects. */
+export async function warmSynth(): Promise<void> {
+  await loadSynth(playbackContext());
 }
