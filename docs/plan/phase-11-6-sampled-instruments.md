@@ -1598,6 +1598,11 @@ compile. Executed order: 1, 2, 3, 4+5, 7, then 6, 8, 9.
     `SampleZone.fileRight` and `pairStereo` handle it; three harness cases lock it in.
   - **`trackToTabNotes` is the only birth site** for a `TabNote` from a track, not the two
     the plan named. `midiProject` builds `MidiTrackData`, which already carries the channel.
+- **The tab editor now plays the harmonica** (user request, 2026-08-26). `TabNote.program` is
+  absent for a tab session and that absence already meant "one harmonica"; `DEFAULT_PROGRAM`
+  (`timbre.ts`) makes it audible instead of a stand-in sine. This also lands the half of Task
+  8 that `previewNote` needed — it takes an optional program now — so Task 8 is reduced to
+  the TrackList picker.
 - **Still open:** Task 4 Steps 6–8 (the listening tests), Task 6 (the full converter and the
   drum kit), Task 8 (previews), Task 9 (ship). Only the grand piano exists as an asset, so
   every other program — and every drum note — currently takes the oscillator fallback, which

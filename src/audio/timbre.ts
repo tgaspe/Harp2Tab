@@ -40,9 +40,21 @@ const BASS: Voice      = { type: 'sine',     attackSec: 0.008, decaySec: 0.2,  s
 const PAD: Voice       = { type: 'sawtooth', attackSec: 0.25,  decaySec: 0.2,  sustainLevel: 0.8,  releaseSec: 0.4,  gain: 0.35 };
 const PERCUSSIVE: Voice = { type: 'square',  attackSec: 0.002, decaySec: 0.12, sustainLevel: 0,    releaseSec: 0.05, gain: 0.7 };
 
-/** The default when no program is stated — the plain tone every tab session has always
- *  played, so the tab editor's sound doesn't change. */
+/** The default when no program is stated, on the oscillator path. Reached only when the
+ *  sampled harmonica below isn't loaded — see `DEFAULT_PROGRAM`. */
 export const DEFAULT_VOICE: Voice = SUSTAINED;
+
+/**
+ * GM program 22, Harmonica — what a note with no program of its own sounds like.
+ *
+ * `TabNote.program` is absent for a tab session, and that absence already means something
+ * specific: a tab session *is* one harmonica (see the field's own docs). So this is not a
+ * new default so much as the existing one finally being playable — the sine was only ever a
+ * stand-in for an instrument the app couldn't render.
+ *
+ * The Studio is unaffected: every track there carries a numeric program.
+ */
+export const DEFAULT_PROGRAM = 22;
 
 export function voiceForProgram(program: number | undefined): Voice {
   if (program === undefined || !Number.isFinite(program)) return DEFAULT_VOICE;

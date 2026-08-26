@@ -1,11 +1,12 @@
 import { noteNameToMidi } from '@/audio/HarmonicaMapper';
 import {
   cachedBuffer, cachedDrumBuffer, cachedDrumKit, cachedManifest,
-  drumZoneForKey, DRUM_PROGRAM, loopSecondsFor, playbackRateFor, sampleOffsetSecFor, zoneForKey,
+  drumZoneForKey, DRUM_PROGRAM, ensureProgramsLoaded, loopSecondsFor, playbackRateFor,
+  sampleOffsetSecFor, zoneForKey,
 } from '@/audio/soundfont';
 import { noteNameToFrequency } from '@/audio/synthesizeWav';
 import { constantTempoMap, gridLines, type PlaybackOptions } from '@/audio/tempo';
-import { velocityGain, voiceForProgram } from '@/audio/timbre';
+import { DEFAULT_PROGRAM, velocityGain, voiceForProgram } from '@/audio/timbre';
 import { noteVelocity } from '@/audio/velocity';
 import type { TabNote } from '@/types';
 
@@ -190,11 +191,15 @@ export async function playNotes(notes: TabNote[], options?: PlaybackOptions, sta
     }
 
     // ── Sampled melodic voice ─────────────────────────────────────────────────
-    const manifest = n.program === undefined ? null : cachedManifest(n.program);
+    // A note with no program of its own is a tab session's note, and a tab session is one
+    // harmonica. The oscillator branch below still reads `n.program` directly, so its own
+    // no-program default (`DEFAULT_VOICE`) is unchanged.
+    const program = n.program ?? DEFAULT_PROGRAM;
+    const manifest = cachedManifest(program);
     const zone = manifest && midiKey !== null ? zoneForKey(manifest, midiKey) : null;
-    const buffer = zone && n.program !== undefined ? cachedBuffer(n.program, zone.file) : null;
+    const buffer = zone ? cachedBuffer(program, zone.file) : null;
 
-    if (zone && buffer && midiKey !== null && n.program !== undefined) {
+    if (zone && buffer && midiKey !== null) {
       // Pitch and tuning ONLY. `rate` divides the scheduled times above exactly as it does
       // for the oscillator path; folding it in here would transpose the project up an
       // octave at 2x speed, which the oscillator path has never done.
@@ -214,7 +219,7 @@ export async function playNotes(notes: TabNote[], options?: PlaybackOptions, sta
 
       connectVoiceTail(ctx, gain, zone.pan, zone.filterHz, zone.filterQ, compressor);
 
-      const right = zone.fileRight ? cachedBuffer(n.program, zone.fileRight) : null;
+      const right = zone.fileRight ? cachedBuffer(program, zone.fileRight) : null;
       const loop = loopSecondsFor(zone);
       // A sample seeked into mid-note starts partway through itself, matching what the
       // oscillator path already does with `effectiveStart`.
@@ -274,7 +279,7 @@ export async function playNotes(notes: TabNote[], options?: PlaybackOptions, sta
 // above, so it can't be paused/stopped by playback controls and doesn't touch
 // isPlaying/isPaused state. Closed once the tone finishes so repeated clicks don't leak
 // contexts.
-export function previewNote(noteName: string, durationMs = 180): void {
+export function previewNote(noteName: string, durationMs = 180, program = DEFAULT_PROGRAM): void {
   const freq = noteNameToFrequency(noteName);
   if (freq <= 0) return;
 
@@ -282,6 +287,45 @@ export function previewNote(noteName: string, durationMs = 180): void {
   const now = ctx.currentTime;
   const durSec  = durationMs / 1000;
   const fadeSec = Math.min(0.01, durSec / 4);
+
+  // Sampled when the instrument is already resident, so a click sounds like the transport
+  // does. Warming it is fire-and-forget: this preview stays a sine rather than waiting, and
+  // the next click is the real instrument. The tab editor warms the harmonica on mount, so
+  // in practice that only happens if the fetch is still in flight.
+  const midiKey = noteNameToMidi(noteName);
+  const manifest = cachedManifest(program);
+  const zone = manifest && midiKey !== null ? zoneForKey(manifest, midiKey) : null;
+  const buffer = zone ? cachedBuffer(program, zone.file) : null;
+
+  if (zone && buffer && midiKey !== null) {
+    const gain = ctx.createGain();
+    const peak = AMPLITUDE_SAMPLED * zone.gain;
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(peak, now + 0.002);
+    gain.gain.setValueAtTime(peak, now + Math.max(0.002, durSec - zone.releaseSec));
+    gain.gain.linearRampToValueAtTime(0, now + durSec);
+    gain.connect(ctx.destination);
+
+    const loop = loopSecondsFor(zone);
+    const right = zone.fileRight ? cachedBuffer(program, zone.fileRight) : null;
+    let live = 0;
+    for (const source of buildSources(ctx, buffer, right, gain, playbackRateFor(zone, midiKey))) {
+      if (loop) {
+        source.loop = true;
+        source.loopStart = loop.start;
+        source.loopEnd = loop.end;
+      }
+      source.start(now);
+      source.stop(now + durSec + 0.02);
+      live++;
+      // Only the last source standing closes the context, or a stereo pair would close it
+      // out from under its own other half.
+      source.onended = () => { if (--live === 0) ctx.close(); };
+    }
+    return;
+  }
+
+  void ensureProgramsLoaded([program], false);
 
   const osc  = ctx.createOscillator();
   const gain = ctx.createGain();

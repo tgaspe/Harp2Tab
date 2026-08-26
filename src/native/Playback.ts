@@ -34,7 +34,9 @@ export async function playNotes(notes: TabNote[], options?: PlaybackOptions, sta
 // backend just for this.
 let previewPlayer: AudioPlayer | null = null;
 
-export async function previewNote(noteName: string, durationMs = 180): Promise<void> {
+// `program` is accepted so the two platforms' signatures match, and ignored: native renders
+// through `synthesizeWav`, which has no sample path (see the plan's "Native" section).
+export async function previewNote(noteName: string, durationMs = 180, _program?: number): Promise<void> {
   const wavBytes = synthesizeWav([
     { id: 'preview', tab: '', note: noteName, start_time: 0, duration: durationMs, confidence: 100 },
   ]);
