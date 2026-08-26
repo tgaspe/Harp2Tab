@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Modal, Platform, Pressable, ScrollView, Text, TextInput, View, type ViewToken } from 'react-native';
 import { FlatList } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -121,11 +121,22 @@ export default function EditScreen() {
   const viewMode    = useAppStore(selectViewMode);
   const setViewMode = useAppStore((s) => s.setViewMode);
   const listRef      = useRef<FlatList<TabNote>>(null);
+  // Web's full editor renders the filtered set; native's compact List currently renders
+  // the raw session. Playback following must resolve an id against the exact array handed
+  // to the mounted list or a hidden note will shift every index after it.
+  const displayedListNotes = Platform.OS === 'web' ? audibleNotes : tabNotes;
+  const displayedListNotesRef = useRef(displayedListNotes);
+  displayedListNotesRef.current = displayedListNotes;
+  const visibleListNoteIdsRef = useRef(new Set<string>());
+  const followTargetIdRef = useRef<string | null>(null);
+  const followRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [isDraggingListNote, setIsDraggingListNote] = useState(false);
   const prevLenRef   = useRef(totalCount);
   const savedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => () => {
     if (savedTimeoutRef.current) clearTimeout(savedTimeoutRef.current);
+    if (followRetryRef.current) clearTimeout(followRetryRef.current);
   }, []);
 
   // Deliberately the *total*, not the visible count: this exists to follow a note being
@@ -163,6 +174,72 @@ export default function EditScreen() {
   const playingNoteId = isPlaying
     ? (audibleNotes.find((n) => currentTimeMs >= n.start_time && currentTimeMs < n.start_time + n.duration)?.id ?? null)
     : null;
+
+  // Kept stable for VirtualizedList: changing a viewability callback after mount is not
+  // supported. A ref is enough because visibility only gates an imperative scroll; it is
+  // not rendered UI and should not cause another React update.
+  const onListViewableItemsChanged = useRef(({
+    viewableItems,
+  }: { viewableItems: ViewToken<TabNote>[] }) => {
+    visibleListNoteIdsRef.current = new Set(
+      viewableItems.flatMap((token) => token.item?.id ? [token.item.id] : []),
+    );
+  }).current;
+  const listViewabilityConfig = useRef({ itemVisiblePercentThreshold: 60 }).current;
+
+  // `scrollToIndex` can fail when VirtualizedList has not measured a distant card yet.
+  // RN 0.83 recommends moving to an estimated offset, allowing that window to render, and
+  // retrying. Re-resolving by id prevents an intervening filter/edit from using a stale
+  // index; the target ref prevents an old retry from chasing playback after it has moved.
+  const handleListScrollToIndexFailed = useCallback((info: {
+    index: number;
+    highestMeasuredFrameIndex: number;
+    averageItemLength: number;
+  }) => {
+    const targetId = followTargetIdRef.current;
+    if (!targetId || !isPlaying || viewMode !== 'list') return;
+
+    listRef.current?.scrollToOffset({
+      offset: Math.max(0, info.averageItemLength * info.index),
+      animated: true,
+    });
+    if (followRetryRef.current) clearTimeout(followRetryRef.current);
+    followRetryRef.current = setTimeout(() => {
+      followRetryRef.current = null;
+      if (followTargetIdRef.current !== targetId) return;
+      const index = displayedListNotesRef.current.findIndex((note) => note.id === targetId);
+      if (index >= 0) {
+        listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.35 });
+      }
+    }, 100);
+  }, [isPlaying, viewMode]);
+
+  // A list remounted after Piano Roll has no relationship to the rows that were visible in
+  // the previous list instance. Clear the imperative cache before the follow effect runs.
+  useEffect(() => {
+    visibleListNoteIdsRef.current.clear();
+  }, [viewMode]);
+
+  // Follow note boundaries, not animation frames. Rows already comfortably visible stay
+  // still; otherwise the active row lands above centre, leaving upcoming notes in view.
+  // Seeking and loop restarts naturally use the same path because both change the active id.
+  useEffect(() => {
+    followTargetIdRef.current = playingNoteId;
+    if (followRetryRef.current) {
+      clearTimeout(followRetryRef.current);
+      followRetryRef.current = null;
+    }
+    if (!isPlaying || viewMode !== 'list' || isDraggingListNote || !playingNoteId) return;
+    if (visibleListNoteIdsRef.current.has(playingNoteId)) return;
+
+    const index = displayedListNotes.findIndex((note) => note.id === playingNoteId);
+    if (index < 0) return;
+    const frame = requestAnimationFrame(() => {
+      if (followTargetIdRef.current !== playingNoteId) return;
+      listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.35 });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [displayedListNotes, isDraggingListNote, isPlaying, playingNoteId, viewMode]);
 
   const renderItem = useCallback(
     ({ item, getIndex, drag, isActive }: RenderItemParams<TabNote>) => (
@@ -442,7 +519,12 @@ export default function EditScreen() {
                     data={audibleNotes}
                     keyExtractor={(item) => item.id}
                     renderItem={renderItem}
+                    onViewableItemsChanged={onListViewableItemsChanged}
+                    viewabilityConfig={listViewabilityConfig}
+                    onScrollToIndexFailed={handleListScrollToIndexFailed}
+                    onDragBegin={() => setIsDraggingListNote(true)}
                     onDragEnd={({ data }) => {
+                      setIsDraggingListNote(false);
                       // Refuses to run on a filtered list, and `draggable` above already
                       // keeps it from being reachable — this is the backstop.
                       //
@@ -740,7 +822,12 @@ export default function EditScreen() {
             data={tabNotes}
             keyExtractor={(item) => item.id}
             renderItem={renderItem}
+            onViewableItemsChanged={onListViewableItemsChanged}
+            viewabilityConfig={listViewabilityConfig}
+            onScrollToIndexFailed={handleListScrollToIndexFailed}
+            onDragBegin={() => setIsDraggingListNote(true)}
             onDragEnd={({ data }) => {
+              setIsDraggingListNote(false);
               let cursor = 0;
               reorderNotes(data.map(note => {
                 const updated = { ...note, start_time: cursor };
