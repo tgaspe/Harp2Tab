@@ -1,6 +1,7 @@
 import { bytesToBase64 } from '@/audio/base64';
 import { noteNameToMidi } from '@/audio/HarmonicaMapper';
 import { writeSmf, type SmfTrack } from '@/audio/smf';
+import { groupIntoPhrases } from '@/export/phrasing';
 import { noteVelocity } from '@/audio/velocity';
 import type { ExportFormat, HarmonicaKey, HarmonicaType, TabNote } from '@/types';
 
@@ -60,14 +61,139 @@ function tabOrFallback(n: TabNote): string {
 
 // ── TXT ───────────────────────────────────────────────────────────────────────
 
-const NOTES_PER_LINE = 12;
+/**
+ * How close two onsets have to be to count as one attack.
+ *
+ * Chords in real material never land on the same millisecond — a strum spreads, and a
+ * humanised MIDI file jitters every onset on purpose — so an exact-match rule would write
+ * a chord out as an arpeggio. 50ms is comfortably wider than that jitter and still far
+ * shorter than any note a player would hear as separate.
+ */
+const CHORD_WINDOW_MS = 50;
 
-function tabLines(notes: TabNote[]): string[] {
-  const lines: string[] = [];
-  for (let i = 0; i < notes.length; i += NOTES_PER_LINE) {
-    lines.push(notes.slice(i, i + NOTES_PER_LINE).map(tabOrFallback).join('  '));
+/** A tab that is nothing but a hole number, optionally drawn: no bend, no overblow, no
+ *  chromatic slide. Only these can be run together into a chord. */
+const PLAIN_HOLE = /^-?\d+$/;
+
+/** One moment of the tab: what to print, and how many notes it stands for. */
+interface Voicing {
+  token: string;
+  /** What the header counts. A chord a player can take in one breath is one thing to play;
+   *  a group that isn't playable as written is still separate notes to deal with. */
+  counts: number;
+  /** Stand-in note carrying the group's span, so phrasing measures rests from where the
+   *  whole group ends rather than from whichever member happened to be first. */
+  lead: TabNote;
+}
+
+/** Notes sharing an onset, within the window. Anchored on the group's *first* onset rather
+ *  than the previous note's, so a slow arpeggio can't chain itself into one chord. */
+function groupSimultaneous(notes: readonly TabNote[]): TabNote[][] {
+  const ordered = [...notes].sort((a, b) => a.start_time - b.start_time);
+  const groups: TabNote[][] = [];
+  for (const note of ordered) {
+    const current = groups[groups.length - 1];
+    if (current && note.start_time - current[0].start_time <= CHORD_WINDOW_MS) current.push(note);
+    else groups.push([note]);
   }
-  return lines;
+  return groups;
+}
+
+/**
+ * The chord form: hole numbers run together behind a single breath sign — `456`, `-1234`.
+ *
+ * The shared sign is the point. You cannot blow and draw at once, so every chord a
+ * harmonica can actually sound is one breath direction, and hoisting the `-` to the front
+ * states that rather than repeating it four times. It also matches how a player says it:
+ * "draw one through four".
+ *
+ * Null when the group isn't one breath of plain holes, which is the caller's signal to fall
+ * back to the slash form. Two limits are worth naming:
+ *  - Bends, overblows and slides are single-hole techniques; a group containing one is not
+ *    a chord, whatever else is in it.
+ *  - Diatonic only. Holes run 1–10 there and a `0` can only follow a `1`, so even `8910`
+ *    parses one way. A chromatic reaches hole 12, where `12` is indistinguishable from
+ *    holes 1 and 2, and there is no way to tell them apart in a format with no legend.
+ */
+function chordToken(group: readonly TabNote[], harmonicaType: HarmonicaType): string | null {
+  if (harmonicaType !== 'diatonic') return null;
+  if (!group.every((n) => PLAIN_HOLE.test(n.tab))) return null;
+
+  const draw = group[0].tab.startsWith('-');
+  if (!group.every((n) => n.tab.startsWith('-') === draw)) return null;
+
+  const holes = group.map((n) => Number(n.tab.replace('-', ''))).sort((a, b) => a - b);
+  return (draw ? '-' : '') + holes.join('');
+}
+
+/** Ascending pitch, for groups that aren't chords — an unplayable pitch has no hole to
+ *  order by, so the note name is what's left. Unparseable names keep their relative order. */
+function byPitch(a: TabNote, b: TabNote): number {
+  return (noteNameToMidi(a.note) ?? 0) - (noteNameToMidi(b.note) ?? 0);
+}
+
+function voicingOf(group: TabNote[], harmonicaType: HarmonicaType, index: number): Voicing {
+  const start = Math.min(...group.map((n) => n.start_time));
+  const end   = Math.max(...group.map((n) => n.start_time + n.duration));
+  // A synthetic id, so the lookup back from a phrase can't be confused by duplicate ids in
+  // the source. Nothing prints it.
+  const lead: TabNote = { ...group[0], id: `v${index}`, start_time: start, duration: end - start };
+
+  // Two notes on the same hole are one thing to play, however the source spelled them.
+  const seen = new Set<string>();
+  const distinct = group.filter((n) => {
+    const token = tabOrFallback(n);
+    if (seen.has(token)) return false;
+    seen.add(token);
+    return true;
+  });
+
+  if (distinct.length === 1) return { token: tabOrFallback(distinct[0]), counts: 1, lead };
+
+  const chord = chordToken(distinct, harmonicaType);
+  if (chord) return { token: chord, counts: 1, lead };
+
+  // Not playable as one breath: slashes say "these sound together" without claiming a player
+  // could do it. `/` is the one separator the tab vocabulary hasn't already spent.
+  return {
+    token:  [...distinct].sort(byPitch).map(tabOrFallback).join('/'),
+    counts: distinct.length,
+    lead,
+  };
+}
+
+/**
+ * One line per musical phrase, blank line between sections, trailing comma where the phrase
+ * actually ends.
+ *
+ * This used to wrap every 12 notes, which splits a phrase down the middle as often as not —
+ * and on harmonica a phrase boundary is also where the player breathes, so the arbitrary wrap
+ * was actively misleading about how to play the tab. `groupIntoPhrases` still caps a line at
+ * the old width, so a tab with no rests in it (a MIDI import, where notes abut exactly) comes
+ * out exactly as it always did.
+ *
+ * The comma is what distinguishes the two reasons a line can end. A line that ran out of room
+ * carries none, so it reads as running straight into the next one — otherwise a forced wrap is
+ * indistinguishable from a breath mark. The last line of a part has nothing to run into, so it
+ * takes no comma either.
+ *
+ * Phrasing runs over voicings rather than notes, so a chord occupies one slot on the line and
+ * the rest after it is measured from where the whole chord ends.
+ */
+function renderTab(notes: TabNote[], harmonicaType: HarmonicaType): { lines: string[]; count: number } {
+  const voicings = groupSimultaneous(notes).map((g, i) => voicingOf(g, harmonicaType, i));
+  const tokens   = new Map(voicings.map((v) => [v.lead.id, v.token]));
+
+  const phrases = groupIntoPhrases(voicings.map((v) => v.lead));
+  const lines: string[] = [];
+  phrases.forEach((phrase, i) => {
+    if (phrase.startsSection && lines.length > 0) lines.push('');
+    const breathes = !phrase.continuesNext && i < phrases.length - 1;
+    const text = phrase.notes.map((n) => tokens.get(n.id) ?? tabOrFallback(n)).join('  ');
+    lines.push(text + (breathes ? ',' : ''));
+  });
+
+  return { lines, count: voicings.reduce((sum, v) => sum + v.counts, 0) };
 }
 
 function sectionHeader(label: string, key: HarmonicaKey, count: number): string {
@@ -85,10 +211,12 @@ function sectionHeader(label: string, key: HarmonicaKey, count: number): string 
  */
 function generateTxt(parts: ExportPart[]): string {
   // Single-part output is byte-identical to what this always emitted — the one thing that
-  // must not regress, since it's what every existing exported file looks like.
+  // must not regress, since it's what every existing exported file looks like. A tab with no
+  // simultaneous notes in it produces one voicing per note, so nothing about it changes.
   if (parts.length === 1) {
-    const { notes, key } = parts[0];
-    return [sectionHeader('Harp2Tab', key, notes.length), '-'.repeat(40), ...tabLines(notes)].join('\n');
+    const { notes, key, harmonicaType } = parts[0];
+    const { lines, count } = renderTab(notes, harmonicaType);
+    return [sectionHeader('Harp2Tab', key, count), '-'.repeat(40), ...lines].join('\n');
   }
 
   const out: string[] = [
@@ -96,7 +224,8 @@ function generateTxt(parts: ExportPart[]): string {
     '='.repeat(40),
   ];
   for (const part of parts) {
-    out.push('', sectionHeader(part.name, part.key, part.notes.length), '-'.repeat(40), ...tabLines(part.notes));
+    const { lines, count } = renderTab(part.notes, part.harmonicaType);
+    out.push('', sectionHeader(part.name, part.key, count), '-'.repeat(40), ...lines);
   }
   return out.join('\n');
 }

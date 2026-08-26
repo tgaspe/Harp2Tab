@@ -46,11 +46,6 @@ export interface ParsedMidi {
   durationMs: number;
 }
 
-/** Same floor the note detector applies to recorded audio (`NoteDetector`'s
- *  `minDurationMs`): a run this short isn't something a player can articulate, so imported
- *  grace notes are discarded rather than becoming untabbable specks. */
-export const MIN_NOTE_MS = 110;
-
 /** Channel 10 in one-based MIDI terms — pitch there names a drum, not a note, so a
  *  percussion track has nothing to transcribe. */
 const PERCUSSION_CHANNEL = 9;
@@ -162,35 +157,31 @@ export function mergeTracks(tracks: MidiTrack[]): MidiNote[] {
 }
 
 /**
- * Collapse chords and overlaps to the single voice a harmonica can play.
+ * Put a track's notes in playing order. Nothing is added, altered or removed.
  *
- * Sorted by onset then pitch descending, so at any moment the top voice is seen first:
- * a note overlapping one already kept is dropped when it's lower (a chord tone, or an
- * accompaniment note under a held melody) and truncates the earlier note when it's higher
- * (the melody moving on). Notes too short to articulate are then discarded, matching what
- * the audio path's detector already does with recorded runs.
+ * This used to be `reduceToMonophonic`, which collapsed the track to one voice: overlapping
+ * notes were truncated when the newcomer was higher and deleted outright when it was lower
+ * or equal, and anything left under a 110ms floor was dropped as unarticulable. Every one of
+ * those was a silent rewrite of the user's music, and the common cases were not chords at
+ * all — a descending legato melody lost every other note to the "lower note = accompaniment"
+ * rule (one millisecond of overlap was enough), a repeated pitch was swallowed by the note
+ * before it, and any 16th-note run above ~128 BPM disappeared into the duration floor.
+ *
+ * The importer is not the right place to decide that written simultaneity was a mistake. A
+ * harmonica can sound several holes at once, and where it genuinely can't, that is a call
+ * for the player to make in the editor — with the notes in front of them. So conversion now
+ * carries the track across whole, and the two things that really can't be played say so
+ * without deleting anything: an out-of-range pitch arrives as `tab: ''` (see `notesToTabs`),
+ * and the editor is where a chord becomes a single line.
+ *
+ * Sorted by onset, then by pitch descending within an onset so the top voice of a chord
+ * reads first — playback and the piano roll both take the array in order, and a melody note
+ * ahead of the chord tones under it is the order a player would read.
  */
-export function reduceToMonophonic(notes: MidiNote[]): MidiNote[] {
-  const sorted = [...notes].sort((a, b) => a.timeMs - b.timeMs || b.midi - a.midi);
-
-  const kept: MidiNote[] = [];
-  for (const note of sorted) {
-    const prev = kept[kept.length - 1];
-    if (prev) {
-      const prevEnd = prev.timeMs + prev.durationMs;
-      if (note.timeMs < prevEnd) {
-        if (note.midi <= prev.midi) continue;
-        const trimmed = note.timeMs - prev.timeMs;
-        // A higher note landing on the same onset would leave nothing of the earlier one;
-        // it replaces it rather than becoming a zero-length note.
-        if (trimmed < 1) kept.pop();
-        else prev.durationMs = trimmed;
-      }
-    }
-    kept.push({ ...note });
-  }
-
-  return kept.filter((n) => n.durationMs >= MIN_NOTE_MS);
+export function orderTrackNotes(notes: readonly MidiNote[]): MidiNote[] {
+  return [...notes]
+    .sort((a, b) => a.timeMs - b.timeMs || b.midi - a.midi)
+    .map((note) => ({ ...note }));
 }
 
 /** Pitch range as note names, for the track picker's "what does this part cover" line. */

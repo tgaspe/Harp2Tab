@@ -48,11 +48,10 @@ import { decodeAudioFile } from '@/audio/decodeAudio';
 import { getChromaticRows, midiToNoteName } from '@/audio/HarmonicaMapper';
 import { usePlayback } from '@/hooks/usePlayback';
 import {
-  MIN_NOTE_MS,
   mergeTracks,
   mostMelodicTrack,
+  orderTrackNotes,
   pitchRangeLabel,
-  reduceToMonophonic,
   type MidiNote,
   type ParsedMidi,
 } from '@/audio/midiToNotes';
@@ -114,7 +113,7 @@ function durationLabel(ms: number): string {
 }
 
 /**
- * The whole MIDI pipeline downstream of the track choice: reduce to one voice, fit the
+ * The whole MIDI pipeline downstream of the track choice: take the track whole, fit the
  * register, score every harp. Pure and cheap — no DSP is involved, just `noteToTab` over a
  * few hundred notes — which is what lets the key scores re-compute live as the user moves
  * between tracks, and why the two lists can sit on one screen rather than two.
@@ -128,11 +127,11 @@ function analyzeSelection(
     ? mergeTracks(parsed.tracks)
     : parsed.tracks.find((t) => t.id === selection)?.notes ?? [];
 
-  const reduced = reduceToMonophonic(raw);
+  const ordered = orderTrackNotes(raw);
   // Fold first: a part sitting two octaves below the harp is a register problem, fixed for
   // the whole piece. Only what's still unmapped afterwards is genuinely unplayable.
-  const shift = octaveShiftForMidiRange(reduced.map((n) => n.midi));
-  const notes = shiftMidiNotes(reduced, shift);
+  const shift = octaveShiftForMidiRange(ordered.map((n) => n.midi));
+  const notes = shiftMidiNotes(ordered, shift);
 
   return { notes, ranking: rankKeysForMidi(notes, harmonicaType, shift) };
 }
@@ -656,7 +655,7 @@ export default function ImportScreen() {
       setPhase({
         kind:    'error',
         code:    'noAudio',
-        message: 'That track has no notes long enough to play. Try another track, or the merged option.',
+        message: 'That track has no notes in it. Try another track, or the merged option.',
       });
       return;
     }
@@ -745,11 +744,10 @@ export default function ImportScreen() {
       ? null
       : parsed.tracks.find((t) => t.id === selection);
 
-    // Two distinct dead ends, worth separating because the fix differs. Nothing survived
-    // reduction at all (every note too short to articulate) — a different track is the only
-    // way forward. Or notes survived but none of them sits anywhere on this harp, in which
-    // case the key list above is the fix and continuing would land an editor full of tabs
-    // the user can't play.
+    // Two distinct dead ends, worth separating because the fix differs. The track holds no
+    // notes at all — a different track is the only way forward. Or it has notes but none of
+    // them sits anywhere on this harp, in which case the key list above is the fix and
+    // continuing would land an editor full of tabs the user can't play.
     const nothingToPlay  = notes.length === 0;
     const nothingMapped  = !nothingToPlay && unplayable === notes.length;
     const bestKeyMaps    = showKeys
@@ -894,8 +892,7 @@ export default function ImportScreen() {
             <View style={styles.alertRow} accessibilityRole="alert">
               <Ionicons name="alert-circle" size={14} color={theme.warning} />
               <Text style={styles.noticeText}>
-                Nothing in {selectedTrack ? `“${selectedTrack.name}”` : 'this file'} is long enough
-                to play — every note is under {MIN_NOTE_MS}ms.
+                There are no notes in {selectedTrack ? `“${selectedTrack.name}”` : 'this file'}.
                 {showTracks ? ' Try another track above.' : ''}
               </Text>
             </View>

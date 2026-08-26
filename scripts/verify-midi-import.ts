@@ -16,11 +16,10 @@
 import { generateForFormat, singlePart } from '../src/export/generators';
 import { midiToNoteName, noteToTab, tabToNote } from '../src/audio/HarmonicaMapper';
 import {
-  MIN_NOTE_MS,
   mergeTracks,
   mostMelodicTrack,
+  orderTrackNotes,
   parseMidiFile,
-  reduceToMonophonic,
   type MidiNote,
 } from '../src/audio/midiToNotes';
 import { notesToTabs, rankKeysForMidi, shiftMidiNotes } from '../src/audio/notesToTabs';
@@ -146,7 +145,7 @@ function ownExportRoundTrip(): void {
   const bytes  = Uint8Array.from(Buffer.from(content, 'base64'));
   const parsed = parseMidiFile(bytes, 'export.mid');
 
-  const notes  = reduceToMonophonic(parsed.tracks[0].notes);
+  const notes  = orderTrackNotes(parsed.tracks[0].notes);
   const tabbed = notesToTabs(notes, key, 'diatonic', 'midiVelocity');
 
   const tabsMatch = tabbed.length === tabs.length && tabbed.every((n, i) => n.tab === tabs[i]);
@@ -176,8 +175,10 @@ function ownExportRoundTrip(): void {
   );
 }
 
-/** A chord in the chosen track collapses to its top voice, not to a lower one. */
-function chordFlattening(): void {
+/** A chord in the chosen track keeps every voice. A harmonica can sound several holes at
+ *  once, and even where it can't, deciding that a written chord was really one note is the
+ *  arranger's call, not the importer's. */
+function chordPreservation(): void {
   const ms = tickMs(120);
   const bytes = buildSmf([{
     name:  'Piano',
@@ -193,23 +194,29 @@ function chordFlattening(): void {
   }]);
 
   const parsed = parseMidiFile(bytes, 'chords.mid');
-  const notes  = reduceToMonophonic(parsed.tracks[0].notes);
+  const notes  = orderTrackNotes(parsed.tracks[0].notes);
 
   const pitches = notes.map((n) => n.midi);
   check(
-    'chords flatten to the top voice within a track',
-    pitches.length === 2 && pitches[0] === 67 && pitches[1] === 69,
+    'every voice of a chord survives conversion',
+    pitches.length === 6 && [60, 62, 64, 65, 67, 69].every((m) => pitches.includes(m)),
     `kept ${pitches.map(midiToNoteName).join(' ')}`,
   );
   check(
-    'flattened chord notes keep their full length',
+    'chord voices keep their full length',
     notes.every((n) => near(n.durationMs, 480 * ms, 1)),
     `durations ${notes.map((n) => Math.round(n.durationMs)).join(', ')}ms`,
   );
+  check(
+    'simultaneous notes are ordered top voice first',
+    notes[0].midi === 67 && notes[1].midi === 64 && notes[2].midi === 60,
+    `first onset reads ${notes.slice(0, 3).map((n) => midiToNoteName(n.midi)).join(' ')}`,
+  );
 }
 
-/** A higher note starting inside a held one truncates it; a lower one is dropped. */
-function overlapHandling(): void {
+/** Overlapping notes are left exactly as the file states them — neither truncated nor
+ *  dropped. Both were silent rewrites of the music. */
+function overlapPreservation(): void {
   const ms = tickMs(120);
   const bytes = buildSmf([{
     name:  'Overlaps',
@@ -217,30 +224,28 @@ function overlapHandling(): void {
       // A held note, then a higher note starting halfway through it.
       { midi: 72, tick: 0,    durationTicks: 960 },
       { midi: 79, tick: 480,  durationTicks: 480 },
-      // A held note with a lower one underneath it — the lower one is accompaniment.
+      // A held note with a lower one underneath it.
       { midi: 76, tick: 1440, durationTicks: 960 },
       { midi: 60, tick: 1680, durationTicks: 480 },
     ],
   }]);
 
   const parsed = parseMidiFile(bytes, 'overlap.mid');
-  const notes  = reduceToMonophonic(parsed.tracks[0].notes);
+  const notes  = orderTrackNotes(parsed.tracks[0].notes);
 
   check(
-    'a higher note truncates the note it interrupts',
-    notes.length === 3
-      && notes[0].midi === 72 && near(notes[0].durationMs, 480 * ms, 1)
-      && notes[1].midi === 79,
+    'a note interrupted by a higher one keeps its stated length',
+    notes.length === 4 && notes[0].midi === 72 && near(notes[0].durationMs, 960 * ms, 1),
     `got ${notes.map((n) => `${midiToNoteName(n.midi)}@${Math.round(n.timeMs)}+${Math.round(n.durationMs)}`).join(' ')}`,
   );
   check(
-    'a lower note under a held one is dropped',
-    !notes.some((n) => n.midi === 60),
-    notes.some((n) => n.midi === 60) ? 'C4 survived reduction' : 'C4 correctly dropped',
+    'a lower note under a held one survives',
+    notes.some((n) => n.midi === 60),
+    notes.some((n) => n.midi === 60) ? 'C4 kept' : 'C4 was dropped',
   );
   check(
-    'reduction never emits a zero or negative duration',
-    notes.every((n) => n.durationMs >= MIN_NOTE_MS),
+    'conversion never emits a zero or negative duration',
+    notes.every((n) => n.durationMs > 0),
     `shortest ${Math.round(Math.min(...notes.map((n) => n.durationMs)))}ms`,
   );
 }
@@ -476,10 +481,12 @@ function keyScoring(): void {
   );
 }
 
-/** Grace notes shorter than the detector's own floor are discarded, as they are for audio. */
-function shortNoteFloor(): void {
+/** Grace notes survive. The 110ms articulation floor came from the audio detector, where it
+ *  suppresses pitch-detection noise; MIDI states its notes outright and has no noise to
+ *  suppress, so the floor only deleted fast playing. */
+function shortNotePreservation(): void {
   const ms = tickMs(120);
-  const shortTicks = Math.floor((MIN_NOTE_MS - 20) / ms);
+  const shortTicks = Math.floor(40 / ms); // ~40ms — well under the old floor
   const bytes = buildSmf([{
     name:  'Grace',
     notes: [
@@ -490,25 +497,133 @@ function shortNoteFloor(): void {
   }]);
 
   const parsed = parseMidiFile(bytes, 'grace.mid');
-  const notes  = reduceToMonophonic(parsed.tracks[0].notes);
+  const notes  = orderTrackNotes(parsed.tracks[0].notes);
   check(
-    'grace notes below the articulation floor are discarded',
-    notes.length === 2 && notes.every((n) => n.durationMs >= MIN_NOTE_MS),
+    'a grace note shorter than the old articulation floor survives',
+    notes.length === 3 && notes.some((n) => n.midi === 74),
     `kept ${notes.map((n) => midiToNoteName(n.midi)).join(' ')}`,
+  );
+}
+
+/**
+ * Regression: a descending legato melody used to lose every other note.
+ *
+ * The old reduction dropped any overlapping note that was *lower* than the one before it,
+ * on the theory that it must be a chord tone under a held melody. In a single-voice line
+ * stepping downwards it is simply the tune continuing, and one millisecond of overlap was
+ * enough to trigger it — half of an eight-note phrase disappeared with no warning.
+ */
+function descendingLegatoSurvives(): void {
+  const notes: MidiNote[] = [84, 83, 81, 79, 77, 76, 74, 72].map((midi, i) => ({
+    midi,
+    timeMs:     i * 500,
+    durationMs: 520, // 20ms of legato overlap into the next note
+  }));
+
+  const kept = orderTrackNotes(notes);
+  check(
+    'a descending legato melody keeps every note',
+    kept.length === 8 && [84, 83, 81, 79, 77, 76, 74, 72].every((m) => kept.some((k) => k.midi === m)),
+    `kept ${kept.length}/8: ${kept.map((n) => midiToNoteName(n.midi)).join(' ')}`,
+  );
+}
+
+/**
+ * Regression: a re-articulated pitch used to be swallowed by the one before it.
+ *
+ * The same rule compared with `<=`, so a repeated note overlapping its predecessor counted
+ * as a chord tone and vanished. Eight repeats with 20ms of overlap came back as four.
+ */
+function repeatedPitchSurvives(): void {
+  const notes: MidiNote[] = Array.from({ length: 8 }, (_, i) => ({
+    midi:       72,
+    timeMs:     i * 500,
+    durationMs: 520,
+  }));
+
+  const kept = orderTrackNotes(notes);
+  check(
+    'a repeated pitch is re-articulated, not swallowed',
+    kept.length === 8,
+    `kept ${kept.length}/8`,
+  );
+}
+
+/**
+ * Regression: fast runs vanished entirely above ~128 BPM.
+ *
+ * Sixteenths at 140 BPM are 107ms apart, under the old 110ms floor, so a whole run of
+ * perfectly in-range notes was deleted rather than tabbed.
+ */
+function fastRunSurvives(): void {
+  const step = 60_000 / 140 / 4; // 107ms — a 16th at 140 BPM
+  const line = [72, 74, 76, 77, 79, 81, 83, 84, 86, 88, 89, 91];
+  const notes: MidiNote[] = line.map((midi, i) => ({
+    midi,
+    timeMs:     i * step,
+    durationMs: step * 0.9,
+  }));
+
+  const kept   = orderTrackNotes(notes);
+  const tabbed = notesToTabs(kept, 'C', 'diatonic', 'midiVelocity');
+  check(
+    'a 16th-note run at 140 BPM survives and tabs',
+    kept.length === line.length && tabbed.every((n) => n.tab !== ''),
+    `kept ${kept.length}/${line.length}, tabs ${tabbed.map((n) => n.tab || '·').join(' ')}`,
+  );
+}
+
+/** The headline guarantee, stated once over a mixed fixture: conversion is not allowed to
+ *  lose a note, whatever the material does. */
+function nothingIsEverDropped(): void {
+  const notes: MidiNote[] = [
+    { midi: 60, timeMs: 0,    durationMs: 4000 },  // held pedal under everything
+    { midi: 64, timeMs: 0,    durationMs: 480 },   // chord tone
+    { midi: 67, timeMs: 0,    durationMs: 480 },   // chord tone
+    { midi: 84, timeMs: 500,  durationMs: 40 },    // grace note
+    { midi: 83, timeMs: 520,  durationMs: 300 },   // descending, overlapping
+    { midi: 83, timeMs: 800,  durationMs: 300 },   // repeated pitch, overlapping
+    { midi: 40, timeMs: 1200, durationMs: 500 },   // far below any harmonica
+    { midi: 110, timeMs: 1700, durationMs: 500 },  // far above any harmonica
+  ];
+
+  const kept = orderTrackNotes(notes);
+  check(
+    'conversion keeps every note the track states',
+    kept.length === notes.length
+      && notes.every((n) => kept.some((k) => k.midi === n.midi && near(k.timeMs, n.timeMs, 0.5))),
+    `kept ${kept.length}/${notes.length}`,
+  );
+  check(
+    'conversion keeps every stated duration',
+    notes.every((n) => kept.some((k) => k.midi === n.midi && near(k.durationMs, n.durationMs, 0.5))),
+    `durations ${kept.map((k) => Math.round(k.durationMs)).join(', ')}ms`,
+  );
+
+  // Out of range is a different claim from dropped: those notes arrive with a blank tab.
+  const tabbed = notesToTabs(kept, 'C', 'diatonic', 'midiVelocity');
+  check(
+    'out-of-range notes arrive blank rather than missing',
+    tabbed.length === notes.length && tabbed.filter((t) => !t.tab).length === 2,
+    `${tabbed.filter((t) => !t.tab).length} blank of ${tabbed.length}`,
   );
 }
 
 function main(): void {
   ownExportRoundTrip();
-  chordFlattening();
-  overlapHandling();
+  chordPreservation();
+  overlapPreservation();
   tempoChange();
   percussionExclusion();
   trackEnumeration();
   octaveFold();
   unplayablePolicy();
   keyScoring();
-  shortNoteFloor();
+  shortNotePreservation();
+  descendingLegatoSurvives();
+  repeatedPitchSurvives();
+  fastRunSurvives();
+  nothingIsEverDropped();
 
   for (const result of results) {
     console.log(`${result.passed ? 'PASS' : 'FAIL'}  ${result.name} — ${result.detail}`);

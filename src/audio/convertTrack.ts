@@ -13,7 +13,7 @@
  */
 
 import { trackAudibleNotes } from './midiProject';
-import { MIN_NOTE_MS, reduceToMonophonic } from './midiToNotes';
+import { orderTrackNotes } from './midiToNotes';
 import { notesToTabs, rankKeysForMidi, shiftMidiNotes, type MidiKeyRanking } from './notesToTabs';
 import { octaveShiftForMidiRange } from './pitchRange';
 import type {
@@ -51,7 +51,7 @@ function newId(prefix: string): string {
 }
 
 /**
- * The reduction every harmonica decision is made against: one voice, fitted to the register.
+ * The set every harmonica decision is made against: the whole track, fitted to the register.
  *
  * Factored out because the key *picker* and the conversion both need it and must agree. If
  * the picker scored the raw track while conversion scored the fitted one, the list would
@@ -64,16 +64,17 @@ function newId(prefix: string): string {
 function fitTrackNotes(
   notes: readonly MidiNote[],
 ): { notes: MidiNote[]; octaveShiftSemitones: number } | null {
-  // A harmonica plays one note at a time, so chords and overlaps within the track collapse
-  // to the top voice — the same reduction MIDI import applies, reused rather than restated.
-  const monophonic = reduceToMonophonic([...notes]);
-  if (monophonic.length === 0) return null;
+  // Every note the track states, in playing order — conversion does not get to decide that
+  // a chord or a fast run was a mistake. Out-of-range pitches are still surfaced, as blank
+  // tabs rather than as deletions.
+  const ordered = orderTrackNotes(notes);
+  if (ordered.length === 0) return null;
 
   // Per-track, deliberately. A global shift computed across the whole project would be a
   // compromise between a piccolo and a bass line that suits neither; each track is fitted
   // to the harp's register on its own.
-  const octaveShiftSemitones = octaveShiftForMidiRange(monophonic.map((n) => n.midi));
-  return { notes: shiftMidiNotes(monophonic, octaveShiftSemitones), octaveShiftSemitones };
+  const octaveShiftSemitones = octaveShiftForMidiRange(ordered.map((n) => n.midi));
+  return { notes: shiftMidiNotes(ordered, octaveShiftSemitones), octaveShiftSemitones };
 }
 
 /**
@@ -87,16 +88,17 @@ export function rankKeysForTrack(
   harmonicaType: HarmonicaType,
 ): MidiKeyRanking | null {
   // The filtered set, matching what `convertTrackToRecording` will actually convert — a
-  // ranking scored over notes the conversion then drops would recommend a harp for music
-  // the user isn't taking with them.
+  // ranking scored over a different set of notes than the conversion uses would recommend a
+  // harp for music the user isn't taking with them.
   const fitted = fitTrackNotes(trackAudibleNotes(track));
   if (!fitted) return null;
   return rankKeysForMidi(fitted.notes, harmonicaType, fitted.octaveShiftSemitones);
 }
 
 /**
- * Returns null when the track has nothing convertible — no notes, or nothing left after
- * the articulation floor. A caller should say so rather than opening an empty editor.
+ * Returns null when the track has nothing convertible — which now means no notes at all,
+ * or none left after the user's own Studio floors. A caller should say so rather than
+ * opening an empty editor.
  */
 export function convertTrackToRecording(
   project: Pick<MidiProject, 'id' | 'title' | 'tempos' | 'origin'>,
@@ -186,5 +188,3 @@ export function reconvertFromSource(
   // near-duplicates of it.
   return { ...result, recording: { ...result.recording, id: recording.id, createdAt: recording.createdAt } };
 }
-
-export { MIN_NOTE_MS };

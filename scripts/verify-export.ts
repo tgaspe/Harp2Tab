@@ -13,7 +13,7 @@ import { generateForFormat, singlePart, type ExportPart } from '../src/export/ge
 import { tabToNote } from '../src/audio/HarmonicaMapper';
 import { readSmf } from '../src/audio/smf';
 import { base64ToBytes } from '../src/audio/base64';
-import type { HarmonicaKey, TabNote } from '../src/types';
+import type { HarmonicaKey, HarmonicaType, TabNote } from '../src/types';
 
 interface CaseResult { name: string; passed: boolean; detail: string }
 const results: CaseResult[] = [];
@@ -258,6 +258,163 @@ function jsonMultiPart(): void {
   );
 }
 
+
+// ── Chord notation ────────────────────────────────────────────────────────────
+
+/** One note at a stated onset. Chord fixtures are built by giving several the same one. */
+let tabSeq = 0;
+function at(
+  tab: string,
+  start: number,
+  opts: { key?: HarmonicaKey; type?: HarmonicaType; note?: string; dur?: number } = {},
+): TabNote {
+  const key  = opts.key  ?? 'C';
+  const type = opts.type ?? 'diatonic';
+  return {
+    id:         `c${tabSeq++}`,
+    tab,
+    note:       opts.note ?? tabToNote(tab, key, type) ?? 'C4',
+    duration:   opts.dur ?? 300,
+    start_time: start,
+    confidence: 100,
+  };
+}
+
+function txt(notes: TabNote[], type: HarmonicaType = 'diatonic', key: HarmonicaKey = 'C'): string {
+  const { content } = generateForFormat([{ name: 'Harmonica', key, harmonicaType: type, notes }], 'TXT');
+  return content;
+}
+
+/** The tab itself, without the two header lines. */
+function txtBody(notes: TabNote[], type: HarmonicaType = 'diatonic', key: HarmonicaKey = 'C'): string {
+  return txt(notes, type, key).split('\n').slice(2).join('\n').trim();
+}
+
+function txtHeader(notes: TabNote[], type: HarmonicaType = 'diatonic'): string {
+  return txt(notes, type).split('\n')[0];
+}
+
+function chordsConcatenate(): void {
+  check(
+    'a blow chord concatenates its holes',
+    txtBody([at('4', 0), at('5', 0), at('6', 0)]) === '456',
+    `got "${txtBody([at('4', 0), at('5', 0), at('6', 0)])}"`,
+  );
+
+  const draw = txtBody([at('-1', 0), at('-2', 0), at('-3', 0), at('-4', 0)]);
+  check(
+    'a draw chord carries one shared breath sign',
+    draw === '-1234',
+    `got "${draw}"`,
+  );
+
+  // Holes run 1–10 on a diatonic, and a '0' can only ever follow a '1', so "10" reads
+  // unambiguously even when concatenated behind other holes.
+  const tenth = txtBody([at('8', 0), at('9', 0), at('10', 0)]);
+  check(
+    'hole 10 concatenates without ambiguity',
+    tenth === '8910',
+    `got "${tenth}"`,
+  );
+
+  const unsorted = txtBody([at('6', 0), at('4', 0), at('5', 0)]);
+  check(
+    'chord holes read low to high whatever order they arrive in',
+    unsorted === '456',
+    `got "${unsorted}"`,
+  );
+
+  const dupes = txtBody([at('4', 0), at('4', 0), at('5', 0)]);
+  check(
+    'two notes landing on one hole are written once',
+    dupes === '45',
+    `got "${dupes}"`,
+  );
+}
+
+function chordOnsetWindow(): void {
+  const together = txtBody([at('4', 0), at('5', 50)]);
+  check(
+    'notes 50ms apart are one chord',
+    together === '45',
+    `got "${together}"`,
+  );
+
+  const apart = txtBody([at('4', 0), at('5', 51)]);
+  check(
+    'notes 51ms apart stay separate',
+    apart === '4  5',
+    `got "${apart}"`,
+  );
+
+  // Anchored on the group's first onset, so a slow arpeggio can't chain into one chord.
+  const arpeggio = txtBody([at('4', 0), at('5', 40), at('6', 80)]);
+  check(
+    'a spread arpeggio does not chain into one chord',
+    arpeggio === '45  6',
+    `got "${arpeggio}"`,
+  );
+}
+
+function unplayableGroupsUseSlashes(): void {
+  const breath = txtBody([at('6', 0), at('-6', 0)]);
+  check(
+    'blow and draw at once is written with slashes, not as a chord',
+    breath === '6/-6',
+    `got "${breath}"`,
+  );
+
+  const overblow = txtBody([at('6', 0), at('6o', 0)]);
+  check(
+    'a group containing an overblow is not a chord',
+    overblow === '6/6o',
+    `got "${overblow}"`,
+  );
+
+  // A bend sits below the note it bends from, so ascending pitch puts -4' first.
+  const bend = txtBody([at('-4', 0), at("-4'", 0)]);
+  check(
+    'a group containing a bend is not a chord',
+    bend === "-4'/-4",
+    `got "${bend}"`,
+  );
+
+  const offHarp = txtBody([at('4', 0), at('', 0, { note: 'C#7' })]);
+  check(
+    'an off-harp pitch keeps its bracketed name inside the group',
+    offHarp === '4/[C#7]',
+    `got "${offHarp}"`,
+  );
+
+  // Holes run to 12 on a chromatic, so "12" would be unreadable as holes 1 and 2.
+  const chromatic = txtBody([at('1', 0, { type: 'chromatic' }), at('2', 0, { type: 'chromatic' })], 'chromatic');
+  check(
+    'a chromatic chord stays slashed, since hole 12 collides with holes 1+2',
+    chromatic === '1/2',
+    `got "${chromatic}"`,
+  );
+}
+
+function chordHeaderCount(): void {
+  // A playable chord is one thing to play; a group that isn't playable is still separate notes.
+  const notes = [
+    at('4', 0), at('5', 0), at('6', 0),   // one chord      → counts 1
+    at('6', 1000), at('-6', 1000),        // not playable   → counts 2
+    at('-4', 2000),                       // a single note  → counts 1
+  ];
+  check(
+    'the header counts a playable chord once and an unplayable group per note',
+    txtHeader(notes) === 'Harp2Tab -- Key of C -- 4 notes',
+    `got "${txtHeader(notes)}"`,
+  );
+
+  check(
+    'a lone note is still counted, and singular reads correctly',
+    txtHeader([at('4', 0)]) === 'Harp2Tab -- Key of C -- 1 note',
+    `got "${txtHeader([at('4', 0)])}"`,
+  );
+}
+
 function main(): void {
   singleTrackTxtUnchanged();
   singleTrackCsvRowOrder();
@@ -270,6 +427,10 @@ function main(): void {
   musicXmlParts();
   musicXmlEscapesNames();
   jsonMultiPart();
+  chordsConcatenate();
+  chordOnsetWindow();
+  unplayableGroupsUseSlashes();
+  chordHeaderCount();
 
   for (const result of results) {
     console.log(`${result.passed ? 'PASS' : 'FAIL'}  ${result.name} — ${result.detail}`);

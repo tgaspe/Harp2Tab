@@ -383,7 +383,7 @@ export default function StudioScreen() {
 
     const ranking = rankKeysForTrack(track, harmonicaType);
     if (!ranking) {
-      setNotice({ text: `"${track.name}" has no notes long enough to play on a harmonica.`, tone: 'warning' });
+      setNotice({ text: `"${track.name}" has no notes to convert — check its velocity and length filters.`, tone: 'warning' });
       return;
     }
 
@@ -420,7 +420,7 @@ export default function StudioScreen() {
     });
     if (!result) {
       setConverting(null);
-      setNotice({ text: `"${track.name}" has no notes long enough to play on a harmonica.`, tone: 'warning' });
+      setNotice({ text: `"${track.name}" has no notes to convert — check its velocity and length filters.`, tone: 'warning' });
       return;
     }
 
@@ -854,7 +854,7 @@ function createStyles(t: Theme) {
       borderColor: t.warning,
     },
     noticeSuccess: { backgroundColor: t.successSoft, borderColor: t.success },
-    // `flex: 1` so a long warning ("... has no notes long enough to play on a harmonica.")
+    // `flex: 1` so a long warning ("... has no notes to convert — check its filters.")
     // wraps against the X rather than pushing it off the end of the banner.
     noticeText: { flex: 1, minWidth: 0, fontFamily: SpaceGrotesk.regular, fontSize: 13, color: t.textPrimary },
     noticeClose: {
