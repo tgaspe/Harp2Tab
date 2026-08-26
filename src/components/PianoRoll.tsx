@@ -2627,7 +2627,7 @@ export function PianoRoll({
       {/* Documents the tools, shortcuts and gestures — none of which exist on a view-only
           roll, and there's no button left to open it with either. */}
       {!viewOnly && (
-        <HelpModal visible={helpOpen} onClose={() => setHelpOpen(false)} theme={theme} styles={styles} />
+        <HelpModal visible={helpOpen} onClose={() => setHelpOpen(false)} noteColor={noteColor} theme={theme} styles={styles} />
       )}
     </View>
   );
@@ -2659,7 +2659,17 @@ interface ToolHelpEntry {
   desc: string;
 }
 
-const TOOL_HELP: ToolHelpEntry[] = [
+/**
+ * The entries, for a roll that colours its notes by harmonica technique (the tab editor) or
+ * by track (the Studio).
+ *
+ * A list rather than a constant because one modal serves both rolls, and some of what it
+ * documents only exists on one of them. Harmonica-ness is read off `noteColor`, which is
+ * exactly the flag the renderer itself uses: the Studio passes a track colour precisely
+ * because technique is a harmonica idea and no harp has been chosen at that stage.
+ */
+function toolHelp(harmonica: boolean): ToolHelpEntry[] {
+  return [
   { icon: 'pencil', title: 'Pencil tool [1]',
     desc: 'Click empty grid to create a note. Click an existing note to select it. Drag a note to move it, drag its left/right edge to resize. Right-click a note to delete it.' },
   { icon: 'scan-outline', title: 'Selection tool [2]',
@@ -2677,12 +2687,20 @@ const TOOL_HELP: ToolHelpEntry[] = [
   { icon: 'flag-outline', title: 'Loop-region pin',
     desc: 'The blue tab left of the ruler. Drag it out onto the timeline and release to drop a marker, then drag it again for the second one — the span between them (regardless of which you placed first) becomes the loop region, played back on repeat. Once placed, drag either edge of the blue band to adjust it, or its × to clear it. Esc cancels a pin mid-drag.' },
   { icon: 'chevron-up', title: 'Semitone / Octave shift',
-    desc: 'Moves the selected note(s) up/down the chromatic grid — the small chevrons shift a semitone, the circled arrows a full octave. Rows greyed out and labeled with just a pitch name aren’t real positions on the current harmonica; a semitone shift that would land there simply skips that note (a message says how many), while the octave buttons disable themselves instead if any selected note is already at the very edge.' },
-  { icon: 'musical-notes-outline', title: 'Key & Type (sidebar)',
-    desc: 'Transpose vs Translate decides what a key change keeps. Transpose keeps the tabs and moves the music: the same holes on a new harp, so it can never make a note unplayable. Translate keeps the music and rewrites the tabs: the same pitches played on a different harp — the one to use when you own a C harp and the song wants a G. Translate can strand notes that sit outside the new harp’s range, so it warns first with a count. Switching Diatonic/Chromatic always keeps the pitches too, and warns the same way.' },
-];
+    desc: harmonica
+      // The greyed-row half of this is harmonica-only: the Studio's ladder is all 128
+      // semitones and every row of it is a real pitch, so nothing there can be skipped.
+      ? 'Moves the selected note(s) up/down the chromatic grid — the small chevrons shift a semitone, the circled arrows a full octave. Rows greyed out and labeled with just a pitch name aren’t real positions on the current harmonica; a semitone shift that would land there simply skips that note (a message says how many), while the octave buttons disable themselves instead if any selected note is already at the very edge.'
+      : 'Moves the selected note(s) up/down the chromatic grid — the small chevrons shift a semitone, the circled arrows a full octave. Every row here is a real pitch, so nothing gets skipped; the octave buttons disable themselves if any selected note is already at the edge of the grid.' },
+  // The tab editor's sidebar. There is no key or harmonica type in the Studio — no harp has
+  // been chosen at that stage — so this would document a control that isn't on screen.
+  ...(harmonica ? [{ icon: 'musical-notes-outline' as const, title: 'Key & Type (sidebar)',
+    desc: 'Transpose vs Translate decides what a key change keeps. Transpose keeps the tabs and moves the music: the same holes on a new harp, so it can never make a note unplayable. Translate keeps the music and rewrites the tabs: the same pitches played on a different harp — the one to use when you own a C harp and the song wants a G. Translate can strand notes that sit outside the new harp’s range, so it warns first with a count. Switching Diatonic/Chromatic always keeps the pitches too, and warns the same way.' }] : []),
+  ];
+}
 
-const SHORTCUTS: [string, string][] = [
+function shortcuts(harmonica: boolean): [string, string][] {
+  return [
   ['1 / 2', 'Pencil / Selection tool'],
   ['Click (pencil)', 'Create a note, or select one under the cursor'],
   ['Drag note', 'Move it'],
@@ -2693,16 +2711,28 @@ const SHORTCUTS: [string, string][] = [
   ['↑ / ↓', 'Shift the selected note(s) a semitone'],
   ['Shift+↑ / Shift+↓', 'Shift the selected note(s) an octave'],
   ['Backspace / Delete', 'Delete the selected note(s)'],
-  ['Ctrl/Cmd+A', 'Select all visible notes'],
+  ['Ctrl/Cmd+A', harmonica ? 'Select all visible notes' : 'Select every visible note in the active track'],
   ['Ctrl/Cmd+C / V / D', 'Copy / paste / duplicate'],
   ['Ctrl/Cmd+Z', 'Undo'],
   ['Shift+Ctrl/Cmd+Z, or Ctrl/Cmd+Y', 'Redo'],
+  // Named for what it saves rather than just "Save" — and named once, for the roll you are
+  // actually looking at, rather than listing both screens' answers on both screens.
+  ['Ctrl/Cmd+S', harmonica ? 'Save this tab to your library' : 'Save the project'],
   ['Drag ruler pin', 'Drop a loop-region marker, then drag another for the other end'],
-];
+  // Already described in the loop-region entry opposite; listed here too because the
+  // shortcut column is where someone looks for a key, not for a tool.
+  ['Esc', 'Cancel a pin mid-drag, or clear one already dropped'],
+  ];
+}
 
-function HelpModal({ visible, onClose, theme, styles }: {
-  visible: boolean; onClose: () => void; theme: Theme; styles: ReturnType<typeof createStyles>;
+function HelpModal({ visible, onClose, noteColor, theme, styles }: {
+  visible: boolean; onClose: () => void;
+  /** The roll's note colour override, or absent on a technique-coloured (harmonica) roll —
+   *  see `toolHelp` for why this one prop decides what the modal documents. */
+  noteColor?: string;
+  theme: Theme; styles: ReturnType<typeof createStyles>;
 }) {
+  const harmonica = noteColor === undefined;
   return (
     <Modal visible={visible} transparent animationType="fade" statusBarTranslucent onRequestClose={onClose}>
       {/* No accessibilityRole="button" on the backdrop/card wrappers — matches
@@ -2728,7 +2758,7 @@ function HelpModal({ visible, onClose, theme, styles }: {
             <View style={styles.helpColumns}>
               <View style={styles.helpColumn}>
                 <Text style={styles.helpSectionTitle}>Tools & controls</Text>
-                {TOOL_HELP.map((entry) => (
+                {toolHelp(harmonica).map((entry) => (
                   <View key={entry.title} style={styles.helpToolRow}>
                     <View style={styles.helpToolIcon}>
                       <Ionicons name={entry.icon} size={14} color={theme.accent} />
@@ -2743,16 +2773,37 @@ function HelpModal({ visible, onClose, theme, styles }: {
 
               <View style={styles.helpColumn}>
                 <Text style={styles.helpSectionTitle}>Note colors</Text>
-                {(Object.keys(TECHNIQUE_COLOR) as NoteTechnique[]).map((tech) => (
-                  <View key={tech} style={styles.helpColorRow}>
-                    <View style={[styles.helpColorSwatch, { backgroundColor: TECHNIQUE_COLOR[tech] }]} />
-                    <Text style={styles.helpRowText}>{TECHNIQUE_LABEL[tech]}</Text>
-                  </View>
-                ))}
+                {/* The technique legend is meaningless on a roll that doesn't use it: in the
+                    Studio every note is the track's colour, so listing blow/draw/bend swatches
+                    described nothing on screen. What that roll does say with colour is which
+                    track a note belongs to, so it gets that instead. */}
+                {harmonica ? (
+                  (Object.keys(TECHNIQUE_COLOR) as NoteTechnique[]).map((tech) => (
+                    <View key={tech} style={styles.helpColorRow}>
+                      <View style={[styles.helpColorSwatch, { backgroundColor: TECHNIQUE_COLOR[tech] }]} />
+                      <Text style={styles.helpRowText}>{TECHNIQUE_LABEL[tech]}</Text>
+                    </View>
+                  ))
+                ) : (
+                  <>
+                    <View style={styles.helpColorRow}>
+                      <View style={[styles.helpColorSwatch, { backgroundColor: noteColor }]} />
+                      <Text style={styles.helpRowText}>The track you’re editing.</Text>
+                    </View>
+                    <View style={styles.helpColorRow}>
+                      <View style={[styles.helpColorSwatch, { backgroundColor: noteColor, opacity: 0.32 }]} />
+                      <Text style={styles.helpRowText}>
+                        Dimmed like this: the other audible tracks, each in its own colour. They’re
+                        drawn behind for reference — playback includes them, but they can’t be
+                        selected or edited until you switch to that track.
+                      </Text>
+                    </View>
+                  </>
+                )}
 
                 <View style={styles.helpDivider} />
                 <Text style={styles.helpSectionTitle}>Keyboard shortcuts</Text>
-                {SHORTCUTS.map(([keys, desc]) => (
+                {shortcuts(harmonica).map(([keys, desc]) => (
                   <View key={keys} style={styles.helpShortcutRow}>
                     <Text style={styles.helpShortcutKeys}>{keys}</Text>
                     <Text style={[styles.helpRowText, styles.helpShortcutDesc]}>{desc}</Text>

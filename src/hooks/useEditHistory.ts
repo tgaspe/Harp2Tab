@@ -2,6 +2,8 @@ import { useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { Platform } from 'react-native';
 
+import { isTextInput } from './keyboardShortcuts';
+
 /**
  * Undo/redo, in two parts: a contract both editors expose, and a generic stack for the one
  * that doesn't already have somewhere to keep it.
@@ -94,11 +96,6 @@ export function useEditHistory<T>(
 export function useUndoRedoShortcuts({ undo, redo }: Pick<EditHistory, 'undo' | 'redo'>) {
   useFocusEffect(useCallback(() => {
     if (Platform.OS !== 'web') return;
-
-    function isTextInput(target: EventTarget | null): boolean {
-      const el = target as HTMLElement | null;
-      return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
-    }
 
     function onKeyDown(e: KeyboardEvent) {
       if (!(e.ctrlKey || e.metaKey) || isTextInput(e.target)) return;

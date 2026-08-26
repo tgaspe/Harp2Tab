@@ -34,6 +34,7 @@ import { pickAudioFile } from '@/audio/pickAudioFile';
 import { pickMidiFile } from '@/audio/pickMidiFile';
 import { useRollTransport, formatElapsed } from '@/hooks/useRollTransport';
 import { useUndoRedoShortcuts } from '@/hooks/useEditHistory';
+import { useSaveShortcut } from '@/hooks/keyboardShortcuts';
 import { previewNote } from '@/native/Playback';
 import { noteToTab } from '@/audio/HarmonicaMapper';
 import { generateForFormat, singlePart } from '@/export/generators';
@@ -152,6 +153,10 @@ export default function EditScreen() {
   // The tab session's history already lives in `useAppStore` (the list view undoes the
   // same edits the roll does); only the bindings are shared with the Studio.
   useUndoRedoShortcuts({ undo, redo });
+  // Ctrl/Cmd+S, bound to the same handler as the sidebar's Save button — so it writes the
+  // library entry and flashes the same "Saved" confirmation, rather than being a second,
+  // quieter way to save that leaves the user unsure whether anything happened.
+  useSaveShortcut(handleSaveToLibrary);
 
   function handleSelect(id: string) {
     setSelectedId((prev) => {

@@ -37,6 +37,7 @@ import { useRecordingsStore } from '@/store/useRecordingsStore';
 import { selectHarmonicaType, useAppStore } from '@/store/useAppStore';
 import { useRollTransport, formatElapsed } from '@/hooks/useRollTransport';
 import { useEditHistory, useUndoRedoShortcuts } from '@/hooks/useEditHistory';
+import { useSaveShortcut } from '@/hooks/keyboardShortcuts';
 import { useHeaderActionStore } from '@/store/useHeaderActionStore';
 import { useTheme } from '@/hooks/useTheme';
 import { getPremium } from '@/hooks/usePremium';
@@ -346,6 +347,12 @@ export default function StudioScreen() {
     setDirty(false);
     setNotice({ text: 'Saved to library.', tone: 'success' });
   }, [project, dirty, saveProject]);
+
+  // Ctrl/Cmd+S, the same handler the header's Save button uses — including its `!dirty`
+  // no-op, so pressing it twice doesn't rewrite an unchanged project. Bound here rather than
+  // beside `useUndoRedoShortcuts` above only because `handleSave` is a `const`: a call
+  // placed earlier would read it in its temporal dead zone.
+  useSaveShortcut(handleSave);
 
   /**
    * Delete the whole project and go home.
