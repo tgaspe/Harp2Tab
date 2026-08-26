@@ -12,6 +12,7 @@
  * it is degraded turns a working experience into a broken-looking one.
  */
 
+import { drumZoneForKey, keysToEvict, zoneForKey } from './resolver';
 import type { DrumKitManifest, DrumZone, InstrumentManifest } from './types';
 
 /** The single place the version pinned in `docs/plan/soundfont-source.md` appears. The
@@ -24,9 +25,16 @@ const BASE = `/soundfonts/${SOUNDFONT_DIR}`;
  *  in the buffer cache. Mirrors GM's own convention of putting the kit in bank 128. */
 export const DRUM_PROGRAM = 128;
 
-/** Decoded audio is the expensive thing to hold. 64 buffers is roughly four instruments'
- *  worth at the zone density this phase ships. */
-const MAX_BUFFERS = 64;
+/** Headroom for buffers outside the current project's working set — a previously-played
+ *  project, an instrument auditioned in the picker. The working set itself is pinned and is
+ *  never counted against this, because a project that needs more entries than the cap must
+ *  still play: the GM drum kit alone is 60 files before a single melodic track. */
+const MAX_UNPINNED_BUFFERS = 128;
+
+/** Buffer keys the transport is about to need. Eviction skips these. Replaced wholesale on
+ *  every `ensureNotesLoaded`, so the previous project's samples become evictable the moment
+ *  a new one is prepared. */
+let pinnedKeys: Set<string> = new Set();
 
 /**
  * Decoding-only context, deliberately not the playing one: `playNotes` builds a fresh
@@ -116,11 +124,62 @@ function touch(key: string, buffer: AudioBuffer): void {
   // first key the least recently used one.
   buffers.delete(key);
   buffers.set(key, buffer);
-  while (buffers.size > MAX_BUFFERS) {
-    const oldest = buffers.keys().next().value as string | undefined;
-    if (oldest === undefined) break;
-    buffers.delete(oldest);
+  for (const evict of keysToEvict([...buffers.keys()], pinnedKeys, MAX_UNPINNED_BUFFERS)) {
+    buffers.delete(evict);
   }
+}
+
+/** What a note needs, in the cache's own terms — no `TabNote` in here, so the sound bank
+ *  stays independent of the editor's shapes. */
+export interface NoteRequest {
+  program: number;
+  midiKey: number;
+  percussion?: boolean;
+}
+
+/**
+ * Load exactly the samples a set of notes will play, and pin them.
+ *
+ * Deliberately not "every zone of every program". A project touching eight instruments plus
+ * drums has several hundred zones between them, of which the notes actually reach a few
+ * dozen; loading the rest costs seconds of fetching and tens of MB of decoded audio for
+ * samples nothing will ever ask for.
+ *
+ * Never rejects. A program that fails to load simply plays as an oscillator.
+ */
+export async function ensureNotesLoaded(requests: NoteRequest[]): Promise<void> {
+  const programs = [...new Set(requests.filter((r) => !r.percussion).map((r) => r.program))];
+  const needsDrums = requests.some((r) => r.percussion);
+
+  // Manifests first: they are small, and the zone lookup below needs them before it can say
+  // which audio files are actually reachable.
+  const manifestList = await Promise.all(programs.map((p) => loadInstrument(p)));
+  const byProgram = new Map(programs.map((p, i) => [p, manifestList[i]]));
+  const kit = needsDrums ? await loadDrumKit() : null;
+
+  const needed = new Set<string>();
+  for (const request of requests) {
+    if (request.percussion) {
+      const zone = kit ? drumZoneForKey(kit, request.midiKey) : null;
+      if (zone) {
+        needed.add(`${DRUM_PROGRAM}/${zone.file}`);
+        if (zone.fileRight) needed.add(`${DRUM_PROGRAM}/${zone.fileRight}`);
+      }
+      continue;
+    }
+    const manifest = byProgram.get(request.program);
+    const zone = manifest ? zoneForKey(manifest, request.midiKey) : null;
+    if (!zone) continue;
+    needed.add(`${request.program}/${zone.file}`);
+    if (zone.fileRight) needed.add(`${request.program}/${zone.fileRight}`);
+  }
+
+  // Pin before loading, or `touch` evicts each arrival to make room for the next.
+  pinnedKeys = needed;
+  await Promise.all([...needed].map((key) => {
+    const slash = key.indexOf('/');
+    return sampleBufferFor(Number(key.slice(0, slash)), key.slice(slash + 1));
+  }));
 }
 
 /** Keyed by file rather than by zone, so the two halves of a stereo pair are ordinary cache

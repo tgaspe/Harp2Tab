@@ -14,6 +14,8 @@ export async function loadInstrument(_program: number): Promise<InstrumentManife
 export async function loadDrumKit(): Promise<DrumKitManifest | null> { return null; }
 export async function sampleBufferFor(_program: number, _file: string): Promise<AudioBuffer | null> { return null; }
 export async function ensureProgramsLoaded(_programs: number[], _includeDrums: boolean): Promise<void> { /* no-op */ }
+export interface NoteRequest { program: number; midiKey: number; percussion?: boolean }
+export async function ensureNotesLoaded(_requests: NoteRequest[]): Promise<void> { /* no-op */ }
 export function cachedManifest(_program: number): InstrumentManifest | null { return null; }
 export function cachedDrumKit(): DrumKitManifest | null { return null; }
 export function cachedBuffer(_program: number, _file: string): AudioBuffer | null { return null; }

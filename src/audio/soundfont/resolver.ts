@@ -69,3 +69,22 @@ export function sampleOffsetSecFor(elapsedMs: number, rate: number, pitchRate: n
   if (elapsedMs <= 0) return 0;
   return (elapsedMs / 1000 / rate) * pitchRate;
 }
+
+/**
+ * Which cache entries to drop, oldest first, without ever dropping one the current project
+ * needs.
+ *
+ * The pinned set is the whole point. A plain LRU evicts during the very load meant to warm
+ * it: a Studio project with drums needs more entries than the cap on its own (the GM kit is
+ * 60 files before a single melodic track), so entries are thrown away as fast as they
+ * arrive and the scheduler then finds nothing resident. Pinning the working set means the
+ * cache grows to whatever the project actually requires and only ever sheds what it doesn't.
+ *
+ * `order` is oldest-first — `Map` iteration order, given re-insertion on use.
+ */
+export function keysToEvict(order: string[], pinned: ReadonlySet<string>, max: number): string[] {
+  const evictable = order.filter((key) => !pinned.has(key));
+  const excess = order.length - max;
+  if (excess <= 0) return [];
+  return evictable.slice(0, Math.min(excess, evictable.length));
+}

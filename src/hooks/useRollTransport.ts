@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
 import { usePlayback } from '@/hooks/usePlayback';
-import { ensureProgramsLoaded } from '@/audio/soundfont';
+import { ensureNotesLoaded } from '@/audio/soundfont';
+import { noteNameToMidi } from '@/audio/HarmonicaMapper';
 import { DEFAULT_PROGRAM } from '@/audio/timbre';
 import { PLAYBACK_RATES, barDurationMs, type TempoMap } from '@/audio/tempo';
 import type { TabNote } from '@/types';
@@ -116,10 +117,16 @@ export function useRollTransport({
      * handful of instruments, not a piece of audio — see the plan's "No streaming
      * scheduler". `ensureProgramsLoaded` never rejects: a failed load resolves and every
      * note falls back to its oscillator, silently. */
-    // `?? DEFAULT_PROGRAM` rather than a filter: a note with no program still has a sound to
-    // load — the harmonica a tab session is made of.
-    const programs = [...new Set(notes.map((n) => n.program ?? DEFAULT_PROGRAM))];
-    const ready = ensureProgramsLoaded(programs, notes.some((n) => n.percussion === true));
+    /* Exactly the samples these notes will play, not every zone of every program they
+     * mention. `?? DEFAULT_PROGRAM` rather than a filter: a note with no program still has a
+     * sound to load — the harmonica a tab session is made of. */
+    const requests = [];
+    for (const n of notes) {
+      const midiKey = noteNameToMidi(n.note);
+      if (midiKey === null) continue;
+      requests.push({ program: n.program ?? DEFAULT_PROGRAM, midiKey, percussion: n.percussion });
+    }
+    const ready = ensureNotesLoaded(requests);
 
     const slowTimer = setTimeout(() => {
       if (playGenerationRef.current === generation) setInstrumentsLoading(true);

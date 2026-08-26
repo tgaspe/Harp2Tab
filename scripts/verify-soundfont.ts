@@ -13,6 +13,7 @@
 
 import {
   drumZoneForKey,
+  keysToEvict,
   loopSecondsFor,
   playbackRateFor,
   sampleOffsetSecFor,
@@ -213,6 +214,25 @@ function pairsDoNotCrossKeyRanges(): void {
   check('stereo: ranges must match', apart.length === 2, 'different ranges -> not paired');
 }
 
+// ── Cache eviction ────────────────────────────────────────────────────────────
+
+function evictionNeverDropsTheWorkingSet(): void {
+  // The bug this locks out: a plain LRU evicts during the load meant to warm it. The GM drum
+  // kit alone is 60 files, so an 8-track project exceeds any fixed cap on its own, entries
+  // are discarded as fast as they arrive, and the scheduler finds nothing resident — the
+  // Studio plays silently while a single soloed track (which fits) sounds fine.
+  const order = ['a', 'b', 'c', 'd'];
+  check('evict: under the cap drops nothing',
+    keysToEvict(order, new Set(), 10).length === 0, '4 entries, cap 10');
+  check('evict: over the cap drops oldest first',
+    JSON.stringify(keysToEvict(order, new Set(), 2)) === JSON.stringify(['a', 'b']), 'drops a,b');
+  check('evict: a pinned entry is never dropped',
+    JSON.stringify(keysToEvict(order, new Set(['a', 'b']), 2)) === JSON.stringify(['c', 'd']),
+    'pinned a,b survive');
+  check('evict: an all-pinned cache grows rather than thrashing',
+    keysToEvict(order, new Set(order), 2).length === 0, 'working set larger than the cap');
+}
+
 // ── Percussion plumbing ───────────────────────────────────────────────────────
 
 function percussionSurvivesTheFlatten(): void {
@@ -251,6 +271,7 @@ function main(): void {
   pairsDoNotCrossKeyRanges();
   percussionSurvivesTheFlatten();
   seekOffsetReconcilesAllThreeClocks();
+  evictionNeverDropsTheWorkingSet();
 
   for (const result of results) {
     console.log(`${result.passed ? 'PASS' : 'FAIL'}  ${result.name} — ${result.detail}`);

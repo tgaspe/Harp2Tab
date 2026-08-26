@@ -9,9 +9,12 @@
 export type {
   Catalog, CatalogEntry, DrumKitManifest, DrumZone, InstrumentManifest, SampleZone,
 } from './types';
-export { drumZoneForKey, loopSecondsFor, playbackRateFor, sampleOffsetSecFor, zoneForKey } from './resolver';
+export {
+  drumZoneForKey, keysToEvict, loopSecondsFor, playbackRateFor, sampleOffsetSecFor, zoneForKey,
+} from './resolver';
 export {
   cachedBuffer, cachedDrumBuffer, cachedDrumKit, cachedManifest,
-  DRUM_PROGRAM, ensureProgramsLoaded, loadDrumKit, loadInstrument, sampleBufferFor,
+  DRUM_PROGRAM, ensureNotesLoaded, ensureProgramsLoaded, loadDrumKit, loadInstrument,
+  sampleBufferFor,
   SOUNDFONT_DIR,
 } from './sampleCache';
