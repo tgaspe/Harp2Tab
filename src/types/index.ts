@@ -62,6 +62,15 @@ export interface TabNote {
    *
    *  Never written by an edit — see `VelocitySource`. */
   velocitySource?: VelocitySource;
+  /** True when the note came from MIDI channel 9, where pitch names a drum rather than a
+   *  note. A *playback* hint only, exactly like `program` below.
+   *
+   *  It exists because the Studio flattens every audible track into one `TabNote[]`
+   *  (`studio.tsx:218`), which drops the channel — harmless while every voice was a test
+   *  tone, and a room full of pianos playing a drum part the moment real samples arrived.
+   *  The tab pipeline drops percussion long before this (`midiToNotes.ts:85`), so nothing
+   *  downstream of a tab ever sees it set. */
+  percussion?: boolean;
   /** General MIDI program, as a *playback* hint only — it never affects tabs. Set when the
    *  Studio hands a multi-track project to the scheduler, so a flute and a cello don't
    *  arrive as the same tone; absent for a tab session, which is one harmonica. */

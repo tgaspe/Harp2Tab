@@ -19,6 +19,8 @@ import {
 } from '../src/audio/soundfont/resolver';
 import type { DrumKitManifest, InstrumentManifest, SampleZone } from '../src/audio/soundfont/types';
 import { pairStereo, type ResolvedZone, type SampleHeader } from './build-soundfont';
+import { createTrack } from '../src/audio/midiProject';
+import { trackToTabNotes } from '../src/audio/studioNotes';
 
 // ── Assertions ────────────────────────────────────────────────────────────────
 
@@ -169,6 +171,31 @@ function pairsDoNotCrossKeyRanges(): void {
   check('stereo: ranges must match', apart.length === 2, 'different ranges -> not paired');
 }
 
+// ── Percussion plumbing ───────────────────────────────────────────────────────
+
+function percussionSurvivesTheFlatten(): void {
+  // studio.tsx:218 flattens every audible track into one TabNote[] carrying `program` and
+  // nothing else. Before this flag a drum track reached the scheduler indistinguishable from
+  // a piano track — harmless while everything was a test tone, and a room full of pianos
+  // playing a drum part the moment samples arrived.
+  const drums = createTrack(0, {
+    channel: 9,
+    notes: [{ midi: 36, timeMs: 0, durationMs: 100, velocity: 100 }],
+  });
+  check('percussion: flagged on channel 9', trackToTabNotes(drums)[0]?.percussion === true, 'channel 9 → percussion');
+
+  const piano = createTrack(0, {
+    channel: 0,
+    notes: [{ midi: 60, timeMs: 0, durationMs: 100, velocity: 100 }],
+  });
+  check('percussion: absent elsewhere', trackToTabNotes(piano)[0]?.percussion !== true, 'channel 0 → not percussion');
+
+  // Channel 15 is the escape hatch `createTrack` uses for a tenth track so it doesn't land
+  // on percussion by accident (midiProject.ts:59). It must not read as drums.
+  const tenth = createTrack(9, { notes: [{ midi: 60, timeMs: 0, durationMs: 100, velocity: 100 }] });
+  check('percussion: the tenth track is not drums', trackToTabNotes(tenth)[0]?.percussion !== true, 'channel 15 → not percussion');
+}
+
 function main(): void {
   zonesSplitByRange();
   zoneBoundariesAreInclusive();
@@ -180,6 +207,7 @@ function main(): void {
   stereoPairsCollapseToOneZone();
   loneChannelsAndMonoSurvive();
   pairsDoNotCrossKeyRanges();
+  percussionSurvivesTheFlatten();
 
   for (const result of results) {
     console.log(`${result.passed ? 'PASS' : 'FAIL'}  ${result.name} — ${result.detail}`);

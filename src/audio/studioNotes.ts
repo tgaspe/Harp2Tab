@@ -56,6 +56,10 @@ export function trackToTabNotes(track: MidiTrackData): TabNote[] {
     velocitySource: note.velocity === undefined ? undefined : track.velocitySource,
     // Carried so playback can voice the track; the piano roll ignores it entirely.
     program:     track.program,
+    // Channel 9 is GM percussion, where `program` means nothing and pitch names a drum.
+    // Set here rather than derived at playback because this is the last place the channel
+    // is still in hand — the Studio flattens tracks into one list before scheduling.
+    percussion:  track.channel === PERCUSSION_CHANNEL ? true : undefined,
   }));
   tabNoteCache.set(track, adapted);
   return adapted;
@@ -72,6 +76,9 @@ export function trackToTabNotes(track: MidiTrackData): TabNote[] {
  * thousands of notes per frame to redraw lanes that did not change.
  */
 const tabNoteCache = new WeakMap<MidiTrackData, TabNote[]>();
+
+/** Channel 10 in one-based MIDI terms, matching `midiToNotes.ts:51`. */
+const PERCUSSION_CHANNEL = 9;
 const visibleCache = new WeakMap<MidiTrackData, TabNote[]>();
 
 /**

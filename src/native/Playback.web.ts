@@ -1,3 +1,8 @@
+import { noteNameToMidi } from '@/audio/HarmonicaMapper';
+import {
+  cachedBuffer, cachedDrumBuffer, cachedDrumKit, cachedManifest,
+  drumZoneForKey, DRUM_PROGRAM, loopSecondsFor, playbackRateFor, zoneForKey,
+} from '@/audio/soundfont';
 import { noteNameToFrequency } from '@/audio/synthesizeWav';
 import { constantTempoMap, gridLines, type PlaybackOptions } from '@/audio/tempo';
 import { velocityGain, voiceForProgram } from '@/audio/timbre';
@@ -7,9 +12,16 @@ import type { TabNote } from '@/types';
 // Web gets real-time OscillatorNode scheduling — no pre-render/file-write round-trip
 // needed like the native path, since Web Audio can schedule tones directly.
 const AMPLITUDE = 0.3;
+/** Samples are recorded well below full scale, where the oscillators were trimmed to 0.3
+ *  against a bare destination. Set by ear against the fallback (Task 4 Step 8) so that a
+ *  sampled track and an oscillator track in the same project sit level with each other. */
+const AMPLITUDE_SAMPLED = 0.5;
 
 let audioContext: AudioContext | null = null;
-let activeOscillators: OscillatorNode[] = [];
+/** Oscillators and buffer sources both, under their common supertype — `stopPlayback` only
+ *  needs `stop()`, and keeping one list means a sampled voice can never be left running by a
+ *  code path that forgot about it. */
+let activeVoices: AudioScheduledSourceNode[] = [];
 
 function scheduleMetronome(
   ctx: AudioContext,
@@ -47,8 +59,71 @@ function scheduleMetronome(
     gain.connect(ctx.destination);
     osc.start(startSec);
     osc.stop(startSec + 0.04);
-    activeOscillators.push(osc);
+    activeVoices.push(osc);
   }
+}
+
+/**
+ * One buffer source, or two panned hard apart when the zone came from an SF2 stereo pair.
+ *
+ * A pair is two mono samples, so playing only the left — which is what happens if you treat
+ * `fileRight` as optional decoration — gives a thin, slightly-off instrument rather than an
+ * obvious defect. If the right channel isn't in the cache the left plays alone, which is
+ * still better than silence.
+ */
+function buildSources(
+  ctx: AudioContext,
+  left: AudioBuffer,
+  right: AudioBuffer | null,
+  destination: AudioNode,
+  playbackRate: number,
+): AudioBufferSourceNode[] {
+  const make = (buffer: AudioBuffer, pan: number | null): AudioBufferSourceNode => {
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.playbackRate.value = playbackRate;
+    if (pan === null) {
+      source.connect(destination);
+    } else {
+      const panner = ctx.createStereoPanner();
+      panner.pan.value = pan;
+      source.connect(panner);
+      panner.connect(destination);
+    }
+    return source;
+  };
+  return right ? [make(left, -1), make(right, 1)] : [make(left, null)];
+}
+
+/** Gain → optional low-pass → optional pan → output.
+ *
+ *  The filter is SF2's `initialFilterFc`, and it is not optional polish: for a lot of
+ *  MuseScore General that filter is most of the timbre, and omitting it is what makes a
+ *  sampled GM set sound bright and synthetic in a way that is hard to diagnose later. */
+function connectVoiceTail(
+  ctx: AudioContext,
+  gain: GainNode,
+  pan: number,
+  filterHz: number | undefined,
+  filterQ: number | undefined,
+  output: AudioNode,
+): void {
+  let tail: AudioNode = gain;
+  if (filterHz !== undefined) {
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = filterHz;
+    filter.Q.value = filterQ ?? 1;
+    tail.connect(filter);
+    tail = filter;
+  }
+  if (pan !== 0) {
+    const panner = ctx.createStereoPanner();
+    panner.pan.value = pan;
+    tail.connect(panner);
+    tail = panner;
+  }
+  tail.connect(output);
 }
 
 export async function playNotes(notes: TabNote[], options?: PlaybackOptions, startAtMs = 0): Promise<void> {
@@ -59,6 +134,15 @@ export async function playNotes(notes: TabNote[], options?: PlaybackOptions, sta
   audioContext = ctx;
   const now = ctx.currentTime;
   const rate = options?.rate ?? 1;
+
+  // One output stage for both paths. A dozen sampled tracks clip where a dozen sine waves
+  // did not, and compressing only the sampled path would make the *fallback* audibly louder
+  // than the real thing, which is precisely backwards. The metronome deliberately bypasses
+  // it (see `scheduleMetronome`): a reference click should not duck under a loud bar.
+  const compressor = ctx.createDynamicsCompressor();
+  compressor.threshold.value = -12;
+  compressor.ratio.value = 4;
+  compressor.connect(ctx.destination);
 
   for (const n of notes) {
     const noteEnd = n.start_time + n.duration;
@@ -73,6 +157,80 @@ export async function playNotes(notes: TabNote[], options?: PlaybackOptions, sta
     const startSec = now + (effectiveStart - startAtMs) / 1000 / rate;
     const durSec    = (noteEnd - effectiveStart) / 1000 / rate;
     const fadeSec   = Math.min(0.01, durSec / 4);
+
+    const midiKey = noteNameToMidi(n.note);
+
+    // ── Percussion ────────────────────────────────────────────────────────────
+    // Ahead of the melodic branch because a drum note's `program` is meaningless: channel 9
+    // names a drum by pitch, so resolving it as an instrument would play a room full of
+    // pianos for a drum part.
+    if (n.percussion) {
+      const kit = cachedDrumKit();
+      const drum = kit && midiKey !== null ? drumZoneForKey(kit, midiKey) : null;
+      const drumBuffer = drum ? cachedDrumBuffer(drum) : null;
+
+      if (drum && drumBuffer) {
+        const gain = ctx.createGain();
+        const peak = AMPLITUDE_SAMPLED * drum.gain * velocityGain(noteVelocity(n));
+        gain.gain.setValueAtTime(0, startSec);
+        gain.gain.linearRampToValueAtTime(peak, startSec + 0.002);
+        connectVoiceTail(ctx, gain, drum.pan, undefined, undefined, compressor);
+
+        // Selected, never transposed, and never stopped at `startSec + durSec`: a drum
+        // sample is a one-shot whose length is a property of the sound, so cutting a crash
+        // off at its notated duration is the most obvious way to make a kit sound wrong.
+        // `stopPlayback` still kills it, because it goes into `activeVoices`.
+        for (const source of buildSources(ctx, drumBuffer, drum.fileRight ? cachedBuffer(DRUM_PROGRAM, drum.fileRight) : null, gain, 1)) {
+          source.start(startSec);
+          activeVoices.push(source);
+        }
+        continue;
+      }
+      // No kit loaded — fall through to the oscillator, which is what a drum note does today.
+    }
+
+    // ── Sampled melodic voice ─────────────────────────────────────────────────
+    const manifest = n.program === undefined ? null : cachedManifest(n.program);
+    const zone = manifest && midiKey !== null ? zoneForKey(manifest, midiKey) : null;
+    const buffer = zone && n.program !== undefined ? cachedBuffer(n.program, zone.file) : null;
+
+    if (zone && buffer && midiKey !== null && n.program !== undefined) {
+      // Pitch and tuning ONLY. `rate` divides the scheduled times above exactly as it does
+      // for the oscillator path; folding it in here would transpose the project up an
+      // octave at 2x speed, which the oscillator path has never done.
+      const pitchRate = playbackRateFor(zone, midiKey);
+
+      const gain = ctx.createGain();
+      const peak = AMPLITUDE_SAMPLED * zone.gain * velocityGain(noteVelocity(n));
+      // No ADSR here: the attack and decay are already in the recording, and re-applying the
+      // oscillator envelope on top of them would blunt exactly what makes a sample sound
+      // real. Only a 2 ms declick in and the zone's own release out.
+      const attack  = Math.min(0.002, durSec / 4);
+      const release = Math.min(zone.releaseSec, Math.max(0.002, durSec - attack));
+      gain.gain.setValueAtTime(0, startSec);
+      gain.gain.linearRampToValueAtTime(peak, startSec + attack);
+      gain.gain.setValueAtTime(peak, startSec + Math.max(attack, durSec - release));
+      gain.gain.linearRampToValueAtTime(0, startSec + durSec);
+
+      connectVoiceTail(ctx, gain, zone.pan, zone.filterHz, zone.filterQ, compressor);
+
+      const right = zone.fileRight ? cachedBuffer(n.program, zone.fileRight) : null;
+      const loop = loopSecondsFor(zone);
+      // A sample seeked into mid-note starts partway through itself, matching what the
+      // oscillator path already does with `effectiveStart`.
+      const offsetSec = ((effectiveStart - n.start_time) / 1000) * pitchRate;
+      for (const source of buildSources(ctx, buffer, right, gain, pitchRate)) {
+        if (loop) {
+          source.loop = true;
+          source.loopStart = loop.start;
+          source.loopEnd = loop.end;
+        }
+        source.start(startSec, offsetSec);
+        source.stop(startSec + durSec + 0.02);
+        activeVoices.push(source);
+      }
+      continue;
+    }
 
     const voice = voiceForProgram(n.program);
     // Velocity is the note's dynamics — a tab session leaves it unset and every note plays
@@ -99,10 +257,10 @@ export async function playNotes(notes: TabNote[], options?: PlaybackOptions, sta
     gain.gain.linearRampToValueAtTime(0, startSec + durSec);
 
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(compressor);
     osc.start(startSec);
     osc.stop(startSec + durSec + 0.02);
-    activeOscillators.push(osc);
+    activeVoices.push(osc);
   }
 
   if (options?.metronomeEnabled) {
@@ -151,10 +309,10 @@ export function resumePlayback(): void {
 }
 
 export function stopPlayback(): void {
-  activeOscillators.forEach((osc) => {
-    try { osc.stop(); } catch { /* already stopped */ }
+  activeVoices.forEach((voice) => {
+    try { voice.stop(); } catch { /* already stopped */ }
   });
-  activeOscillators = [];
+  activeVoices = [];
   audioContext?.close();
   audioContext = null;
 }

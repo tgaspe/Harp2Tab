@@ -24,7 +24,7 @@ written that way. Read that before changing one.
 | `verify-entitlement.ts` | 54 | The entitlement resolver — RevenueCat event → document → access — with an injected clock, so renewals and expiries don't take a month to test |
 | `verify-firestore-rules.ts` | 24 | `firestore.rules` against the emulator. **Needs a second terminal**, see below |
 | `verify-hsa.ts` | 17 | The HSA v2 engine (Phase 16): chunked CQT equals whole-file CQT, the poly pass frame-for-frame against the Python reference, `detectReattacks` unit cases, `resegment` purity, and the round trip on a real take |
-| `verify-soundfont.ts` | 27 | Sampled-instrument resolution (11-6): zone boundaries, semitone/octave playback rates, cents folding, loop offsets against the sample's own rate, drum keys selected rather than transposed, and SF2 stereo pairs collapsing to one zone |
+| `verify-soundfont.ts` | 30 | Sampled-instrument resolution (11-6): zone boundaries, semitone/octave playback rates, cents folding, loop offsets against the sample's own rate, drum keys selected rather than transposed, SF2 stereo pairs collapsing to one zone, and percussion surviving the Studio flatten |
 
 ### Firestore rules
 
