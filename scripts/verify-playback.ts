@@ -158,6 +158,23 @@ async function requestsFor(notes: TestNote[]) {
   })).filter((r: { midiKey: number | null }) => r.midiKey !== null);
 }
 
+/** One track, dense: chords stacked eight deep, every beat, for four minutes. This is the
+ *  shape that "plays for a bit then stops" — the whole song is committed to the graph in one
+ *  synchronous pass, so a failure partway through loses every note after it. */
+function denseChordTrack(): TestNote[] {
+  const notes: TestNote[] = [];
+  let i = 0;
+  for (let beat = 0; beat < 480; beat++) {
+    for (let voice = 0; voice < 8; voice++) {
+      notes.push({
+        id: `d${i++}`, tab: '', note: midiToNoteName(48 + voice * 4),
+        duration: 900, start_time: beat * 500, confidence: 100, velocity: 100, program: 0,
+      });
+    }
+  }
+  return notes;
+}
+
 async function main(): Promise<void> {
   const { SOUNDFONT_DIR } = require('../src/audio/soundfont');
   check('harness: the web sample cache is the one under test', SOUNDFONT_DIR !== '',
@@ -242,6 +259,22 @@ async function main(): Promise<void> {
     exhausted ?? `${contextsCreated - before} contexts for 12 restarts`);
   check('the last restart still scheduled voices', started.length > 0,
     `${started.length} voices on the final pass`);
+
+  // ── One dense track ───────────────────────────────────────────────────────
+  stopPlayback();
+  const dense = denseChordTrack();
+  await ensureNotesLoaded(await requestsFor(dense));
+  started = []; nodeCount = 0;
+  let denseThrew: string | null = null;
+  try {
+    await playNotes(dense, { bpm: 120, metronomeEnabled: false, rate: 1 }, 0);
+  } catch (error) {
+    denseThrew = error instanceof Error ? error.message : String(error);
+  }
+  check('dense: scheduling does not throw', denseThrew === null, denseThrew ?? 'no exception');
+  check('dense: every note is scheduled', started.length >= dense.length,
+    `${dense.length} notes → ${started.length} voices, ${nodeCount} nodes`);
+  stopPlayback();
 
   for (const result of results) {
     console.log(`${result.passed ? 'PASS' : 'FAIL'}  ${result.name} — ${result.detail}`);
