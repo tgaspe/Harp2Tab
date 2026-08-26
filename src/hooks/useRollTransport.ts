@@ -106,9 +106,13 @@ export function useRollTransport({
   const [instrumentsLoading, setInstrumentsLoading] = useState(false);
 
   /** One `play()` call site, so no rule can forget the loop region or the tempo map.
-   *  `metronome` is an override for the toggle below, which has to restart with the *new*
-   *  value before React has re-rendered with it. */
-  const restart = useCallback((atMs: number, metronome = metronomeEnabled) => {
+   *  `metronome` and `rate` are overrides for controls below which have to restart with
+   *  their *new* values before React has re-rendered with them. */
+  const restart = useCallback((
+    atMs: number,
+    metronome = metronomeEnabled,
+    rate = playbackRate,
+  ) => {
     // Whatever was scheduled is gone; these notes are what the engine now holds.
     staleWhilePausedRef.current = false;
     const generation = ++playGenerationRef.current;
@@ -146,7 +150,7 @@ export function useRollTransport({
       setInstrumentsLoading(false);
       play(
         notes,
-        { bpm, metronomeEnabled: metronome, rate: playbackRate, tempoMap },
+        { bpm, metronomeEnabled: metronome, rate, tempoMap },
         atMs,
         loopRegion ?? undefined,
       );
@@ -261,8 +265,21 @@ export function useRollTransport({
 
   const onCycleRate = useCallback(() => {
     const i = PLAYBACK_RATES.indexOf(playbackRate as (typeof PLAYBACK_RATES)[number]);
-    setPlaybackRate(PLAYBACK_RATES[(i + 1) % PLAYBACK_RATES.length]);
-  }, [playbackRate, setPlaybackRate]);
+    const next = PLAYBACK_RATES[(i + 1) % PLAYBACK_RATES.length];
+    setPlaybackRate(next);
+
+    // Rate is baked into the web schedule and drives usePlayback's wall-clock/playhead
+    // conversion. Rebuild both from the same nominal position so sound and marker switch
+    // speed together instead of waiting for a stop/start. While paused, preserve silence
+    // and let the existing stale-schedule path rebuild on the next play press.
+    if (isPlaying) {
+      if (isPaused) staleWhilePausedRef.current = true;
+      else restart(currentTimeMs, metronomeEnabled, next);
+    }
+  }, [
+    playbackRate, setPlaybackRate, isPlaying, isPaused, restart, currentTimeMs,
+    metronomeEnabled,
+  ]);
 
   // The metronome click track is baked into the audio graph at play()-time (see
   // Playback.web.ts's scheduleMetronome) — flipping the flag alone doesn't touch whatever's

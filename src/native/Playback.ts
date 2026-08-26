@@ -19,6 +19,10 @@ export async function playNotes(notes: TabNote[], options?: PlaybackOptions, sta
   const uri      = FileSystem.cacheDirectory + 'harp2tab_playback.wav';
   await FileSystem.writeAsStringAsync(uri, base64, { encoding: 'base64' });
   player = createAudioPlayer(uri);
+  // Expo Audio v55 applies playbackRate to the active player. The native backend still
+  // pre-renders one WAV, but changing transport speed can now rebuild at the current
+  // position and play that WAV at the requested rate, just like the web schedule.
+  player.playbackRate = options?.rate ?? 1;
   // The WAV is always rendered in full — seek into it rather than re-rendering a trimmed
   // clip, since re-synthesizing per seek would be far more work for the same result.
   if (startAtMs > 0) await player.seekTo(startAtMs / 1000);

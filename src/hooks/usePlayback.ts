@@ -13,10 +13,10 @@ import type { TabNote } from '@/types';
  * back from the audio engine — good enough for a transport readout/playhead, not meant
  * for sample-accurate sync.
  *
- * `loopEnabled`/`playbackRate` only take effect on the *next* `play()` call — neither is
- * changeable mid-playback, keeping the timing math (and the pause/resume interaction)
- * tractable. `playbackRate` is web-only in practice: the native backend pre-renders a WAV
- * and ignores the option entirely, so it only ever plays at 1x there.
+ * `loopEnabled`/`playbackRate` take effect on the next `play()` call. Higher-level
+ * transports can apply either live by restarting from the current nominal timeline
+ * position; keeping that policy outside this raw engine keeps loop and pause handling in
+ * the layer that owns those concepts.
  */
 export function usePlayback() {
   const [isPlaying, setIsPlaying]     = useState(false);
