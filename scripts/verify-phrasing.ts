@@ -175,6 +175,13 @@ function unsortedInputIsOrdered(): void {
 
 // ── End to end through the exporter ───────────────────────────────────────────
 
+/** The tab body: everything below the last divider, so the header and the legend that now
+ *  sits under it are both skipped. */
+function txtBody(content: string): string[] {
+  const lines = content.split('\n');
+  return lines.slice(lines.lastIndexOf('-'.repeat(40)) + 1);
+}
+
 function txtRendersSectionsAsBlankLines(): void {
   const notes = notesFrom([
     [200, 50], [200, 50], [200, 600],
@@ -182,7 +189,7 @@ function txtRendersSectionsAsBlankLines(): void {
     [200, 50], [200, 0],
   ]);
   const { content } = generateForFormat(singlePart(notes, 'C', 'diatonic'), 'TXT');
-  const body = content.split('\n').slice(2); // past header and divider
+  const body = txtBody(content);
   check(
     'TXT puts a blank line at a section boundary and never leads with one',
     body.includes('') && body[0] !== '',
@@ -199,7 +206,7 @@ function commaMarksBreathsNotWraps(): void {
     ...Array.from({ length: 5 }, () => [200, 0] as const),
   ]);
   const { content } = generateForFormat(singlePart(notes, 'C', 'diatonic'), 'TXT');
-  const body = content.split('\n').slice(2);
+  const body = txtBody(content);
   const commas = body.map((l) => (l.endsWith(',') ? 1 : 0));
   check(
     'a comma marks a breath; a forced wrap and the final line carry none',

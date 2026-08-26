@@ -44,15 +44,21 @@ const twoParts: ExportPart[] = [
 
 function singleTrackTxtUnchanged(): void {
   const { content } = generateForFormat(singlePart(melody, 'C', 'diatonic'), 'TXT');
-  // Exactly the shape this format has always had: header, 40-dash divider, packed tabs.
+  // Header, 40-dash divider, legend, divider, packed tabs. The tab body itself is exactly
+  // what this format has always emitted — the legend is the only addition, and it explains
+  // only the two symbols this particular tab uses.
   const expected = [
     'Harp2Tab -- Key of C -- 5 notes',
+    '-'.repeat(40),
+    'How to read this:',
+    '  4      blow hole 4',
+    '  -4     draw hole 4',
     '-'.repeat(40),
     '4  -4  5  -5  6',
   ].join('\n');
 
   check(
-    'single-track TXT is byte-identical to the historical format',
+    'single-track TXT keeps its historical body, with a legend above it',
     content === expected,
     content === expected ? 'exact match' : `got:\n${content}`,
   );
@@ -285,9 +291,10 @@ function txt(notes: TabNote[], type: HarmonicaType = 'diatonic', key: HarmonicaK
   return content;
 }
 
-/** The tab itself, without the two header lines. */
+/** The tab itself: everything below the last divider, so the header and legend are skipped. */
 function txtBody(notes: TabNote[], type: HarmonicaType = 'diatonic', key: HarmonicaKey = 'C'): string {
-  return txt(notes, type, key).split('\n').slice(2).join('\n').trim();
+  const lines = txt(notes, type, key).split('\n');
+  return lines.slice(lines.lastIndexOf('-'.repeat(40)) + 1).join('\n').trim();
 }
 
 function txtHeader(notes: TabNote[], type: HarmonicaType = 'diatonic'): string {
@@ -415,6 +422,117 @@ function chordHeaderCount(): void {
   );
 }
 
+
+// ── Legend ────────────────────────────────────────────────────────────────────
+
+/** Just the legend block, without the header or the tab. */
+function legendOf(notes: TabNote[], type: HarmonicaType = 'diatonic', key: HarmonicaKey = 'C'): string[] {
+  const lines = txt(notes, type, key).split('\n');
+  const start = lines.indexOf('How to read this:');
+  if (start < 0) return [];
+  const end = lines.indexOf('-'.repeat(40), start);
+  return lines.slice(start + 1, end);
+}
+
+function legendExplainsOnlyWhatIsUsed(): void {
+  const plain = legendOf([at('4', 0), at('-4', 400)]);
+  check(
+    'a plain tab gets only the blow and draw lines',
+    plain.length === 2
+      && plain[0] === '  4      blow hole 4'
+      && plain[1] === '  -4     draw hole 4',
+    `got ${JSON.stringify(plain)}`,
+  );
+
+  const blowOnly = legendOf([at('4', 0), at('5', 400)]);
+  check(
+    'a tab with no draw notes does not explain draw',
+    blowOnly.length === 1 && blowOnly[0] === '  4      blow hole 4',
+    `got ${JSON.stringify(blowOnly)}`,
+  );
+
+  const bent = legendOf([at('4', 0), at("-3'", 400), at('6o', 800)]);
+  check(
+    'bends and overblows are explained only when they appear',
+    bent.some((l) => l.includes('bend')) && bent.some((l) => l.includes('overblow')),
+    `got ${JSON.stringify(bent)}`,
+  );
+
+  check(
+    'a tab without bends never mentions them',
+    !legendOf([at('4', 0), at('-4', 400)]).some((l) => l.includes('bend')),
+    'no bend line',
+  );
+}
+
+function legendUsesRealExamples(): void {
+  const chord = legendOf([at('4', 0), at('5', 0), at('6', 0), at('-4', 500)]);
+  check(
+    'the chord line shows the file\'s own chord',
+    chord.some((l) => l.startsWith('  456 ') && l.includes('one breath')),
+    `got ${JSON.stringify(chord)}`,
+  );
+
+  const group = legendOf([at('6', 0), at('-6', 0)]);
+  check(
+    'the slash line shows the file\'s own group',
+    group.some((l) => l.startsWith('  6/-6 ') && l.includes('not in one breath')),
+    `got ${JSON.stringify(group)}`,
+  );
+
+  const offHarp = legendOf([at('4', 0), at('', 400, { note: 'C#7' })]);
+  check(
+    'the off-harp line shows the real pitch and names the harp',
+    offHarp.some((l) => l.startsWith('  [C#7]') && l.includes('C harp')),
+    `got ${JSON.stringify(offHarp)}`,
+  );
+}
+
+function legendExplainsLayout(): void {
+  // Five notes, then a two-second silence, then five more: a breath and a section break.
+  const notes = [
+    ...[0, 300, 600, 900, 1200].map((t) => at('4', t)),
+    ...[3500, 3800, 4100, 4400, 4700].map((t) => at('5', t)),
+  ];
+  const legend = legendOf(notes);
+  const body   = txtBody(notes);
+
+  check(
+    'the trailing comma is explained when the tab has one',
+    body.includes(',') && legend.some((l) => l.includes('breathe here')),
+    `got ${JSON.stringify(legend)}`,
+  );
+
+  const noBreath = legendOf([at('4', 0), at('-4', 400)]);
+  check(
+    'a single-phrase tab has no comma and does not explain one',
+    !noBreath.some((l) => l.includes('breathe here')),
+    `got ${JSON.stringify(noBreath)}`,
+  );
+}
+
+function legendIsFileLevelForMultiPart(): void {
+  const chordPart: TabNote[] = [at('4', 0), at('5', 0), at('6', 0)];
+  const bentPart:  TabNote[] = [at("-3'", 0), at('-4', 400)];
+  const { content } = generateForFormat([
+    { name: 'One', key: 'C', harmonicaType: 'diatonic', notes: chordPart },
+    { name: 'Two', key: 'G', harmonicaType: 'diatonic', notes: bentPart },
+  ], 'TXT');
+
+  const lines = content.split('\n');
+  check(
+    'a multi-part file carries exactly one legend, above the sections',
+    lines.filter((l) => l === 'How to read this:').length === 1
+      && lines.indexOf('How to read this:') < lines.findIndex((l) => l.startsWith('One --')),
+    `legend at ${lines.indexOf('How to read this:')}, first section at ${lines.findIndex((l) => l.startsWith('One --'))}`,
+  );
+  check(
+    'the multi-part legend covers every part\'s symbols',
+    content.includes('456') && content.includes('bend'),
+    'chord from part one and bend from part two both explained',
+  );
+}
+
 function main(): void {
   singleTrackTxtUnchanged();
   singleTrackCsvRowOrder();
@@ -431,6 +549,10 @@ function main(): void {
   chordOnsetWindow();
   unplayableGroupsUseSlashes();
   chordHeaderCount();
+  legendExplainsOnlyWhatIsUsed();
+  legendUsesRealExamples();
+  legendExplainsLayout();
+  legendIsFileLevelForMultiPart();
 
   for (const result of results) {
     console.log(`${result.passed ? 'PASS' : 'FAIL'}  ${result.name} — ${result.detail}`);
