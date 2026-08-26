@@ -58,7 +58,11 @@ export interface SampleHeader {
   /** In sf3 these are BYTE offsets into `smpl` bounding one Ogg stream, not frame indices. */
   start: number;
   end: number;
-  /** Frames of decoded audio, relative to the sample's own start. */
+  /** Frames of decoded audio, relative to the sample's own start — stored that way in the
+   *  file, so they are read verbatim. Do NOT subtract `start`: in an .sf3 that is a *byte*
+   *  offset into `smpl` reaching into the millions, and mixing the two units gives loop
+   *  points that are wildly negative. Web Audio then silently falls back to looping the
+   *  whole buffer, attack included, and a held note machine-guns instead of sustaining. */
   loopStart: number;
   loopEnd: number;
   sampleRate: number;
@@ -73,13 +77,12 @@ function readSampleHeaders(bytes: Uint8Array, chunk: Chunk): SampleHeader[] {
   for (let offset = chunk.start; offset + 46 <= chunk.start + chunk.length; offset += 46) {
     const name = name20(bytes, offset);
     if (name === 'EOS') break;
-    const start = view.getUint32(offset + 20, true);
     headers.push({
       name,
-      start,
+      start:           view.getUint32(offset + 20, true),
       end:             view.getUint32(offset + 24, true),
-      loopStart:       view.getUint32(offset + 28, true) - start,
-      loopEnd:         view.getUint32(offset + 32, true) - start,
+      loopStart:       view.getUint32(offset + 28, true),
+      loopEnd:         view.getUint32(offset + 32, true),
       sampleRate:      view.getUint32(offset + 36, true),
       rootKey:         view.getUint8(offset + 40),
       correctionCents: view.getInt8(offset + 41),
@@ -649,9 +652,16 @@ function validate(outRoot: string): string[] {
         if (data.length !== expectBytes) problems.push(`${label}: ${file} is ${data.length} bytes, manifest says ${expectBytes}`);
         if (sha256(data) !== expectHash) problems.push(`${label}: ${file} checksum does not match the manifest`);
       }
-      if (zone.loopStartFrames !== undefined && zone.loopEndFrames !== undefined
-        && zone.loopEndFrames <= zone.loopStartFrames) {
-        problems.push(`${label}: ${zone.file} has a loop that ends before it starts`);
+      if (zone.loopStartFrames !== undefined && zone.loopEndFrames !== undefined) {
+        if (zone.loopEndFrames <= zone.loopStartFrames) {
+          problems.push(`${label}: ${zone.file} has a loop that ends before it starts`);
+        }
+        // A negative offset is the unit mix-up between byte and frame offsets. It does not
+        // throw at runtime — Web Audio quietly loops the entire buffer instead, so the only
+        // symptom is a sustained note retriggering its own attack.
+        if (zone.loopStartFrames < 0 || zone.loopEndFrames < 0) {
+          problems.push(`${label}: ${zone.file} has a negative loop offset`);
+        }
       }
       if (drums && zone.loKey !== zone.hiKey) problems.push(`${label}: drum key ${zone.key} spans a range`);
     }

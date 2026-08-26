@@ -108,6 +108,14 @@ function loopOffsetsUseTheSamplesOwnRate(): void {
   check('loop: start in seconds', loop !== null && near(loop.start, 1, 1e-9), '44100 frames @44.1k → 1.0s');
   check('loop: end in seconds',   loop !== null && near(loop.end, 2, 1e-9),   '88200 frames @44.1k → 2.0s');
   check('loop: one-shot has none', loopSecondsFor(zone({})) === null, 'no loop frames → null');
+  // A negative offset is the byte-vs-frame unit mix-up. Web Audio does not reject it: it
+  // loops the whole buffer, so a held note retriggers its own attack instead of sustaining.
+  check('loop: a negative start is refused',
+    loopSecondsFor(zone({ loopStartFrames: -6283910, loopEndFrames: -6223379 })) === null,
+    'negative offsets → null');
+  check('loop: a backwards loop is refused',
+    loopSecondsFor(zone({ loopStartFrames: 5000, loopEndFrames: 500 })) === null,
+    'end before start → null');
 }
 
 // ── Seeking into a held note ──────────────────────────────────────────────────

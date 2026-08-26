@@ -42,6 +42,10 @@ export function playbackRateFor(zone: SampleZone, midiKey: number): number {
 export function loopSecondsFor(zone: SampleZone): { start: number; end: number } | null {
   if (zone.loopStartFrames === undefined || zone.loopEndFrames === undefined) return null;
   if (zone.loopEndFrames <= zone.loopStartFrames) return null;
+  // Web Audio treats a negative `loopStart` as "loop the whole buffer", so a bad offset
+  // sustains by replaying the attack over and over rather than failing loudly. Refusing it
+  // here means the note plays through unlooped instead, which is merely short.
+  if (zone.loopStartFrames < 0) return null;
   return {
     start: zone.loopStartFrames / zone.sampleRate,
     end:   zone.loopEndFrames / zone.sampleRate,
