@@ -18,6 +18,7 @@ import {
   zoneForKey,
 } from '../src/audio/soundfont/resolver';
 import type { DrumKitManifest, InstrumentManifest, SampleZone } from '../src/audio/soundfont/types';
+import { pairStereo, type ResolvedZone, type SampleHeader } from './build-soundfont';
 
 // ── Assertions ────────────────────────────────────────────────────────────────
 
@@ -123,6 +124,51 @@ function drumsAreSelectedNotTransposed(): void {
   check('drums: never transposed', near(playbackRateFor(kick, kick.key), 1, 1e-9), 'kick plays at 1.0');
 }
 
+// ── Stereo pairs ──────────────────────────────────────────────────────────────
+
+function header(name: string): SampleHeader {
+  return { name, start: 0, end: 100, loopStart: 0, loopEnd: 0, sampleRate: 44100, rootKey: 60, correctionCents: 0 };
+}
+
+function resolved(name: string, index: number, loKey: number, hiKey: number): ResolvedZone {
+  return { sample: header(name), sampleIndex: index, loKey, hiKey, loVel: 0, hiVel: 127, rootKey: 60, loops: false };
+}
+
+function stereoPairsCollapseToOneZone(): void {
+  // The bug this locks out: `Piano MF Bv1(L)` and `(R)` are two mono samples sharing one key
+  // range. Left as two zones they overlap, the thinning keeps whichever sorts first, and the
+  // grand piano plays one channel of a stereo recording — which sounds like a slightly thin
+  // piano rather than like a defect. It hits the piano and every drum kit.
+  const paired = pairStereo([
+    resolved('Piano MF Bv1(L)', 0, 12, 24),
+    resolved('Piano MF Bv1(R)', 1, 12, 24),
+  ]);
+  check('stereo: a pair is one zone', paired.length === 1, '2 zones -> 1');
+  check('stereo: left is the primary', paired[0]?.sample.name === 'Piano MF Bv1(L)', 'file is (L)');
+  check('stereo: right is carried', paired[0]?.right?.name === 'Piano MF Bv1(R)', 'fileRight is (R)');
+}
+
+function loneChannelsAndMonoSurvive(): void {
+  const mixed = pairStereo([
+    resolved('Flute C4', 0, 60, 71),
+    resolved('Orphan(L)', 1, 12, 24),
+  ]);
+  check('stereo: mono zones pass through', mixed.some((z) => z.sample.name === 'Flute C4'), 'mono kept');
+  // Better a half-stereo instrument than a hole in the keyboard.
+  check('stereo: an unpaired (L) is kept', mixed.some((z) => z.sample.name === 'Orphan(L)'), 'lone (L) kept');
+  check('stereo: unpaired has no right', mixed.find((z) => z.sample.name === 'Orphan(L)')?.right === undefined, 'no fileRight');
+}
+
+function pairsDoNotCrossKeyRanges(): void {
+  // An (L) and an (R) that don't share a key range are not a pair, and merging them would
+  // silently move a sample to the wrong part of the keyboard.
+  const apart = pairStereo([
+    resolved('Kick(L)', 0, 36, 36),
+    resolved('Kick(R)', 1, 40, 40),
+  ]);
+  check('stereo: ranges must match', apart.length === 2, 'different ranges -> not paired');
+}
+
 function main(): void {
   zonesSplitByRange();
   zoneBoundariesAreInclusive();
@@ -131,6 +177,9 @@ function main(): void {
   tuningFoldsIntoRate();
   loopOffsetsUseTheSamplesOwnRate();
   drumsAreSelectedNotTransposed();
+  stereoPairsCollapseToOneZone();
+  loneChannelsAndMonoSurvive();
+  pairsDoNotCrossKeyRanges();
 
   for (const result of results) {
     console.log(`${result.passed ? 'PASS' : 'FAIL'}  ${result.name} — ${result.detail}`);

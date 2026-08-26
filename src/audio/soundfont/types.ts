@@ -10,6 +10,16 @@
 export interface SampleZone {
   /** File name, relative to the instrument's own directory. */
   file: string;
+  /** The right channel, when this zone came from an SF2 stereo pair — two mono samples
+   *  sharing a key range, which MuseScore General names `... (L)` and `... (R)`.
+   *
+   *  A pair is one zone rather than two because `zoneForKey` returns a single zone per key:
+   *  modelling it as two would make every stereo instrument's zones overlap and the
+   *  no-gaps/no-overlaps validation meaningless. The scheduler plays both, panned hard
+   *  apart. Absent for the mono samples that are most of this soundfont. */
+  fileRight?: string;
+  bytesRight?: number;
+  sha256Right?: string;
   /** MIDI key at which the sample plays untransposed. */
   rootKey: number;
   /** Inclusive key range this zone covers. */
