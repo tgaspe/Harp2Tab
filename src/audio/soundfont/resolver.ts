@@ -47,3 +47,21 @@ export function loopSecondsFor(zone: SampleZone): { start: number; end: number }
     end:   zone.loopEndFrames / zone.sampleRate,
   };
 }
+
+/**
+ * How far into a sample to start, when playback begins partway through a note already
+ * sounding — a seek into the middle of a held note.
+ *
+ * Three clocks have to be reconciled, and getting it wrong is silent. `elapsedMs` is
+ * *nominal* project time since the note began. Dividing by the transport `rate` converts
+ * that to wall-clock seconds, because rate compresses the schedule. Multiplying by
+ * `pitchRate` converts wall-clock seconds to seconds *of buffer*, because the buffer is
+ * playing at that speed.
+ *
+ * Omitting the `rate` division is correct at 1x and wrong by exactly a factor of `rate`
+ * anywhere else, so it survives every test that doesn't seek mid-note at 0.5x or 2x.
+ */
+export function sampleOffsetSecFor(elapsedMs: number, rate: number, pitchRate: number): number {
+  if (elapsedMs <= 0) return 0;
+  return (elapsedMs / 1000 / rate) * pitchRate;
+}

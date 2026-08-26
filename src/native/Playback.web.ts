@@ -1,7 +1,7 @@
 import { noteNameToMidi } from '@/audio/HarmonicaMapper';
 import {
   cachedBuffer, cachedDrumBuffer, cachedDrumKit, cachedManifest,
-  drumZoneForKey, DRUM_PROGRAM, loopSecondsFor, playbackRateFor, zoneForKey,
+  drumZoneForKey, DRUM_PROGRAM, loopSecondsFor, playbackRateFor, sampleOffsetSecFor, zoneForKey,
 } from '@/audio/soundfont';
 import { noteNameToFrequency } from '@/audio/synthesizeWav';
 import { constantTempoMap, gridLines, type PlaybackOptions } from '@/audio/tempo';
@@ -218,7 +218,7 @@ export async function playNotes(notes: TabNote[], options?: PlaybackOptions, sta
       const loop = loopSecondsFor(zone);
       // A sample seeked into mid-note starts partway through itself, matching what the
       // oscillator path already does with `effectiveStart`.
-      const offsetSec = ((effectiveStart - n.start_time) / 1000) * pitchRate;
+      const offsetSec = sampleOffsetSecFor(effectiveStart - n.start_time, rate, pitchRate);
       for (const source of buildSources(ctx, buffer, right, gain, pitchRate)) {
         if (loop) {
           source.loop = true;

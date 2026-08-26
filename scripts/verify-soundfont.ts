@@ -15,6 +15,7 @@ import {
   drumZoneForKey,
   loopSecondsFor,
   playbackRateFor,
+  sampleOffsetSecFor,
   zoneForKey,
 } from '../src/audio/soundfont/resolver';
 import type { DrumKitManifest, InstrumentManifest, SampleZone } from '../src/audio/soundfont/types';
@@ -107,6 +108,26 @@ function loopOffsetsUseTheSamplesOwnRate(): void {
   check('loop: start in seconds', loop !== null && near(loop.start, 1, 1e-9), '44100 frames @44.1k → 1.0s');
   check('loop: end in seconds',   loop !== null && near(loop.end, 2, 1e-9),   '88200 frames @44.1k → 2.0s');
   check('loop: one-shot has none', loopSecondsFor(zone({})) === null, 'no loop frames → null');
+}
+
+// ── Seeking into a held note ──────────────────────────────────────────────────
+
+function seekOffsetReconcilesAllThreeClocks(): void {
+  // Nominal project time -> wall clock (divide by transport rate) -> buffer seconds
+  // (multiply by pitch rate). At 1x with no transposition it is the identity, which is why
+  // dropping the rate division passes every test that doesn't seek mid-note at 0.5x or 2x.
+  check('seek: at 1x untransposed it is elapsed',
+    near(sampleOffsetSecFor(500, 1, 1), 0.5, 1e-9), '500 ms -> 0.5 s');
+  check('seek: 2x transport halves the buffer offset',
+    near(sampleOffsetSecFor(500, 2, 1), 0.25, 1e-9), '500 ms at 2x -> 0.25 s');
+  check('seek: 0.5x transport doubles it',
+    near(sampleOffsetSecFor(500, 0.5, 1), 1, 1e-9), '500 ms at 0.5x -> 1.0 s');
+  check('seek: an octave up doubles the buffer consumed',
+    near(sampleOffsetSecFor(500, 1, 2), 1, 1e-9), '500 ms at 2x pitch -> 1.0 s');
+  check('seek: rate and pitch cancel',
+    near(sampleOffsetSecFor(500, 2, 2), 0.5, 1e-9), '2x rate + 2x pitch -> 0.5 s');
+  check('seek: a note starting at the seek point starts at zero',
+    sampleOffsetSecFor(0, 1, 1) === 0, '0 ms -> 0');
 }
 
 // ── Percussion ────────────────────────────────────────────────────────────────
@@ -208,6 +229,7 @@ function main(): void {
   loneChannelsAndMonoSurvive();
   pairsDoNotCrossKeyRanges();
   percussionSurvivesTheFlatten();
+  seekOffsetReconcilesAllThreeClocks();
 
   for (const result of results) {
     console.log(`${result.passed ? 'PASS' : 'FAIL'}  ${result.name} — ${result.detail}`);

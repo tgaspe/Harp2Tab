@@ -9,7 +9,7 @@
 export type {
   Catalog, CatalogEntry, DrumKitManifest, DrumZone, InstrumentManifest, SampleZone,
 } from './types';
-export { drumZoneForKey, loopSecondsFor, playbackRateFor, zoneForKey } from './resolver';
+export { drumZoneForKey, loopSecondsFor, playbackRateFor, sampleOffsetSecFor, zoneForKey } from './resolver';
 export {
   cachedBuffer, cachedDrumBuffer, cachedDrumKit, cachedManifest,
   DRUM_PROGRAM, ensureProgramsLoaded, loadDrumKit, loadInstrument, sampleBufferFor,
