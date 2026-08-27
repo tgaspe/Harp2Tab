@@ -1,3 +1,22 @@
+import { getGridRows, noteNameToMidi, type GridRow } from '@/audio/HarmonicaMapper';
+import { passesDurationFloor } from '@/audio/duration';
+import { getFrames } from '@/audio/frameBuffer';
+import { layoutBackgroundLanes } from '@/audio/studioNotes';
+import {
+  constantTempoMap, gridLines, msToBarInMap, snapMsToGridInMap,
+  type GridLine, type SnapDivision, type TempoMap,
+} from '@/audio/tempo';
+import { DEFAULT_NEW_NOTE_VELOCITY, noteVelocity, passesVelocityFloor } from '@/audio/velocity';
+import { Poppins, SpaceGrotesk } from '@/constants/fonts';
+import { FONT } from '@/constants/keys';
+import { WEB_CONTENT_WIDTH } from '@/constants/layout';
+import { useTheme } from '@/hooks/useTheme';
+import { selectRecordingId, useAppStore } from '@/store/useAppStore';
+import { selectRecordings, useRecordingsStore } from '@/store/useRecordingsStore';
+import type { Theme } from '@/theme';
+import type { HarmonicaKey, HarmonicaType, TabNote, VelocitySource } from '@/types';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Modal,
@@ -10,27 +29,8 @@ import {
   Text,
   View,
 } from 'react-native';
-import { useFocusEffect } from 'expo-router';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from 'react-native-reanimated';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useTheme } from '@/hooks/useTheme';
-import { getGridRows, noteNameToMidi, type GridRow } from '@/audio/HarmonicaMapper';
-import { getFrames } from '@/audio/frameBuffer';
-import { layoutBackgroundLanes } from '@/audio/studioNotes';
-import { passesDurationFloor } from '@/audio/duration';
-import { DEFAULT_NEW_NOTE_VELOCITY, noteVelocity, passesVelocityFloor } from '@/audio/velocity';
-import { selectRecordingId, useAppStore } from '@/store/useAppStore';
-import { selectRecordings, useRecordingsStore } from '@/store/useRecordingsStore';
-import {
-  constantTempoMap, gridLines, msToBarInMap, snapMsToGridInMap,
-  type GridLine, type SnapDivision, type TempoMap,
-} from '@/audio/tempo';
-import { FONT } from '@/constants/keys';
-import { Poppins, SpaceGrotesk } from '@/constants/fonts';
-import { WEB_CONTENT_WIDTH } from '@/constants/layout';
-import type { Theme } from '@/theme';
-import type { HarmonicaKey, HarmonicaType, TabNote, VelocitySource } from '@/types';
 
 /**
  * Default pitch-row height, and what the tab editor uses.
@@ -2165,11 +2165,11 @@ export function PianoRoll({
 
           <Pressable
             onPress={() => setHelpOpen(true)}
-            style={[styles.snapBtn, styles.helpBtn, helpOpen && styles.toolToggleSegActive]}
+            style={[styles.snapBtn, styles.helpBtn]}
             accessibilityRole="button"
             accessibilityLabel="Show help"
           >
-            <Ionicons name="help" size={14} color={helpOpen ? '#fff' : theme.textSub} />
+            <Ionicons name="help" size={14} color="#fff" />
           </Pressable>
         </View>
         )}
@@ -4195,7 +4195,11 @@ function createStyles(t: Theme) {
     snapBtnActive: { backgroundColor: t.accent, borderColor: t.accent },
     snapBtnTextActive: { color: '#fff' },
 
-    helpBtn: { paddingHorizontal: 8 },
+    helpBtn: {
+      paddingHorizontal: 8,
+      backgroundColor: 'rgba(124, 58, 237, 0.6)',
+      borderColor: 'rgba(124,58,237,1.0)',
+    },
 
     // Centered modal — backdrop/card shape matches ActionSheetModal elsewhere in the app.
     helpBackdrop: {
