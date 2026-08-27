@@ -2281,9 +2281,9 @@ export function PianoRoll({
               const next = positions[index + 1];
               return (
                 <LabelRailCell
-                  // Keyed by pitch, not tab — every unplayable row shares tab: '', which
-                  // would otherwise collide as a React key.
-                  key={p.note}
+                  // Pitch alone is not unique: equivalent harp positions (3 blow / -2
+                  // draw) intentionally occupy separate rows. Their pitch+tab identity is.
+                  key={`${p.midi}:${p.tab}`}
                   row={p}
                   top={index * rowH}
                   height={rowH}
@@ -2322,7 +2322,7 @@ export function PianoRoll({
                   const isOctaveBoundary = next ? getOctave(p.note) !== getOctave(next.note) : false;
                   return (
                     <View
-                      key={p.note}
+                      key={`${p.midi}:${p.tab}`}
                       pointerEvents="none"
                       style={[
                         styles.rowStripe,
