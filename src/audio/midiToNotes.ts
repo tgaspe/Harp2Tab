@@ -22,6 +22,8 @@ export interface MidiTrack {
   /** Index in the parsed file — the picker's selection value. */
   id:         number;
   name:       string;
+  /** General MIDI program number, used to audition the track with its authored sound. */
+  program:    number;
   channel:    number;
   noteCount:  number;
   lowestNote:  number;
@@ -99,6 +101,7 @@ export function parseMidiFile(bytes: Uint8Array, fileName: string): ParsedMidi {
       // The track-name meta event first, then the instrument the program change selects,
       // then a positional label — the first of these that says anything.
       name:        track.name?.trim() || track.instrument?.name || `Track ${index + 1}`,
+      program:     track.instrument?.number ?? 0,
       channel:     track.channel,
       noteCount:   notes.length,
       lowestNote:  Math.min(...pitches),

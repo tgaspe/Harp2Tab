@@ -9,6 +9,7 @@
  */
 
 import React from 'react';
+import { Platform, ScrollView, StyleSheet } from 'react-native';
 import { CandidateGroupLabel, CandidateKeyBadge, CandidateList, CandidateRow } from './CandidateRow';
 import type { KeyCandidate } from '@/audio/notesToTabs';
 import type { HarmonicaKey } from '@/types';
@@ -52,10 +53,14 @@ interface Props {
    * recommendation ends. Omit to label nothing.
    */
   recommendedCount?: number;
+  /** Keep the non-recommended run from making a desktop decision screen arbitrarily tall. */
+  scrollOtherKeys?: boolean;
+  rowBackgroundColor?: string;
 }
 
 export function KeyCandidateList({
-  candidates, selectedKey, onSelect, describe, recommendedCount,
+  candidates, selectedKey, onSelect, describe, recommendedCount, scrollOtherKeys = false,
+  rowBackgroundColor,
 }: Props) {
   // Nothing to divide when the recommendation covers the whole list — a "recommended"
   // heading over every row says nothing, and an empty "other keys" run is worse.
@@ -63,26 +68,64 @@ export function KeyCandidateList({
     && recommendedCount > 0
     && recommendedCount < candidates.length;
 
+  function row(candidate: KeyCandidate) {
+    const selected = candidate.key === selectedKey;
+    const { stats, accessibilityLabel } = describe(candidate);
+    return (
+      <CandidateRow
+        key={candidate.key}
+        leading={<CandidateKeyBadge label={candidate.key} selected={selected} />}
+        title={positionLabel(candidate.position)}
+        subtitle={stats}
+        selected={selected}
+        onPress={() => onSelect(candidate.key)}
+        accessibilityLabel={accessibilityLabel}
+        backgroundColor={rowBackgroundColor}
+      />
+    );
+  }
+
+  if (grouped && scrollOtherKeys && Platform.OS === 'web') {
+    const recommended = candidates.slice(0, recommendedCount);
+    const others      = candidates.slice(recommendedCount);
+    return (
+      <CandidateList>
+        <CandidateGroupLabel label="RECOMMENDED" />
+        {recommended.map(row)}
+        <CandidateGroupLabel label={`ALL OTHER KEYS (${others.length})`} />
+        <ScrollView
+          style={styles.otherKeys}
+          contentContainerStyle={styles.otherKeysContent}
+          nestedScrollEnabled
+          showsVerticalScrollIndicator
+          accessibilityLabel="All other harmonica keys"
+        >
+          {others.map(row)}
+        </ScrollView>
+      </CandidateList>
+    );
+  }
+
   return (
     <CandidateList>
-      {candidates.map((candidate, index) => {
-        const selected = candidate.key === selectedKey;
-        const { stats, accessibilityLabel } = describe(candidate);
-        return (
-          <React.Fragment key={candidate.key}>
-            {grouped && index === 0 && <CandidateGroupLabel label="RECOMMENDED" />}
-            {grouped && index === recommendedCount && <CandidateGroupLabel label="ALL OTHER KEYS" />}
-            <CandidateRow
-              leading={<CandidateKeyBadge label={candidate.key} selected={selected} />}
-              title={positionLabel(candidate.position)}
-              subtitle={stats}
-              selected={selected}
-              onPress={() => onSelect(candidate.key)}
-              accessibilityLabel={accessibilityLabel}
-            />
-          </React.Fragment>
-        );
-      })}
+      {candidates.map((candidate, index) => (
+        <React.Fragment key={candidate.key}>
+          {grouped && index === 0 && <CandidateGroupLabel label="RECOMMENDED" />}
+          {grouped && index === recommendedCount && <CandidateGroupLabel label="ALL OTHER KEYS" />}
+          {row(candidate)}
+        </React.Fragment>
+      ))}
     </CandidateList>
   );
 }
+
+const styles = StyleSheet.create({
+  otherKeys: {
+    maxHeight: 276,
+  },
+  otherKeysContent: {
+    gap:          8,
+    paddingRight: 6,
+    paddingBottom: 2,
+  },
+});

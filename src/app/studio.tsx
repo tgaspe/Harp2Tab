@@ -84,7 +84,7 @@ function defaultTrackFor(project: MidiProject): MidiTrackData | null {
   // `mostMelodicTrack` works on the import pipeline's own track shape; it only reads
   // `notes` and `noteCount`, so the project's tracks map onto it directly.
   const best = mostMelodicTrack(withNotes.map((t, i) => ({
-    id: i, name: t.name, channel: t.channel, noteCount: t.notes.length,
+    id: i, name: t.name, program: t.program, channel: t.channel, noteCount: t.notes.length,
     lowestNote: 0, highestNote: 0, durationMs: 0, notes: t.notes,
   })));
   return withNotes[best.id] ?? withNotes[0];

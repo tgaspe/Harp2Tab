@@ -43,6 +43,8 @@ interface CandidateRowProps {
   /** Spoken description of the whole row. Required rather than derived from title+subtitle,
    *  which read as fragments out loud ("2nd position (cross harp), 87% fit"). */
   accessibilityLabel: string;
+  /** Optional screen-specific resting surface; selected and hover states still take priority. */
+  backgroundColor?: string;
 }
 
 export function CandidateRow({
@@ -52,6 +54,7 @@ export function CandidateRow({
   selected,
   onPress,
   accessibilityLabel,
+  backgroundColor,
 }: CandidateRowProps) {
   const theme  = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
@@ -61,6 +64,7 @@ export function CandidateRow({
       onPress={onPress}
       style={({ pressed, hovered }: any) => [
         styles.row,
+        backgroundColor !== undefined && { backgroundColor },
         selected && styles.rowActive,
         (pressed || hovered) && !selected && styles.rowHovered,
       ]}

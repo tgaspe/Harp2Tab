@@ -47,11 +47,13 @@ import { pickMidiFile } from '@/audio/pickMidiFile';
 import { decodeAudioFile } from '@/audio/decodeAudio';
 import { getChromaticRows, midiToNoteName } from '@/audio/HarmonicaMapper';
 import { usePlayback } from '@/hooks/usePlayback';
+import { warmSynth } from '@/native/Playback';
 import {
   mergeTracks,
   mostMelodicTrack,
   orderTrackNotes,
   pitchRangeLabel,
+  type MidiTrack,
   type MidiNote,
   type ParsedMidi,
 } from '@/audio/midiToNotes';
@@ -77,7 +79,7 @@ import type { HarmonicaKey, HarmonicaType, TabNote } from '@/types';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 /** Which track the user is transcribing — a track's own id, or the explicit merge-all
@@ -150,9 +152,9 @@ function analyzeSelection(
  * actually produce is what the key list below it describes. Timed from the track's first
  * note so a part that enters late doesn't open with silence.
  */
-function previewNotes(notes: MidiNote[]): TabNote[] {
+function previewNotes(notes: MidiNote[], program = 0, timelineStart?: number): TabNote[] {
   if (notes.length === 0) return [];
-  const start = Math.min(...notes.map((n) => n.timeMs));
+  const start = timelineStart ?? Math.min(...notes.map((n) => n.timeMs));
   // Sorted because the merged option flat-maps whole tracks together: playback reads the
   // last element to know when the sequence ends, which would otherwise be whichever note
   // happened to close the final track rather than the latest note in the file.
@@ -165,7 +167,18 @@ function previewNotes(notes: MidiNote[]): TabNote[] {
     start_time: Math.round(n.timeMs - start),
     duration:   Math.max(1, Math.round(n.durationMs)),
     confidence: 100,
+    velocity:   n.velocity,
+    program,
   }));
+}
+
+/** Preserve each track's authored instrument while sharing one zero point for a merged
+ * preview, exactly as the Studio's flattened playback list does. */
+function previewTracks(tracks: readonly MidiTrack[]): TabNote[] {
+  const start = Math.min(...tracks.flatMap((track) => track.notes.map((note) => note.timeMs)));
+  return tracks
+    .flatMap((track) => previewNotes(track.notes, track.program, start))
+    .sort((a, b) => a.start_time - b.start_time);
 }
 
 /** Decoding has no measurable progress of its own, so it holds a small non-zero bar —
@@ -187,6 +200,9 @@ const noNotes = () => [] as TabNote[];
 const PREVIEW_ROW_HEIGHT = 18;
 
 export default function ImportScreen() {
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const isWideWeb = Platform.OS === 'web' && windowWidth >= 900;
+  const midiPanelHeight = Math.max(440, Math.min(620, windowHeight - 290));
   const router = useRouter();
   const theme  = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
@@ -266,6 +282,8 @@ export default function ImportScreen() {
   // an argument, so auditioning a track can't touch the session being imported into.
   const preview = usePlayback();
   const [previewTrack, setPreviewTrack] = useState<TrackSelection | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const previewGenerationRef = useRef(0);
 
   const cancelledRef = useRef(false);
   // Guards against a second run in React strict mode's double-invoked effect — the import
@@ -305,8 +323,8 @@ export default function ImportScreen() {
   // A track that runs to its end stops itself; clearing the highlight when it does keeps
   // the button from staying stuck on "stop" for a track that's no longer sounding.
   useEffect(() => {
-    if (!preview.isPlaying) setPreviewTrack(null);
-  }, [preview.isPlaying]);
+    if (!preview.isPlaying && !previewLoading) setPreviewTrack(null);
+  }, [preview.isPlaying, previewLoading]);
 
   // Everything downstream of the current track choice. Recomputed on every selection
   // change, which is what makes the key list live evidence that the track was the right
@@ -636,7 +654,9 @@ export default function ImportScreen() {
    */
   function openInStudio() {
     if (phase.kind !== 'midiConfirm') return;
+    previewGenerationRef.current++;
     preview.stop();
+    setPreviewLoading(false);
 
     const project = projectFromSmfBytes(
       phase.parsed.bytes,
@@ -648,7 +668,9 @@ export default function ImportScreen() {
   }
 
   function commitMidi(notes: MidiNote[], key: HarmonicaKey, bpm: number | null) {
+    previewGenerationRef.current++;
     preview.stop();
+    setPreviewLoading(false);
     const tabbed = notesToTabs(notes, key, harmonicaType, 'midiVelocity');
     if (tabbed.length === 0) {
       setPhase({
@@ -675,21 +697,30 @@ export default function ImportScreen() {
   }
 
   /** Audition a track without committing to it. Pressing the same one again stops it. */
-  function handleTogglePreview(id: TrackSelection, notes: MidiNote[]) {
-    if (previewTrack === id && preview.isPlaying) {
+  function handleTogglePreview(id: TrackSelection, audible: TabNote[]) {
+    const generation = ++previewGenerationRef.current;
+    if (previewTrack === id && (preview.isPlaying || previewLoading)) {
       preview.stop();
+      setPreviewLoading(false);
       setPreviewTrack(null);
       return;
     }
-    const audible = previewNotes(notes);
     if (audible.length === 0) return;
+    preview.stop();
     setPreviewTrack(id);
-    preview.play(audible, { bpm: 100, metronomeEnabled: false, rate: 1 });
+    setPreviewLoading(true);
+    void warmSynth().then(() => {
+      if (cancelledRef.current || previewGenerationRef.current !== generation) return;
+      setPreviewLoading(false);
+      preview.play(audible, { bpm: 100, metronomeEnabled: false, rate: 1 });
+    });
   }
 
   function handleCancel() {
     cancelledRef.current = true;
+    previewGenerationRef.current++;
     preview.stop();
+    setPreviewLoading(false);
     releasePrepared();
     audioRef.current = null;
     clearPendingImport();
@@ -757,11 +788,11 @@ export default function ImportScreen() {
 
     /** Play/stop control for one row. Auditioning a part is not the same as choosing it,
      *  so the press is kept from reaching the row's own selection handler. */
-    function previewButton(id: TrackSelection, trackNotes: MidiNote[], label: string) {
-      const playing = previewTrack === id && preview.isPlaying;
+    function previewButton(id: TrackSelection, getAudible: () => TabNote[], label: string) {
+      const playing = previewTrack === id && (preview.isPlaying || previewLoading);
       return (
         <Pressable
-          onPress={(e) => { e.stopPropagation(); handleTogglePreview(id, trackNotes); }}
+          onPress={(e) => { e.stopPropagation(); handleTogglePreview(id, getAudible()); }}
           style={({ pressed, hovered }: any) => [
             styles.previewBtn,
             playing && styles.previewBtnActive,
@@ -781,7 +812,9 @@ export default function ImportScreen() {
 
     function chooseTrack(next: TrackSelection) {
       // A preview of the part you just moved away from would only be confusing.
+      previewGenerationRef.current++;
       preview.stop();
+      setPreviewLoading(false);
       setPreviewTrack(null);
       // Re-scored for the new track, and the best harp for it becomes the pre-selection —
       // the key list is evidence about the track, so it can't be left showing the old one's.
@@ -794,26 +827,129 @@ export default function ImportScreen() {
       });
     }
 
+    const continueAction = (
+      <Pressable
+        key="continue"
+        onPress={() => commitMidi(notes, chosenKey, parsed.bpm)}
+        disabled={nothingToPlay}
+        style={({ pressed, hovered }: any) => [
+          styles.primaryBtn,
+          isWideWeb && styles.midiPrimaryWide,
+          nothingToPlay && styles.primaryBtnDisabled,
+          (pressed || hovered) && !nothingToPlay && styles.primaryBtnPressed,
+        ]}
+        accessibilityRole="button"
+        accessibilityState={{ disabled: nothingToPlay }}
+        accessibilityLabel={`Continue with ${chosenKey} harmonica`}
+      >
+        <Text style={styles.primaryBtnText}>Continue with {chosenKey}</Text>
+        <Ionicons name="arrow-forward" size={16} color="#fff" />
+      </Pressable>
+    );
+
+    const studioAction = (
+      <Pressable
+        key="studio"
+        onPress={openInStudio}
+        style={({ pressed, hovered }: any) => [
+          styles.studioBtn,
+          isWideWeb && styles.midiSecondaryWide,
+          (pressed || hovered) && styles.studioBtnPressed,
+        ]}
+        accessibilityRole="button"
+        accessibilityLabel="Open the full MIDI in Studio to edit tracks, notes, and timing"
+      >
+        <Ionicons name="layers-outline" size={16} color={theme.accent} />
+        <View style={styles.studioBtnCopy}>
+          <Text style={styles.studioBtnText}>Open full MIDI in Studio</Text>
+          <Text style={styles.studioBtnHint}>Edit tracks, notes, and timing</Text>
+        </View>
+      </Pressable>
+    );
+
+    const discardAction = (
+      <Pressable
+        key="discard"
+        onPress={handleCancel}
+        style={({ pressed, hovered }: any) => [
+          styles.secondaryBtn,
+          isWideWeb && styles.midiDiscardWide,
+          (pressed || hovered) && styles.secondaryBtnPressed,
+        ]}
+        accessibilityRole="button"
+        accessibilityLabel="Discard this import"
+      >
+        <Text style={styles.secondaryBtnText}>Discard</Text>
+      </Pressable>
+    );
+
     return (
       <SafeAreaView style={styles.safe}>
-        <ScrollView contentContainerStyle={styles.scrollContent}>
-          <View style={styles.iconCircle}>
+        <ScrollView
+          contentContainerStyle={[styles.scrollContent, isWideWeb && styles.midiScrollContentWide]}
+        >
+          <View style={[styles.midiHeader, isWideWeb && styles.midiHeaderWide]}>
+          <View style={[styles.iconCircle, isWideWeb && styles.midiIconWide]}>
             <Ionicons name="musical-note-outline" size={30} color={theme.accent} />
           </View>
 
-          <Text style={styles.title}>
+          <View style={styles.midiHeaderCopy}>
+          <Text style={[styles.title, isWideWeb && styles.midiTextWide]}>
             {showTracks ? 'Choose what to transcribe' : 'Ready to import'}
           </Text>
-          <Text style={styles.fileName} numberOfLines={1}>{fileName}</Text>
-          <Text style={styles.message}>
+          <Text style={[styles.fileName, isWideWeb && styles.midiTextWide]} numberOfLines={1}>{fileName}</Text>
+          <Text style={[styles.message, isWideWeb && styles.midiTextWide]}>
             {selectedTrack
               ? `${selectedTrack.name} — ${notes.length} note${notes.length === 1 ? '' : 's'} after collapsing chords to a single line.`
               : `All tracks merged — ${notes.length} note${notes.length === 1 ? '' : 's'} after collapsing to a single line.`}
           </Text>
+          </View>
+          </View>
 
-          {showTracks && (
+          <View style={[styles.midiGuide, isWideWeb && styles.midiGuideWide]}>
+            <View style={styles.midiGuideStep}>
+              <Text style={styles.midiGuideNumber}>1</Text>
+              <Text style={styles.midiGuideText}>
+                {showTracks ? 'Choose a track. Use ▶ to preview it.' : 'The only track is selected for you.'}
+              </Text>
+            </View>
+            <Ionicons
+              name={isWideWeb ? 'arrow-forward' : 'arrow-down'}
+              size={14}
+              color={theme.textMuted}
+            />
+            <View style={styles.midiGuideStep}>
+              <Text style={styles.midiGuideNumber}>2</Text>
+              <Text style={styles.midiGuideText}>Choose the harmonica you want to play.</Text>
+            </View>
+            <Ionicons
+              name={isWideWeb ? 'arrow-forward' : 'arrow-down'}
+              size={14}
+              color={theme.textMuted}
+            />
+            <View style={styles.midiGuideStep}>
+              <Text style={styles.midiGuideNumber}>3</Text>
+              <Text style={styles.midiGuideText}>Continue to tabs, or edit the full MIDI in Studio.</Text>
+            </View>
+          </View>
+
+          <View style={[styles.midiColumns, !isWideWeb && styles.midiColumnsNarrow]}>
+          <View style={[
+            styles.midiPanel,
+            isWideWeb && styles.midiPanelWide,
+            isWideWeb && showTracks && { height: midiPanelHeight },
+          ]}>
+          {showTracks ? (
             <>
               <Text style={styles.sectionLabel}>TRACK</Text>
+              <ScrollView
+                style={isWideWeb && styles.trackListScroll}
+                contentContainerStyle={isWideWeb && styles.trackListContent}
+                scrollEnabled={isWideWeb}
+                nestedScrollEnabled={isWideWeb}
+                showsVerticalScrollIndicator={isWideWeb}
+                accessibilityLabel="MIDI tracks"
+              >
               <CandidateList>
                 {parsed.tracks.map((track) => {
                   // Playing in full means a row can be sounding for minutes; the elapsed
@@ -822,7 +958,11 @@ export default function ImportScreen() {
                   return (
                     <CandidateRow
                       key={track.id}
-                      leading={previewButton(track.id, track.notes, track.name)}
+                      leading={previewButton(
+                        track.id,
+                        () => previewNotes(track.notes, track.program),
+                        track.name,
+                      )}
                       title={track.name}
                       subtitle={
                         `${track.noteCount} notes · ${pitchRangeLabel(track)} · `
@@ -833,12 +973,17 @@ export default function ImportScreen() {
                       selected={selection === track.id}
                       onPress={() => chooseTrack(track.id)}
                       accessibilityLabel={`${track.name}, ${track.noteCount} notes, ${pitchRangeLabel(track)}, ${durationLabel(track.durationMs)}`}
+                      backgroundColor={theme.bg}
                     />
                   );
                 })}
 
                 <CandidateRow
-                  leading={previewButton('all', mergeTracks(parsed.tracks), 'all tracks merged')}
+                  leading={previewButton(
+                    'all',
+                    () => previewTracks(parsed.tracks),
+                    'all tracks merged',
+                  )}
                   title="All tracks merged"
                   subtitle={
                     previewTrack === 'all' && preview.isPlaying
@@ -848,14 +993,30 @@ export default function ImportScreen() {
                   selected={selection === 'all'}
                   onPress={() => chooseTrack('all')}
                   accessibilityLabel="All tracks merged — keeps the highest note wherever parts overlap"
+                  backgroundColor={theme.bg}
                 />
               </CandidateList>
+              </ScrollView>
               <Text style={styles.listHint}>
                 Press ▶ to hear a part in full before choosing it — press again to stop.
               </Text>
             </>
+          ) : (
+            <>
+              <Text style={styles.sectionLabel}>TRACK</Text>
+              <View style={styles.trackFact}>
+                <Ionicons name="checkmark-circle-outline" size={18} color={theme.accent} />
+                <Text style={styles.trackFactText}>{selectedTrack?.name ?? 'All tracks merged'}</Text>
+              </View>
+            </>
           )}
+          </View>
 
+          <View style={[
+            styles.midiPanel,
+            isWideWeb && styles.midiPanelWide,
+            isWideWeb && showTracks && { height: midiPanelHeight },
+          ]}>
           {/* With nothing left after reduction there is no material to score, and every key
               would claim a perfect fit for zero notes. */}
           {showKeys && !nothingToPlay && (
@@ -864,6 +1025,8 @@ export default function ImportScreen() {
               <KeyCandidateList
                 candidates={ranking.ranked}
                 recommendedCount={RECOMMENDED_KEYS}
+                scrollOtherKeys={isWideWeb}
+                rowBackgroundColor={theme.bg}
                 selectedKey={chosenKey}
                 onSelect={(key) => setPhase({ ...phase, chosenKey: key })}
                 describe={(candidate) => {
@@ -925,56 +1088,13 @@ export default function ImportScreen() {
               </Text>
             </View>
           )}
+          </View>
+          </View>
 
-          <View style={styles.actions}>
-            <Pressable
-              onPress={() => commitMidi(notes, chosenKey, parsed.bpm)}
-              // Nothing playable at all is the one state where continuing has no possible
-              // outcome — an empty editor. An unmappable-but-present part still commits,
-              // since the pitches are real and editable.
-              disabled={nothingToPlay}
-              style={({ pressed, hovered }: any) => [
-                styles.primaryBtn,
-                nothingToPlay && styles.primaryBtnDisabled,
-                (pressed || hovered) && !nothingToPlay && styles.primaryBtnPressed,
-              ]}
-              accessibilityRole="button"
-              accessibilityState={{ disabled: nothingToPlay }}
-              accessibilityLabel={`Continue with ${chosenKey} harmonica`}
-            >
-              <Text style={styles.primaryBtnText}>Continue with {chosenKey}</Text>
-              <Ionicons name="arrow-forward" size={16} color="#fff" />
-            </Pressable>
-
-            {/* The Studio is the powerful path, not the default one: someone importing a
-                single-track melody shouldn't have to get through a multi-track editor to
-                reach their tabs. Offered alongside the direct route, never in place of it.
-                Enabled even when nothing maps to a harp — the Studio has no harmonica, so
-                "no key fits" says nothing about whether the file is worth opening there. */}
-            <Pressable
-              onPress={openInStudio}
-              style={({ pressed, hovered }: any) => [
-                styles.studioBtn,
-                (pressed || hovered) && styles.studioBtnPressed,
-              ]}
-              accessibilityRole="button"
-              accessibilityLabel="Open this file in the MIDI Studio"
-            >
-              <Ionicons name="layers-outline" size={16} color={theme.accent} />
-              <Text style={styles.studioBtnText}>Open in Studio</Text>
-            </Pressable>
-
-            <Pressable
-              onPress={handleCancel}
-              style={({ pressed, hovered }: any) => [
-                styles.secondaryBtn,
-                (pressed || hovered) && styles.secondaryBtnPressed,
-              ]}
-              accessibilityRole="button"
-              accessibilityLabel="Discard this import"
-            >
-              <Text style={styles.secondaryBtnText}>Discard</Text>
-            </Pressable>
+          <View style={[styles.actions, isWideWeb && styles.midiActionsWide]}>
+            {isWideWeb
+              ? <>{discardAction}{studioAction}{continueAction}</>
+              : <>{continueAction}{studioAction}{discardAction}</>}
           </View>
         </ScrollView>
       </SafeAreaView>
@@ -1341,6 +1461,129 @@ function createStyles(theme: Theme) {
       justifyContent:    'center',
       ...webMaxWidth(WEB_CONTENT_WIDTH.narrow),
     },
+    midiScrollContentWide: {
+      maxWidth:        1080,
+      justifyContent:  'flex-start',
+      alignItems:      'stretch',
+      paddingVertical: 24,
+      gap:             18,
+    },
+    midiHeader: {
+      width:      '100%',
+      alignItems: 'center',
+      gap:        6,
+    },
+    midiHeaderWide: {
+      flexDirection: 'row',
+      alignItems:    'center',
+      gap:           14,
+    },
+    midiHeaderCopy: {
+      flex:       1,
+      minWidth:   0,
+      alignItems: 'center',
+      gap:        2,
+    },
+    midiIconWide: {
+      width:        44,
+      height:       44,
+      borderRadius: 22,
+      marginBottom: 0,
+    },
+    midiTextWide: {
+      alignSelf: 'stretch',
+      textAlign: 'left',
+    },
+    midiColumns: {
+      width:         '100%',
+      flexDirection: 'row',
+      alignItems:    'flex-start',
+      gap:           24,
+    },
+    midiGuide: {
+      width:           '100%',
+      alignItems:      'stretch',
+      gap:             8,
+      paddingVertical: 10,
+    },
+    midiGuideWide: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      justifyContent:    'center',
+      gap:               12,
+      paddingHorizontal: 16,
+      borderWidth:       1,
+      borderColor:       theme.accent,
+      borderRadius:      12,
+      backgroundColor:   theme.bg,
+    },
+    midiGuideStep: {
+      flexDirection: 'row',
+      alignItems:    'center',
+      gap:           8,
+      flexShrink:    1,
+    },
+    midiGuideNumber: {
+      width:           22,
+      height:          22,
+      borderRadius:    11,
+      textAlign:       'center',
+      lineHeight:      22,
+      fontFamily:      SpaceGrotesk.bold,
+      fontSize:        FONT.xs,
+      color:           theme.accent,
+      backgroundColor: theme.accentSoft,
+    },
+    midiGuideText: {
+      flexShrink: 1,
+      fontFamily: Poppins.regular,
+      fontSize:   FONT.xs,
+      color:      theme.textSub,
+    },
+    midiColumnsNarrow: {
+      flexDirection: 'column',
+      gap:           10,
+    },
+    midiPanel: {
+      flex:     1,
+      minWidth: 0,
+      width:    '100%',
+    },
+    midiPanelWide: {
+      paddingHorizontal: 16,
+      paddingTop:        6,
+      paddingBottom:     14,
+      borderWidth:       1,
+      borderColor:       theme.border,
+      borderRadius:      14,
+      backgroundColor:   theme.bg,
+      overflow:          'hidden',
+    },
+    trackListScroll: {
+      flex:      1,
+      minHeight: 0,
+      marginTop: 4,
+    },
+    trackListContent: {
+      paddingBottom: 4,
+    },
+    trackFact: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      gap:               9,
+      marginTop:         14,
+      paddingHorizontal: 12,
+      paddingVertical:   12,
+      borderWidth:       1,
+      borderColor:       theme.border,
+      borderRadius:      10,
+      backgroundColor:   theme.surface,
+    },
+    trackFactText: {
+      fontFamily: Poppins.semiBold,
+      fontSize:   FONT.sm,
+      color:      theme.textPrimary,
+    },
     // ── Tune step ────────────────────────────────────────────────────────────
     //
     // Full-bleed, unlike every other phase on this screen: it is a workspace, not a
@@ -1629,6 +1872,46 @@ function createStyles(theme: Theme) {
       gap:        10,
       alignItems: 'center',
     },
+    midiActionsWide: {
+      position:          'sticky' as any,
+      bottom:            0,
+      zIndex:            10,
+      flexDirection:     'row',
+      alignItems:        'center',
+      marginTop:         0,
+      paddingTop:        14,
+      paddingBottom:     8,
+      paddingHorizontal: 12,
+      borderTopWidth:    1,
+      borderTopColor:    theme.border,
+      backgroundColor:   theme.bg,
+    },
+    midiPrimaryWide: {
+      flexGrow:   0,
+      flexShrink: 1,
+      flexBasis:  360,
+      width:      'auto',
+      minWidth:   220,
+      height:     56,
+    },
+    midiSecondaryWide: {
+      flexGrow:   0,
+      flexShrink: 1,
+      flexBasis:  330,
+      width:      'auto',
+      minWidth:   190,
+      height:     56,
+    },
+    midiDiscardWide: {
+      width:             'auto',
+      minWidth:          100,
+      height:            56,
+      marginTop:         0,
+      marginRight:       'auto',
+      alignItems:        'center',
+      justifyContent:    'center',
+      paddingHorizontal: 18,
+    },
     primaryBtn: {
       flexDirection:   'row',
       alignItems:      'center',
@@ -1661,6 +1944,15 @@ function createStyles(theme: Theme) {
       fontFamily: Poppins.bold,
       fontSize:   14,
       color:      theme.accent,
+    },
+    studioBtnCopy: {
+      alignItems: 'center',
+      gap:        1,
+    },
+    studioBtnHint: {
+      fontFamily: Poppins.regular,
+      fontSize:   10,
+      color:      theme.textSub,
     },
     primaryBtnDisabled: {
       backgroundColor: theme.surfaceAlt,
