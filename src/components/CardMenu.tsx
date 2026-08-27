@@ -96,6 +96,7 @@ export function CardMenu({ open, onClose, items, children, straightToConfirm }: 
   const styles = useMemo(() => createStyles(theme), [theme]);
 
   const anchorRef = useRef<any>(null);
+  const afterDismissRef = useRef<(() => void) | null>(null);
   const [pending, setPending] = useState<CardMenuItem | null>(null);
   const [place, setPlace] = useState<Placement | null>(null);
 
@@ -166,14 +167,23 @@ export function CardMenu({ open, onClose, items, children, straightToConfirm }: 
 
   function choose(item: CardMenuItem) {
     if (item.confirm) { setPending(item); return; }
+    // The web Modal restores focus to its trigger as it unmounts. Run an action that may
+    // focus something else (RecordingCard's inline rename field) only after that cleanup,
+    // or the restored trigger focus immediately blurs and closes the new field.
+    afterDismissRef.current = item.onPress;
     close();
-    item.onPress();
   }
 
   function confirmPending() {
     const item = pending;
+    afterDismissRef.current = item?.onPress ?? null;
     close();
-    item?.onPress();
+  }
+
+  function handleDismiss() {
+    const action = afterDismissRef.current;
+    afterDismissRef.current = null;
+    action?.();
   }
 
   return (
@@ -183,25 +193,25 @@ export function CardMenu({ open, onClose, items, children, straightToConfirm }: 
     <View ref={anchorRef} style={styles.anchor}>
       {children}
 
-      {open && (
-        <Modal
-          transparent
-          visible
-          // No entrance animation: the panel is pinned to a button, and something that fades
-          // in at a fixed point on the page reads as lag rather than as motion.
-          animationType="none"
-          onRequestClose={close}
-        >
-          {/* Click-away. Safe as a full-screen layer here in a way it would not have been
-              inside the card: this lives in the modal's portal and unmounts with it, so it
-              cannot outlive the menu and swallow the page's clicks. */}
-          <Pressable style={styles.scrim} onPress={close}>
-            {!!place && (
-              <Pressable
-                style={[styles.panel, place as ViewStyle]}
-                onPress={(e) => e.stopPropagation()}
-                accessibilityRole="menu"
-              >
+      <Modal
+        transparent
+        visible={open}
+        // No entrance animation: the panel is pinned to a button, and something that fades
+        // in at a fixed point on the page reads as lag rather than as motion.
+        animationType="none"
+        onRequestClose={close}
+        onDismiss={handleDismiss}
+      >
+        {/* Click-away. Safe as a full-screen layer here in a way it would not have been
+            inside the card: this lives in the modal's portal and unmounts with it, so it
+            cannot outlive the menu and swallow the page's clicks. */}
+        <Pressable style={styles.scrim} onPress={close}>
+          {!!place && (
+            <Pressable
+              style={[styles.panel, place as ViewStyle]}
+              onPress={(e) => e.stopPropagation()}
+              accessibilityRole="menu"
+            >
                 {pending?.confirm ? (
                   <View style={styles.confirm}>
                     <Text style={styles.confirmTitle}>{pending.confirm.title}</Text>
@@ -251,11 +261,10 @@ export function CardMenu({ open, onClose, items, children, straightToConfirm }: 
                     </React.Fragment>
                   ))
                 )}
-              </Pressable>
-            )}
-          </Pressable>
-        </Modal>
-      )}
+            </Pressable>
+          )}
+        </Pressable>
+      </Modal>
     </View>
   );
 }
