@@ -173,6 +173,28 @@ function tabSourceIsRealMidi(): void {
     `magic=${ascii(smf, 0, 4)} notes=${total}`);
 }
 
+function tabSourceCarriesSelectedInstrument(): void {
+  const selectedProgram = 73; // Flute
+  const parsed = readSmf(tabAudioSource(notesFor(['4'], 'C'), 'C', 'diatonic', selectedProgram));
+  const programs = parsed.tracks.map((track) => track.program);
+  check('the editor source carries the selected export instrument', programs.includes(selectedProgram),
+    `programs=[${programs}]`);
+}
+
+function leadingSilenceIsPreserved(): void {
+  // A take that starts four seconds in must still start four seconds in. The renderer half of
+  // this is `sequencerOptions.skipToFirstNoteOn: false` in `renderMidiAudio.web.ts` — which
+  // Node cannot exercise — so what is pinned here is the source: nothing may normalise the
+  // first onset to zero on the way out. Both halves have to hold for the export to be right.
+  const late = notesFor(['4', '-4'], 'C').map((n, i) => ({ ...n, start_time: 4000 + i * 400 }));
+  const parsed = readSmf(tabAudioSource(late, 'C', 'diatonic'));
+  const firstOnset = Math.min(...parsed.tracks.flatMap((t) => t.notes.map((n) => n.timeMs)));
+  // Tick quantisation moves this a few ms at most; anything near zero means it was chopped.
+  const ok = Math.abs(firstOnset - 4000) < 20;
+  check('leading silence survives into the exported MIDI source', ok,
+    `first onset = ${firstOnset}ms (expected ~4000ms)`);
+}
+
 function tabSourceRejectsEmpty(): void {
   let threw = false;
   try { tabAudioSource([], 'C', 'diatonic'); } catch (e) { threw = e instanceof EmptyArrangementError; }
@@ -302,6 +324,8 @@ function main(): void {
   fileNamesAndMimeTypes();
   fileNameSanitisation();
   tabSourceIsRealMidi();
+  tabSourceCarriesSelectedInstrument();
+  leadingSilenceIsPreserved();
   tabSourceRejectsEmpty();
   projectSourceMatchesMidiDownload();
   muteAndSoloDoNotAffectExport();

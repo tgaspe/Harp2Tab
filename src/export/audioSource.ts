@@ -13,6 +13,7 @@
 
 import { base64ToBytes } from '@/audio/base64';
 import { audibleProject, projectToSmfBytes } from '@/audio/midiProject';
+import { DEFAULT_PROGRAM } from '@/audio/timbre';
 import { generateForFormat, singlePart } from '@/export/generators';
 import type { HarmonicaKey, HarmonicaType, MidiProject, TabNote } from '@/types';
 
@@ -36,9 +37,10 @@ export function tabAudioSource(
   notes: TabNote[],
   key: HarmonicaKey,
   harmonicaType: HarmonicaType,
+  program = DEFAULT_PROGRAM,
 ): Uint8Array {
   if (notes.length === 0) throw new EmptyArrangementError();
-  const { content } = generateForFormat(singlePart(notes, key, harmonicaType), 'MIDI');
+  const { content } = generateForFormat(singlePart(notes, key, harmonicaType, 'Harmonica', program), 'MIDI');
   return base64ToBytes(content);
 }
 

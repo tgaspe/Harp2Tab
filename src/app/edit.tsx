@@ -18,6 +18,7 @@ import { Divider, IconButton } from '@/components/EditControls';
 import { WebTransportBar } from '@/components/TransportBar';
 import { createStyles, type EditStyles } from '@/app/editStyles';
 import { ExportFormatSections } from '@/components/ExportFormatSections';
+import { InstrumentPickerModal } from '@/components/InstrumentPickerModal';
 import { TEMPO_CONFIDENCE_GOOD, detectTempo } from '@/audio/detectTempo';
 import { useAudibleNotes } from '@/hooks/useAudibleNotes';
 import { useTheme } from '@/hooks/useTheme';
@@ -41,6 +42,8 @@ import { generateForFormat, singlePart } from '@/export/generators';
 import { canShareFiles, contentToBlob, exportFileName, triggerWebDownload } from '@/export/webDownload';
 import { exportAudio, type AudioExportStage } from '@/export/exportAudio';
 import { tabAudioSource } from '@/export/audioSource';
+import { DEFAULT_PROGRAM } from '@/audio/timbre';
+import { instrumentName } from '@/audio/studioTracks';
 import { isAudioFormat, tabExportSections } from '@/export/exportSections';
 import { DEFAULT_NEW_NOTE_VELOCITY } from '@/audio/velocity';
 import { FONT } from '@/constants/keys';
@@ -1291,6 +1294,8 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
   // have. Persisting "MP3" as the app-wide export format would change what the native export
   // screen offers to save, and that screen cannot render audio at all.
   const [audioFormat, setAudioFormat] = useState<string | null>(null);
+  const [audioProgram, setAudioProgram] = useState(DEFAULT_PROGRAM);
+  const [instrumentPickerOpen, setInstrumentPickerOpen] = useState(false);
   // What the button says while an export runs. Rendering a minute of audio then encoding it
   // is several seconds of work, where every text format was instant.
   const [status, setStatus] = useState<string | null>(null);
@@ -1317,7 +1322,7 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
     setIsExporting(true);
     setExportError(null);
     try {
-      const smf = tabAudioSource(tabNotes, selectedKey, harmonicaType);
+      const smf = tabAudioSource(tabNotes, selectedKey, harmonicaType, audioProgram);
       const { blob, ext } = await exportAudio(
         smf, format as 'WAV' | 'MP3' | 'OGG', (stage) => setStatus(stageLabel(stage, format)),
       );
@@ -1409,6 +1414,32 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
         titleStyle={styles.exportDropdownLabel}
         groupStyle={styles.exportFormatGroup}
       />
+      {audioFormat && (
+        <>
+          <Text style={styles.exportDropdownLabel}>INSTRUMENT</Text>
+          <Pressable
+            onPress={() => setInstrumentPickerOpen(true)}
+            style={({ pressed, hovered }: any) => [
+              styles.exportInstrumentRow,
+              (pressed || hovered) && styles.exportInstrumentRowActive,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel={`Export instrument, currently ${instrumentName(audioProgram)}`}
+          >
+            <View style={styles.exportInstrumentCopy}>
+              <Text style={styles.exportInstrumentName}>{instrumentName(audioProgram)}</Text>
+              <Text style={styles.exportInstrumentHint}>Changes the sound of exported audio only</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={15} color={theme.textMuted} />
+          </Pressable>
+          <InstrumentPickerModal
+            visible={instrumentPickerOpen}
+            selectedProgram={audioProgram}
+            onSelect={setAudioProgram}
+            onClose={() => setInstrumentPickerOpen(false)}
+          />
+        </>
+      )}
       {exportError && <Text style={styles.exportDropdownError}>{exportError}</Text>}
       <View style={styles.exportDropdownActions}>
         <Pressable

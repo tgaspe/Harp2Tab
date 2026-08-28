@@ -336,6 +336,16 @@ export async function renderMidiAudio(smf: Uint8Array): Promise<RenderedAudio> {
 }
 ```
 
+**Leading silence must be asked for.** The sequencer's `skipToFirstNoteOn` defaults to
+**true**, so the first version of this renderer dropped whatever silence came before the first
+note. That default is right for a player and wrong for an export: the count-in before a take's
+first note is part of its timing, and the tab/MIDI exports of the same take keep it. Worse, the
+render length still comes from `midi.duration`, which *includes* the leading silence
+(measured: a 3s lead-in on a 1.4s phrase reports `duration === 4.4`), so the skip did not
+shorten the file — it moved the music to the front and left the silence trailing. Fixed by
+passing `sequencerOptions: { skipToFirstNoteOn: false }`. Reported by Theo from the built
+feature, 2026-08-28.
+
 Three things the first draft of this phase left out and that are not optional:
 `synth.connect(ctx.destination)`, `await ctx.startRendering()` (without it the returned promise
 resolves and nothing has been rendered), and computing the context length up front from

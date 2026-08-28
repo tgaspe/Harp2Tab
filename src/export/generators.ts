@@ -18,6 +18,9 @@ export interface ExportPart {
   key:           HarmonicaKey;
   harmonicaType: HarmonicaType;
   notes:         TabNote[];
+  /** Optional General MIDI program for rendered/MIDI playback. Tab-oriented formats do
+   *  not serialize it, because it changes timbre rather than the written harmonica part. */
+  program?:      number;
 }
 
 export interface GeneratedFile {
@@ -48,8 +51,9 @@ export function singlePart(
   key: HarmonicaKey,
   harmonicaType: HarmonicaType,
   name = 'Harmonica',
+  program?: number,
 ): ExportPart[] {
-  return [{ name, key, harmonicaType, notes }];
+  return [{ name, key, harmonicaType, notes, program }];
 }
 
 // A note with tab: '' has no real position on the current harmonica (see
@@ -440,6 +444,7 @@ function generateMidi(parts: ExportPart[]): string {
   const tracks: SmfTrack[] = parts.map((part, i) => ({
     name:    part.name,
     channel: i % 16 === 9 ? 15 : i % 16, // never land a part on the percussion channel
+    program: part.program,
     notes:   part.notes.flatMap((n) => {
       const midi = noteNameToMidi(n.note);
       // A pitch that doesn't parse is dropped rather than written as middle C, which would

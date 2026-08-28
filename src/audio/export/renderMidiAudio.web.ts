@@ -125,6 +125,14 @@ export async function renderMidiAudio(smf: Uint8Array): Promise<RenderedAudio> {
       midiSequence:  midi,
       loopCount:     0,
       soundBankList: [{ bankOffset: 0, soundBankBuffer }],
+      // Keep the silence the user recorded. The sequencer's `skipToFirstNoteOn` defaults to
+      // **true**, which is right for a player — nobody wants to stare at a progress bar
+      // through four seconds of nothing — and wrong for an export, where the count-in before
+      // the first note is part of the take's timing. Left on, the render dropped the lead-in
+      // and, because the render length still comes from `midi.duration` (which *includes*
+      // that silence), moved it to the end: a file of the right length with the music in the
+      // wrong place, and out of sync with the MIDI export of the same take.
+      sequencerOptions: { skipToFirstNoteOn: false },
     });
     // Without this the promise above resolves having rendered nothing — `startOfflineRender`
     // arms the sequencer, `startRendering` actually turns the handle.
