@@ -14,7 +14,7 @@ import { WebTransportBar } from '@/components/TransportBar';
 import { createStyles as createEditStyles } from '@/app/editStyles';
 import { audibleTracks, instrumentName } from '@/audio/studioTracks';
 import { getChromaticRows } from '@/audio/HarmonicaMapper';
-import { audibleProject, createTrack, projectToSmfBytes, tempoMapOf } from '@/audio/midiProject';
+import { createTrack, tempoMapOf } from '@/audio/midiProject';
 import { mostMelodicTrack } from '@/audio/midiToNotes';
 import {
   appendTabNote,
@@ -32,6 +32,10 @@ import { RatingModal } from '@/components/RatingModal';
 import { resolveSessionGate } from '@/store/sessionGate';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { triggerWebDownload } from '@/export/webDownload';
+import { ExportProjectModal } from '@/components/ExportProjectModal';
+import { projectAudioSource } from '@/export/audioSource';
+import { exportAudio } from '@/export/exportAudio';
+import { isAudioFormat } from '@/export/exportSections';
 import { useMidiProjectsStore } from '@/store/useMidiProjectsStore';
 import { useRecordingsStore } from '@/store/useRecordingsStore';
 import { selectHarmonicaType, useAppStore } from '@/store/useAppStore';
@@ -142,6 +146,7 @@ export default function StudioScreen() {
   const [notice, setNotice] = useState<{ text: string; tone: 'warning' | 'success' } | null>(null);
   const [tracksCollapsed, setTracksCollapsed] = useState(false);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [showRatingModal, setShowRatingModal] = useState(false);
   /** The open harp picker, or null. Holds the ranking so the list doesn't re-score on every
    *  render, and the in-progress choice, which isn't committed to anything until Convert. */
@@ -476,13 +481,26 @@ export default function StudioScreen() {
    * just downloaded. This is a view for export only; `saveProject` writes the unfiltered
    * project, so nothing is lost by filtering here.
    */
-  const handleDownloadMidi = useCallback(() => {
+  const handleExport = useCallback(async (
+    format: string, onStatus: (label: string | null) => void,
+  ) => {
     if (!project) return;
     const safeTitle = project.title.replace(/[^\w-]+/g, '_').slice(0, 60) || 'harp2tab_project';
-    // `writeSmf` returns a freshly allocated view, so its buffer is exactly these bytes —
-    // the cast is only to satisfy BlobPart's ArrayBuffer/SharedArrayBuffer distinction.
-    const buffer = projectToSmfBytes(audibleProject(project)).buffer as ArrayBuffer;
-    triggerWebDownload(new Blob([buffer], { type: 'audio/midi' }), `${safeTitle}.mid`);
+    // One source for both branches, so a rendered WAV and a downloaded .mid are the same
+    // arrangement — see `projectAudioSource` on why mute/solo is not consulted.
+    const smf = projectAudioSource(project);
+
+    if (!isAudioFormat(format)) {
+      // `writeSmf` returns a freshly allocated view, so its buffer is exactly these bytes —
+      // the cast is only to satisfy BlobPart's ArrayBuffer/SharedArrayBuffer distinction.
+      triggerWebDownload(new Blob([smf.buffer as ArrayBuffer], { type: 'audio/midi' }), `${safeTitle}.mid`);
+      return;
+    }
+
+    const { blob, ext } = await exportAudio(smf, format as 'WAV' | 'MP3' | 'OGG', (stage) =>
+      onStatus(stage === 'rendering' ? 'Rendering audio…' : `Encoding ${format}…`));
+    onStatus('Downloading…');
+    triggerWebDownload(blob, `${safeTitle}.${ext}`);
   }, [project]);
 
   /** Tempo lives on the project's map, so the transport's BPM stepper edits the map's
@@ -512,10 +530,10 @@ export default function StudioScreen() {
           disabled: !project || !dirty,
         },
         {
-          key:      'download-midi',
+          key:      'export',
           icon:     'download-outline',
-          label:    'Download MIDI',
-          onPress:  handleDownloadMidi,
+          label:    'Export',
+          onPress:  () => setExporting(true),
           disabled: !project,
         },
         {
@@ -530,7 +548,7 @@ export default function StudioScreen() {
         },
       ]);
       return () => clearHeaderActions('/studio');
-    }, [setHeaderActions, clearHeaderActions, handleSave, handleDownloadMidi, dirty, project]),
+    }, [setHeaderActions, clearHeaderActions, handleSave, dirty, project]),
   );
 
   /** Autosave is gone, so a reload with uncommitted edits would lose them silently. */
@@ -557,6 +575,12 @@ export default function StudioScreen() {
 
   return (
     <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
+      <ExportProjectModal
+        visible={exporting}
+        onExport={handleExport}
+        onClose={() => setExporting(false)}
+      />
+
       {/* Same two-line phrasing the library's delete uses, so the same action reads the same
           way wherever it's reached from. `onPress` does the work, never `onClose` — the
           modal fires `onClose` first, so deleting there would run on Cancel too. */}

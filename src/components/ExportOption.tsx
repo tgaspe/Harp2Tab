@@ -2,38 +2,51 @@ import React, { useMemo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/hooks/useTheme';
-import { EXPORT_FORMAT_META, FONT } from '@/constants/keys';
+import { FONT } from '@/constants/keys';
 import { Poppins } from '@/constants/fonts';
 import type { Theme } from '@/theme';
-import type { ExportFormat } from '@/types';
 
+/**
+ * One row of the export picker.
+ *
+ * Takes its presentation already resolved rather than looking it up from
+ * `EXPORT_FORMAT_META` itself. That indirection was fine while `ExportFormat` was the only
+ * family of things one could export; Phase 17 added audio formats, which are a separate
+ * union on purpose (they have no `generateForFormat` case), and a row that can only render
+ * one of the two unions cannot serve a popup that shows both.
+ */
 interface ExportOptionProps {
-  format: ExportFormat;
+  /** Opaque to this component — whatever the owning list uses to identify a format. */
+  id: string;
+  label: string;
+  description: string;
+  /** Ionicons name. */
+  icon: string;
   isSelected: boolean;
-  onSelect: (format: ExportFormat) => void;
+  onSelect: (id: string) => void;
   showDivider?: boolean;
 }
 
-export function ExportOption({ format, isSelected, onSelect, showDivider }: ExportOptionProps) {
+export function ExportOption({
+  id, label, description, icon, isSelected, onSelect, showDivider,
+}: ExportOptionProps) {
   const theme  = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
-  const meta   = EXPORT_FORMAT_META[format];
 
   return (
     <>
       <Pressable
-        onPress={() => onSelect(format)}
+        onPress={() => onSelect(id)}
         style={({ pressed }) => [
           styles.row,
           pressed && styles.rowPressed,
         ]}
         accessibilityRole="radio"
         accessibilityState={{ checked: isSelected }}
-        accessibilityLabel={`Export as ${meta.label}`}
+        accessibilityLabel={`Export as ${label}`}
       >
         <Ionicons
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          name={meta.icon as any}
+          name={icon as React.ComponentProps<typeof Ionicons>['name']}
           size={20}
           color={isSelected ? theme.accent : theme.textSub}
           style={styles.icon}
@@ -41,9 +54,9 @@ export function ExportOption({ format, isSelected, onSelect, showDivider }: Expo
 
         <View style={styles.text}>
           <Text style={[styles.label, isSelected && styles.labelSelected]}>
-            {meta.label}
+            {label}
           </Text>
-          <Text style={styles.description}>{meta.description}</Text>
+          <Text style={styles.description}>{description}</Text>
         </View>
 
         {/* Radio dot */}

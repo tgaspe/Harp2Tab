@@ -5,7 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
-import { ExportOption } from '@/components/ExportOption';
+import { ExportFormatSections } from '@/components/ExportFormatSections';
 import { NameRecordingModal } from '@/components/NameRecordingModal';
 import { RatingModal } from '@/components/RatingModal';
 import { ActionSheetModal } from '@/components/ActionSheetModal';
@@ -15,7 +15,7 @@ import { useAudibleNotes } from '@/hooks/useAudibleNotes';
 import { saveCurrentSessionToLibrary, getDefaultRecordingTitle, startNewRecordingSession } from '@/store/sessionSnapshot';
 import { generateForFormat, singlePart } from '@/export/generators';
 import { canShareFiles, contentToBlob, exportFileName, triggerWebDownload } from '@/export/webDownload';
-import { EXPORT_FORMATS, FONT } from '@/constants/keys';
+import { EXPORT_FORMATS, EXPORT_FORMAT_META, FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_TOP, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
 import type { Theme } from '@/theme';
@@ -232,17 +232,12 @@ export default function ExportScreen() {
           showsVerticalScrollIndicator={false}
         >
           {/* Grouped list — iOS Settings style */}
-          <View style={styles.formatGroup}>
-            {EXPORT_FORMATS.map((fmt: ExportFormat, i) => (
-              <ExportOption
-                key={fmt}
-                format={fmt}
-                isSelected={exportFormat === fmt}
-                onSelect={setExportFormat}
-                showDivider={i < EXPORT_FORMATS.length - 1}
-              />
-            ))}
-          </View>
+          <ExportFormatSections
+            sections={[{ options: EXPORT_FORMATS.map((id) => ({ id, ...EXPORT_FORMAT_META[id] })) }]}
+            selectedId={exportFormat}
+            onSelect={(id) => setExportFormat(id as ExportFormat)}
+            groupStyle={styles.formatGroup}
+          />
         </ScrollView>
 
         {/* Actions */}

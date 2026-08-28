@@ -1,7 +1,8 @@
 # Harp2Tab — Full Roadmap Implementation Plan
 
 Status as of 2026-08-19: Phases 0–6, 7a, 7b, 8a, 8b, 11, 13 and 14 are implemented on
-`web_version`. Phases 9, 10, 12 (partly), 15, 16 and 8c are still just this plan.
+`web_version`. Phases 9, 10, 12 (partly), 15, 16 and 8c are still just this plan; Phase 17 is code-complete
+and awaiting browser checks.
 
 **Phase 16 supersedes Phase 14** (planned 2026-08-19): the spectral engine is replaced
 wholesale by the CQT-based HSA v2 detector, plus pMPM's amplitude-envelope re-attack
@@ -203,6 +204,19 @@ existed, so the command would have failed. No phase owned this; it is now step 2
       becomes **web-only** (WASM under Hermes), leaving native with pMPM alone, and the
       re-attack constants must be re-tuned before the port, because pMPM's were calibrated at
       46.4ms frames and HSA v2 runs at 11.61ms.
+- [~] [Phase 17](phase-17-audio-export.md) — **Audio export (WAV / MP3 / OGG)** — code complete
+      2026-08-28, browser verification outstanding (planned the same day). Renders the tab editor's and the Studio's MIDI through the soundfont that
+      Phase 11-6 already bundles, offline, so an export sounds like playback rather than the
+      oscillator fallback. Web-only, one shared pipeline for both screens, and it finally
+      gives the Studio's `Download MIDI` header action a real Export popup. **Verified
+      against the installed `spessasynth_lib@4.3.14`, not just its docs** — the load-bearing
+      finding is that `startOfflineRender` *transfers* the soundbank `ArrayBuffer`, so a
+      cached buffer is detached after one export and the cache must hold bytes and copy per
+      render. **Export ignores mute and solo** (Theo, 2026-08-28) — every track is rendered, so
+      audio matches the MIDI download and no existing behaviour changes; the velocity and
+      duration floors still apply, because those are edits to the material rather than
+      monitoring. Carries one shared-code fix that stands on its own: `triggerWebDownload` revokes its object URL synchronously, which is safe for a 3 KB
+      CSV and can abort a 40 MB WAV in Firefox and Safari.
 
 **Phase 11 — what shipped, against what was planned**
 - 11-1…11-5, 11-8…11-10 complete. End-to-end: import MIDI → Open in Studio → edit →
@@ -309,6 +323,7 @@ they're the design record, not a changelog. Notable deviations from the original
 | [`phase-14-spectral.md`](phase-14-spectral.md) | Spectral polyphonic transcription (FFT) as a third engine |
 | [`phase-15-native-scope.md`](phase-15-native-scope.md) | Native port scope — a held decision, not scheduled work |
 | [`phase-16-hsa-engine.md`](phase-16-hsa-engine.md) | HSA v2 (vendored CQT) replaces the spectral engine; global re-attack segmentation |
+| [`phase-17-audio-export.md`](phase-17-audio-export.md) | Audio export — offline SoundFont render → WAV/MP3/OGG, shared export popup for Edit and Studio |
 
 ## Context
 

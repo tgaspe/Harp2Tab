@@ -25,6 +25,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { FREE_TIER_TRANSCRIPTIONS, MOCK_WEB_PLANS, PLAN_PERKS } from '@/billing/plans';
 import { EXPORT_FORMATS, EXPORT_FORMAT_META } from '@/constants/keys';
+import { AUDIO_EXPORT_FORMATS, AUDIO_FORMAT_META } from '@/export/audioFormats';
 
 import type { HarmonicaKey } from '@/types';
 
@@ -333,10 +334,13 @@ export function LandingPage() {
 
             <h3 style={{ margin: '56px 0 24px' }}>Export it anywhere</h3>
             <div className="lp-formats">
-              {EXPORT_FORMATS.map((format) => (
-                <div className="lp-format" key={format}>
-                  <span className="lp-format__name">{EXPORT_FORMAT_META[format].label}</span>
-                  <span className="lp-format__desc">{EXPORT_FORMAT_META[format].description}</span>
+              {[
+                ...EXPORT_FORMATS.map((f) => EXPORT_FORMAT_META[f]),
+                ...AUDIO_EXPORT_FORMATS.map((f) => AUDIO_FORMAT_META[f]),
+              ].map((meta) => (
+                <div className="lp-format" key={meta.label}>
+                  <span className="lp-format__name">{meta.label}</span>
+                  <span className="lp-format__desc">{meta.description}</span>
                 </div>
               ))}
             </div>

@@ -17,7 +17,7 @@ import { KeyGrid } from '@/components/KeyGrid';
 import { Divider, IconButton } from '@/components/EditControls';
 import { WebTransportBar } from '@/components/TransportBar';
 import { createStyles, type EditStyles } from '@/app/editStyles';
-import { ExportOption } from '@/components/ExportOption';
+import { ExportFormatSections } from '@/components/ExportFormatSections';
 import { TEMPO_CONFIDENCE_GOOD, detectTempo } from '@/audio/detectTempo';
 import { useAudibleNotes } from '@/hooks/useAudibleNotes';
 import { useTheme } from '@/hooks/useTheme';
@@ -39,8 +39,11 @@ import { previewNote, warmSynth } from '@/native/Playback';
 import { noteToTab } from '@/audio/HarmonicaMapper';
 import { generateForFormat, singlePart } from '@/export/generators';
 import { canShareFiles, contentToBlob, exportFileName, triggerWebDownload } from '@/export/webDownload';
+import { exportAudio, type AudioExportStage } from '@/export/exportAudio';
+import { tabAudioSource } from '@/export/audioSource';
+import { isAudioFormat, tabExportSections } from '@/export/exportSections';
 import { DEFAULT_NEW_NOTE_VELOCITY } from '@/audio/velocity';
-import { FONT, EXPORT_FORMATS } from '@/constants/keys';
+import { FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import { webMaxWidth, WEB_CONTENT_WIDTH, WEB_SCREEN_PADDING_TOP, WEB_SCREEN_PADDING_BOTTOM } from '@/constants/layout';
 import type { Theme } from '@/theme';
@@ -1284,6 +1287,52 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
   const [open, setOpen] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [pendingExport, setPendingExport] = useState<{ action: 'share' | 'save'; count: number } | null>(null);
+  // Audio selection is local, while the text formats keep writing the store as they always
+  // have. Persisting "MP3" as the app-wide export format would change what the native export
+  // screen offers to save, and that screen cannot render audio at all.
+  const [audioFormat, setAudioFormat] = useState<string | null>(null);
+  // What the button says while an export runs. Rendering a minute of audio then encoding it
+  // is several seconds of work, where every text format was instant.
+  const [status, setStatus] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  const sections = useMemo(() => tabExportSections(), []);
+  const selectedId = audioFormat ?? exportFormat;
+
+  function handleSelectFormat(id: string) {
+    setExportError(null);
+    if (isAudioFormat(id)) { setAudioFormat(id); return; }
+    setAudioFormat(null);
+    setExportFormat(id as ExportFormat);
+  }
+
+  const stageLabel = (stage: AudioExportStage, format: string) =>
+    stage === 'rendering' ? 'Rendering audio…' : `Encoding ${format}…`;
+
+  /** Render and download audio. Separate from `doSave` because it shares nothing with the
+   *  text path beyond the filename — different source, no `content`/`encoding`, and it can
+   *  fail in ways the user can act on. */
+  async function doSaveAudio(format: string) {
+    if (!selectedKey || tabNotes.length === 0 || isExporting) return;
+    setIsExporting(true);
+    setExportError(null);
+    try {
+      const smf = tabAudioSource(tabNotes, selectedKey, harmonicaType);
+      const { blob, ext } = await exportAudio(
+        smf, format as 'WAV' | 'MP3' | 'OGG', (stage) => setStatus(stageLabel(stage, format)),
+      );
+      setStatus('Downloading…');
+      triggerWebDownload(blob, exportFileName(recordingTitle, ext));
+      setOpen(false);
+    } catch (e) {
+      // Surfaced in the popup rather than only logged — a silent no-op after a ten-second
+      // wait is indistinguishable from the app being broken.
+      setExportError(e instanceof Error ? e.message : 'Export failed. Try again.');
+    } finally {
+      setIsExporting(false);
+      setStatus(null);
+    }
+  }
 
   // Most desktop browsers expose `navigator.share` but refuse files, which made this
   // dropdown's Share button a second Download button sitting next to the first. Offered
@@ -1333,6 +1382,9 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
   // Pre-flight gate — a note with tab: '' has no real position on the current harmonica
   // (see getGridRows/PianoRoll.tsx). Skips the confirm sheet when there's nothing to warn about.
   function handleSave() {
+    // The "not playable on this harmonica" warning is about *tab* files, which have no way to
+    // write a note with no hole. Rendered audio can play any pitch, so audio skips the sheet.
+    if (audioFormat) { doSaveAudio(audioFormat); return; }
     const count = tabNotes.filter((n) => n.tab === '').length;
     if (count > 0) { setPendingExport({ action: 'save', count }); return; }
     doSave();
@@ -1350,18 +1402,14 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
   // centered modal card) differs.
   const formatAndActions = (
     <>
-      <Text style={styles.exportDropdownLabel}>FORMAT</Text>
-      <View style={styles.exportFormatGroup}>
-        {EXPORT_FORMATS.map((fmt: ExportFormat, i: number) => (
-          <ExportOption
-            key={fmt}
-            format={fmt}
-            isSelected={exportFormat === fmt}
-            onSelect={setExportFormat}
-            showDivider={i < EXPORT_FORMATS.length - 1}
-          />
-        ))}
-      </View>
+      <ExportFormatSections
+        sections={sections}
+        selectedId={selectedId}
+        onSelect={handleSelectFormat}
+        titleStyle={styles.exportDropdownLabel}
+        groupStyle={styles.exportFormatGroup}
+      />
+      {exportError && <Text style={styles.exportDropdownError}>{exportError}</Text>}
       <View style={styles.exportDropdownActions}>
         <Pressable
           onPress={handleSave}
@@ -1374,9 +1422,9 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
           accessibilityLabel="Download to device"
         >
           <Ionicons name="download-outline" size={15} color={theme.accent} />
-          <Text style={styles.exportDropdownSaveBtnText}>{isExporting ? '…' : 'Download'}</Text>
+          <Text style={styles.exportDropdownSaveBtnText}>{status ?? (isExporting ? '…' : 'Download')}</Text>
         </Pressable>
-        {canShare && (
+        {canShare && !audioFormat && (
           <Pressable
             onPress={handleShare}
             disabled={isExporting}

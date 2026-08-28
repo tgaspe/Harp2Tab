@@ -6,13 +6,30 @@ export function contentToBlob(content: string, encoding: 'utf8' | 'base64', mime
     : new Blob([content], { type: mimeType });
 }
 
+/** How long the object URL is kept alive after the click. Long enough for a browser to have
+ *  started reading a large blob, short enough that a tab left open all day isn't pinning
+ *  rendered audio in memory. */
+const DOWNLOAD_URL_TTL_MS = 60_000;
+
 export function triggerWebDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
+  // Anchored in the document rather than detached: Firefox ignores a click on an element
+  // that isn't in the tree. Hidden so it can never affect layout for the frame it exists.
+  a.style.display = 'none';
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  // Revoking synchronously — which this did until audio export arrived — is safe for a few
+  // kilobytes of text and aborts a multi-megabyte download in Firefox and Safari, which read
+  // the blob asynchronously after the click returns. Every export was text until now, which
+  // is why it never showed. The URL dies with the document regardless, so a missed timer
+  // leaks nothing lasting.
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+    a.remove();
+  }, DOWNLOAD_URL_TTL_MS);
 }
 
 /** Fallback stem for a tab that hasn't been named — the old hard-coded filename, kept so an

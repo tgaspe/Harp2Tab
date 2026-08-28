@@ -700,6 +700,15 @@ export function createStyles(t: Theme) {
       letterSpacing: 1.2,
       paddingHorizontal: 2,
     },
+    /** Audio export can fail in ways the user can act on — an offline soundfont fetch, an
+     *  unsupported browser — so the popup says so instead of only the console. */
+    exportDropdownError: {
+      fontSize:   FONT.xs,
+      fontFamily: Poppins.regular,
+      color:      t.record,
+      lineHeight: 16,
+      paddingHorizontal: 2,
+    },
     exportFormatGroup: {
       backgroundColor: t.surface,
       borderRadius: 10,
