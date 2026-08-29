@@ -567,7 +567,9 @@ interface PianoRollProps {
    * instead of the open project. Omitted by the tab editor, which keeps the store calls.
    */
   onUpdateMany?: (updates: { id: string; changes: NoteUpdate }[]) => void;
-  onCreateMany?: (notes: Omit<TabNote, 'id'>[]) => void;
+  /** May synchronously return the created notes when the host's write is React-state
+   *  backed and therefore cannot be read back until the next render (the MIDI Studio). */
+  onCreateMany?: (notes: Omit<TabNote, 'id'>[]) => TabNote[] | void;
   /** Notes as they exist *after* a create — used to select what was just made. The tab
    *  editor reads this back off its store; the Studio passes its own array. */
   readNotesAfterWrite?: () => TabNote[];
@@ -669,10 +671,11 @@ export function PianoRoll({
     else useAppStore.getState().updateNotes(updates);
   }, [onUpdateMany]);
 
-  const createMany = useCallback((created: Omit<TabNote, 'id'>[]) => {
-    if (created.length === 0) return;
-    if (onCreateMany) onCreateMany(created);
-    else useAppStore.getState().addTabNotes(created);
+  const createMany = useCallback((created: Omit<TabNote, 'id'>[]): TabNote[] | undefined => {
+    if (created.length === 0) return [];
+    if (onCreateMany) return onCreateMany(created) ?? undefined;
+    useAppStore.getState().addTabNotes(created);
+    return undefined;
   }, [onCreateMany]);
 
   // Deleting a whole selection. Falls back to looping the single-note path only when the
@@ -732,6 +735,20 @@ export function PianoRoll({
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const mouseModeRef   = useRef(mouseMode);   mouseModeRef.current   = mouseMode;
   const selectedIdsRef = useRef(selectedIds); selectedIdsRef.current = selectedIds;
+
+  // A keyboard event can follow an RNGH runOnJS selection callback before React has
+  // committed the parent/local state update. Keep the mirrors current at the interaction
+  // boundary as well as at render time, so Copy always snapshots the note(s) the user just
+  // selected instead of the preceding selection.
+  const selectSingleNote = useCallback((id: string) => {
+    selectedIdRef.current = id;
+    onSelect(id);
+  }, [onSelect]);
+
+  const commitSelectedIds = useCallback((next: string[]) => {
+    selectedIdsRef.current = next;
+    setSelectedIds(next);
+  }, []);
 
   // Filters and Studio track changes replace `notes` without remounting the shared roll.
   // A marquee selection is a selection of what this roll can currently edit, so discard
@@ -1069,7 +1086,7 @@ export function PianoRoll({
     // that click would stack a brand-new note underneath the one being clicked instead of
     // selecting it.
     const hit = noteAt(x, y);
-    if (hit) { onSelect(hit.id); return; }
+    if (hit) { selectSingleNote(hit.id); return; }
 
     const rowIndex = Math.min(positions.length - 1, Math.max(0, Math.floor(y / rowH)));
     const pos = positions[rowIndex];
@@ -1092,7 +1109,7 @@ export function PianoRoll({
     });
     const updated = notesAfterWrite();
     const created = updated[updated.length - 1];
-    if (created) onSelect(created.id);
+    if (created) selectSingleNote(created.id);
   }
 
   // Content-space hit test — which note, if any, sits under this point. Shared by the
@@ -1121,6 +1138,22 @@ export function PianoRoll({
   function handleGridMouseMove(e: { clientX: number; currentTarget: unknown }) {
     gridNodeRef.current = e.currentTarget as { getBoundingClientRect?: () => DOMRect };
     pointerClientXRef.current = e.clientX;
+  }
+
+  /**
+   * Return keyboard shortcuts to the roll when the user comes back from editing a title,
+   * tempo, or other text field. React Native Web's grid Views are not focusable, so merely
+   * clicking a note can leave the previous input as document.activeElement; the shortcut
+   * guard then correctly treats Cmd/Ctrl+C as text copy and never refreshes our note
+   * clipboard. Blurring on mouse-down happens before the following key gesture while still
+   * preserving native copy/paste whenever the user is actually working in the input.
+   */
+  function handleGridMouseDown() {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement &&
+        (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) {
+      active.blur();
+    }
   }
 
   function handleGridContextMenu(e: {
@@ -1163,9 +1196,9 @@ export function PianoRoll({
     });
     const matchedIds = matched.map((n) => n.id);
     if (shiftHeldRef.current) {
-      setSelectedIds((prev) => Array.from(new Set([...prev, ...matchedIds])));
+      commitSelectedIds(Array.from(new Set([...selectedIdsRef.current, ...matchedIds])));
     } else {
-      setSelectedIds(matchedIds);
+      commitSelectedIds(matchedIds);
     }
   }
 
@@ -1180,11 +1213,14 @@ export function PianoRoll({
     const hit = noteAt(x, y);
     if (shiftHeldRef.current) {
       if (hit) {
-        setSelectedIds((prev) => (prev.includes(hit.id) ? prev.filter((id) => id !== hit.id) : [...prev, hit.id]));
+        const previous = selectedIdsRef.current;
+        commitSelectedIds(previous.includes(hit.id)
+          ? previous.filter((id) => id !== hit.id)
+          : [...previous, hit.id]);
       }
       return;
     }
-    setSelectedIds(hit ? [hit.id] : []);
+    commitSelectedIds(hit ? [hit.id] : []);
   }
 
   function handleGridScroll(e: NativeSyntheticEvent<NativeScrollEvent>) {
@@ -1382,13 +1418,15 @@ export function PianoRoll({
   // Selects whatever addTabNotes just appended — relies on it being the tail of the
   // store's array (addTabNotes only ever pushes, never reorders) rather than matching by
   // content, so two identical duplicated notes can't be confused with each other.
-  function selectNewest(count: number) {
-    const updated = notesAfterWrite();
-    const created = updated.slice(updated.length - count);
+  function selectNewest(count: number, synchronouslyCreated?: TabNote[]) {
+    const created = synchronouslyCreated ?? (() => {
+      const updated = notesAfterWrite();
+      return updated.slice(updated.length - count);
+    })();
     if (mouseModeRef.current === 'pencil') {
-      if (created[0]) onSelect(created[0].id);
+      if (created[0]) selectSingleNote(created[0].id);
     } else {
-      setSelectedIds(created.map((n: TabNote) => n.id));
+      commitSelectedIds(created.map((n: TabNote) => n.id));
     }
   }
 
@@ -1404,12 +1442,12 @@ export function PianoRoll({
   function handleDuplicate() {
     const targets = getSelectionNotes();
     if (targets.length === 0) return;
-    createMany(targets.map((n) => ({
+    const created = createMany(targets.map((n) => ({
       tab: n.tab, note: n.note, confidence: 100,
       start_time: n.start_time + n.duration, duration: n.duration,
       velocity: noteVelocity(n) ?? DEFAULT_NEW_NOTE_VELOCITY, velocitySource: n.velocitySource,
     })));
-    selectNewest(targets.length);
+    selectNewest(targets.length, created);
   }
 
   function handleCopy() {
@@ -1428,14 +1466,14 @@ export function PianoRoll({
     const clip = clipboardRef.current;
     if (clip.length === 0) return;
     const anchor = currentTimeMsRef.current;
-    createMany(clip.map((c) => ({
+    const created = createMany(clip.map((c) => ({
       tab: c.tab, note: c.note, duration: c.duration, confidence: 100,
       start_time: Math.max(0, anchor + c.offsetMs),
       // Copied at Copy time, same reasoning as handleDuplicate — a paste is the note again,
       // not a new note that happens to share its pitch.
       velocity: c.velocity, velocitySource: c.velocitySource,
     })));
-    selectNewest(clip.length);
+    selectNewest(clip.length, created);
   }
 
   function showToast(message: string) {
@@ -1688,6 +1726,8 @@ export function PianoRoll({
     return () => node.removeEventListener('wheel', onWheel);
   }, []);
 
+  // The blurred duplicate was the source of the flashing; keep the crisp line fractional
+  // so it can move continuously rather than stepping one physical pixel at a time.
   const playheadLeft = (currentTimeMs / 1000) * pxPerSecond;
   const showPlayhead = isPlaying || currentTimeMs > 0;
 
@@ -2313,6 +2353,7 @@ export function PianoRoll({
                 {...(Platform.OS === 'web'
                   ? ({
                       ...(viewOnly ? null : { onContextMenu: handleGridContextMenu }),
+                      ...(!viewOnly ? { onMouseDown: handleGridMouseDown } : null),
                       onMouseMove: handleGridMouseMove,
                     } as object)
                   : null)}
@@ -2390,7 +2431,7 @@ export function PianoRoll({
                       snapDivision={snapDivision}
                       interactive={mouseMode === 'pencil' && !viewOnly}
                       isSelected={mouseMode === 'pencil' ? selectedId === note.id : selectedIds.includes(note.id)}
-                      onSelect={onSelect}
+                      onSelect={selectSingleNote}
                       onUpdate={onUpdate}
                       styles={styles}
                     />
@@ -2398,10 +2439,7 @@ export function PianoRoll({
                 })}
 
                 {showPlayhead && (
-                  <View pointerEvents="none" style={[styles.playheadGlow, { left: playheadLeft - 4, height: gridHeight }]} />
-                )}
-                {showPlayhead && (
-                  <View pointerEvents="none" style={[styles.playheadLine, { left: playheadLeft, height: gridHeight }]} />
+                  <View pointerEvents="none" style={[styles.playheadLine, { left: playheadLeft - 1, height: gridHeight }]} />
                 )}
 
                 {mouseMode === 'selection' && (
@@ -3530,7 +3568,7 @@ interface NoteBlockProps {
   styles:       ReturnType<typeof createStyles>;
 }
 
-function PianoRollNoteBlock({
+const PianoRollNoteBlock = React.memo(function PianoRollNoteBlock({
   note, rowIndex, positions, map, pxPerSecond, rowHeight, noteColor, snapDivision, isSelected, interactive, onSelect, onUpdate, styles,
 }: NoteBlockProps) {
   // react-native-gesture-handler's Gesture.Pan() instead of the old PanResponder —
@@ -3739,7 +3777,7 @@ function PianoRollNoteBlock({
       </Animated.View>
     </GestureDetector>
   );
-}
+});
 
 // ─── Group selection overlay ────────────────────────────────────────────────────
 // Bounding box drawn around the marquee-selected notes with move + edge-resize handles —
@@ -4556,25 +4594,15 @@ function createStyles(t: Theme) {
     // It used to be `RULER_HEIGHT - 10` tall from the top, leaving a 10px gap above the
     // ruler's lower border that made the marker look like it stopped short.
     playheadWrap: { position: 'absolute', top: 0, bottom: 0, width: 8, alignItems: 'center' },
-    playheadRulerLine: { width: 1.5, flex: 1, backgroundColor: t.record },
+    playheadRulerLine: { width: 2, flex: 1, backgroundColor: t.record },
     // Long vertical line spanning the note grid — a separate, absolutely-positioned usage
     // from the short in-ruler line above (that one lives inside a centering flex wrapper).
     playheadLine: {
       position: 'absolute',
       top: 0,
-      width: 1.5,
+      width: 2,
       backgroundColor: t.record,
     },
-    // Soft blurred band trailing the crisp line above, web-only — a plain thin line reads
-    // as flat, this gives the moving playhead some visual weight without being loud.
-    playheadGlow: {
-      position: 'absolute',
-      top: 0,
-      width: 8,
-      backgroundColor: t.recordSoft,
-      ...(Platform.OS === 'web' ? { filter: 'blur(3px)' } : null),
-    } as any,
-
     // Quiet tinted card + saturated left edge, not a solid slab — backgroundColor and
     // borderColor come from techniqueSkin() per note, so only the structure lives here.
     // Square corners, full row height, no inset — a block now tiles its row exactly, so

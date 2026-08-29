@@ -316,10 +316,14 @@ export default function StudioScreen() {
   }, [selectedTrack, commitNotes]);
 
   const handleCreateMany = useCallback((created: Omit<TabNote, 'id'>[]) => {
-    if (!selectedTrack) return;
+    if (!selectedTrack) return [];
     let notes = selectedTrack.notes;
     for (const note of created) notes = appendTabNote({ ...selectedTrack, notes }, note);
     commitNotes(selectedTrack.id, notes);
+    // React won't expose the committed draft until the next render. Return the appended
+    // notes from the exact post-write track now so PianoRoll can select the paste result,
+    // rather than reading the old tail through `readNotesAfterWrite`.
+    return trackToTabNotes({ ...selectedTrack, notes }).slice(selectedTrack.notes.length);
   }, [selectedTrack, commitNotes]);
 
   const handleDelete = useCallback((id: string) => {
