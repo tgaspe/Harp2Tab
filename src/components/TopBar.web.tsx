@@ -149,6 +149,16 @@ export function TopBar() {
               <MaterialCommunityIcons name="piano" size={14} color={viewMode === 'pianoRoll' ? '#fff' : theme.textSub} />
               <Text style={[styles.viewToggleText, viewMode === 'pianoRoll' && styles.viewToggleTextActive]}>Piano Roll</Text>
             </Pressable>
+            <Pressable
+              onPress={() => setViewMode('score')}
+              style={[styles.viewToggleSeg, viewMode === 'score' && styles.viewToggleSegActive]}
+              accessibilityRole="radio"
+              accessibilityState={{ checked: viewMode === 'score' }}
+              accessibilityLabel="Score view"
+            >
+              <MaterialCommunityIcons name="music-clef-treble" size={14} color={viewMode === 'score' ? '#fff' : theme.textSub} />
+              <Text style={[styles.viewToggleText, viewMode === 'score' && styles.viewToggleTextActive]}>Score</Text>
+            </Pressable>
           </View>
         )}
       </View>

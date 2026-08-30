@@ -413,6 +413,19 @@ export function createStyles(t: Theme) {
     header:    { gap: 4 },
     headerTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     headerIcons: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    // PNG resolution chips in the export popup — a small radio row, styled off the same
+    // tokens as the view-mode segments so the popup doesn't grow a third control language.
+    exportScaleRow: { flexDirection: 'row', gap: 6, marginBottom: 8 },
+    exportScaleChip: {
+      paddingHorizontal: 12,
+      paddingVertical: 5,
+      borderRadius: 6,
+      backgroundColor: t.surfaceAlt,
+    },
+    exportScaleChipActive: { backgroundColor: t.accent },
+    exportScaleText:       { fontSize: FONT.sm, fontFamily: Poppins.semiBold, color: t.textSub },
+    exportScaleTextActive: { color: '#fff' },
+
     viewModeRow: {
       flexDirection:   'row',
       backgroundColor: t.surface,

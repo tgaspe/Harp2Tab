@@ -269,5 +269,7 @@ export function buildScoreDocument(parts: ExportPart[], settings: ScoreSettings)
     encodingDate: new Date().toISOString().slice(0, 10),
     parts:        scoreParts,
     warnings,
+    bpm:          settings.bpm,
+    originMs,
   };
 }

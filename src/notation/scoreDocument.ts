@@ -125,6 +125,22 @@ export interface ScoreDocument {
   encodingDate: string;
   parts:        ScorePart[];
   warnings:     QuantizationWarning[];
+  /**
+   * The timing the document was actually built with, origin resolved.
+   *
+   * Carried because the conversion has to run backwards too: a click on a notehead is a
+   * position in the score, and the editor only understands milliseconds. Recomputing the
+   * origin at the call site would be a second implementation of the rule in `quantize.ts`,
+   * free to disagree with the first.
+   */
+  bpm:          number;
+  originMs:     number;
+}
+
+/** Where a tick sits on the recording's millisecond clock. The inverse of what the
+ *  quantizer did, so a click on the score seeks to the moment it was played. */
+export function tickToMs(doc: ScoreDocument, tick: number): number {
+  return doc.originMs + (tick / TICKS_PER_QUARTER) * (60_000 / doc.bpm);
 }
 
 // ── Pitch spelling ────────────────────────────────────────────────────────────

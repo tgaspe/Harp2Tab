@@ -20,6 +20,7 @@ import { singlePart } from '../src/export/generators';
 import { scoreToMusicXml } from '../src/notation/musicXml';
 import { buildScoreDocument } from '../src/notation/quantize';
 import { TICKS_PER_QUARTER } from '../src/notation/scoreDocument';
+import { createScoreRenderer } from '../src/notation/render/osmd.web';
 import type { TabNote } from '../src/types';
 
 interface CaseResult { name: string; passed: boolean; detail: string }
@@ -306,7 +307,70 @@ async function run(): Promise<void> {
     );
   }
 
+
+  await wrapper();
+
   report();
+}
+
+/**
+ * The production wrapper, not OSMD directly.
+ *
+ * Everything above proves the library can do what the phase needs. This proves that
+ * `osmd.web.ts` — the only file the app actually calls — does it too, including the two
+ * things the exports depend on and the view does not: pagination to paper, and lifting every
+ * page out as markup.
+ */
+async function wrapper(): Promise<void> {
+  const host = document.createElement('div');
+  host.style.width = '1000px';
+  document.body.appendChild(host);
+
+  const doc = buildScoreDocument(singlePart(longFixture(120), 'C', 'diatonic'), BALANCED_120);
+  const renderer = await createScoreRenderer(host);
+
+  try {
+    await renderer.render(doc, { showTabs: true });
+    const continuous = renderer.svgPages();
+    check(
+      'the wrapper engraves a continuous page for the view',
+      continuous.length === 1 && continuous[0].length > 1000,
+      `${continuous.length} page(s)`,
+    );
+
+    // The export path. A long score on A4 has to come out as several pages rather than one
+    // impossibly tall one, and each has to be liftable on its own.
+    await renderer.render(doc, { showTabs: true, pageFormat: 'A4_P' });
+    const paginated = renderer.svgPages();
+    check(
+      'the wrapper paginates to paper for the exports',
+      paginated.length >= 1 && paginated.every((page) => page.startsWith('<svg')),
+      `${paginated.length} A4 page(s)`,
+    );
+
+    // Highlighting has to be reversible, or the playhead leaves a trail of coloured notes
+    // behind it. Painting then clearing must return the markup to what it was.
+    await renderer.render(doc, { showTabs: true });
+    const before = renderer.svgString();
+    renderer.highlight(['n0'], '#ff0000');
+    const painted = renderer.svgString();
+    renderer.highlight([], '#ff0000');
+    const after = renderer.svgString();
+    check(
+      'highlighting paints without re-engraving, and clears completely',
+      painted !== before && after === before,
+      painted !== before ? 'painted and restored' : 'highlight had no visible effect',
+    );
+
+    check(
+      'a score with no tabs still engraves',
+      (await renderer.render(doc, { showTabs: false }), (renderer.svgString()?.length ?? 0) > 1000),
+      'tabs off',
+    );
+  } finally {
+    renderer.dispose();
+    host.remove();
+  }
 }
 
 function report(): void {

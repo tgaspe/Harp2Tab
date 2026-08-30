@@ -18,12 +18,13 @@ import { Divider, IconButton } from '@/components/EditControls';
 import { WebTransportBar } from '@/components/TransportBar';
 import { createStyles, type EditStyles } from '@/app/editStyles';
 import { ExportFormatSections } from '@/components/ExportFormatSections';
+import { ScoreView } from '@/components/ScoreView';
 import { InstrumentPickerModal } from '@/components/InstrumentPickerModal';
 import { TEMPO_CONFIDENCE_GOOD, detectTempo } from '@/audio/detectTempo';
 import { useAudibleNotes } from '@/hooks/useAudibleNotes';
 import { useTheme } from '@/hooks/useTheme';
 import { getPremium } from '@/hooks/usePremium';
-import { useAppStore, selectTabNotes, selectKey, selectHarmonicaType, selectCanUndo, selectCanRedo, selectBpm, selectMetronomeEnabled, selectExportFmt, selectRecordingTitle, selectViewMode } from '@/store/useAppStore';
+import { useAppStore, selectTabNotes, selectKey, selectHarmonicaType, selectCanUndo, selectCanRedo, selectBpm, selectMetronomeEnabled, selectExportFmt, selectRecordingTitle, selectViewMode, selectScoreRhythmMode, selectScoreShowTabs } from '@/store/useAppStore';
 import { saveCurrentSessionToLibrary, getDefaultRecordingTitle, startNewRecordingSession } from '@/store/sessionSnapshot';
 import { resolveSessionGate } from '@/store/sessionGate';
 import { useHeaderActionStore } from '@/store/useHeaderActionStore';
@@ -45,6 +46,9 @@ import { tabAudioSource } from '@/export/audioSource';
 import { DEFAULT_PROGRAM } from '@/audio/timbre';
 import { instrumentName } from '@/audio/studioTracks';
 import { isAudioFormat, tabExportSections } from '@/export/exportSections';
+import { isScoreFormat, DEFAULT_PNG_SCALE, PNG_SCALES, type PngScale, type ScoreExportFormat } from '@/export/scoreFormats';
+import { exportScore, printScore } from '@/export/exportScore.web';
+import { buildScoreDocument } from '@/notation/quantize';
 import { DEFAULT_NEW_NOTE_VELOCITY } from '@/audio/velocity';
 import { FONT } from '@/constants/keys';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
@@ -132,6 +136,12 @@ export default function EditScreen() {
   // to the app title.
   const viewMode    = useAppStore(selectViewMode);
   const setViewMode = useAppStore((s) => s.setViewMode);
+  // Score settings live in the store so the export surface renders what the reader is
+  // looking at rather than its own idea of the same session.
+  const scoreRhythmMode    = useAppStore(selectScoreRhythmMode);
+  const setScoreRhythmMode = useAppStore((s) => s.setScoreRhythmMode);
+  const scoreShowTabs      = useAppStore(selectScoreShowTabs);
+  const setScoreShowTabs   = useAppStore((s) => s.setScoreShowTabs);
   const listRef      = useRef<FlatList<TabNote>>(null);
   // Web's full editor renders the filtered set; native's compact List currently renders
   // the raw session. Playback following must resolve an id against the exact array handed
@@ -578,6 +588,22 @@ export default function EditScreen() {
                         <Text style={styles.addNoteCardText}>Add Note</Text>
                       </Pressable>
                     }
+                  />
+                ) : viewMode === 'score' ? (
+                  <ScoreView
+                    notes={audibleNotes}
+                    harmonicaKey={harmonicaKey}
+                    harmonicaType={harmonicaType}
+                    bpm={bpm}
+                    selectedId={selectedId}
+                    onSelect={handleSelect}
+                    playingNoteId={playingNoteId}
+                    onSeek={handleSeek}
+                    theme={theme}
+                    rhythmMode={scoreRhythmMode}
+                    onRhythmMode={setScoreRhythmMode}
+                    showTabs={scoreShowTabs}
+                    onShowTabs={setScoreShowTabs}
                   />
                 ) : (
                   <PianoRoll
@@ -1290,6 +1316,10 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
   // exported score claims a tempo the user never set and its bar lines match nothing they
   // saw in the piano roll.
   const bpm             = useAppStore(selectBpm);
+  // The Score view's own settings, read rather than duplicated: the exported sheet music has
+  // to be the score the reader was just looking at.
+  const scoreRhythmMode = useAppStore(selectScoreRhythmMode);
+  const scoreShowTabs   = useAppStore(selectScoreShowTabs);
 
   const [open, setOpen] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -1298,6 +1328,11 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
   // have. Persisting "MP3" as the app-wide export format would change what the native export
   // screen offers to save, and that screen cannot render audio at all.
   const [audioFormat, setAudioFormat] = useState<string | null>(null);
+  // Held locally for the same reason `audioFormat` is: persisting "PNG" as the app-wide
+  // export format would change what the native export screen offers to save, and native
+  // cannot engrave a score at all.
+  const [scoreFormat, setScoreFormat] = useState<ScoreExportFormat | null>(null);
+  const [pngScale, setPngScale] = useState<PngScale>(DEFAULT_PNG_SCALE);
   const [audioProgram, setAudioProgram] = useState(DEFAULT_PROGRAM);
   const [instrumentPickerOpen, setInstrumentPickerOpen] = useState(false);
   // What the button says while an export runs. Rendering a minute of audio then encoding it
@@ -1306,12 +1341,14 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
   const [exportError, setExportError] = useState<string | null>(null);
 
   const sections = useMemo(() => tabExportSections(), []);
-  const selectedId = audioFormat ?? exportFormat;
+  const selectedId = audioFormat ?? scoreFormat ?? exportFormat;
 
   function handleSelectFormat(id: string) {
     setExportError(null);
-    if (isAudioFormat(id)) { setAudioFormat(id); return; }
+    if (isAudioFormat(id)) { setAudioFormat(id); setScoreFormat(null); return; }
+    if (isScoreFormat(id)) { setScoreFormat(id); setAudioFormat(null); return; }
     setAudioFormat(null);
+    setScoreFormat(null);
     setExportFormat(id as ExportFormat);
   }
 
@@ -1337,6 +1374,59 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
       // Surfaced in the popup rather than only logged — a silent no-op after a ten-second
       // wait is indistinguishable from the app being broken.
       setExportError(e instanceof Error ? e.message : 'Export failed. Try again.');
+    } finally {
+      setIsExporting(false);
+      setStatus(null);
+    }
+  }
+
+  /**
+   * Engrave and download sheet music.
+   *
+   * Built from the same `ScoreDocument` the Score view is showing — same rhythm mode, same
+   * tab setting — so the file cannot disagree with the preview. PDF is the odd one out and
+   * goes through the browser's print dialog rather than producing a file; the format's own
+   * description says so, since a button that opens a dialog instead of downloading is
+   * otherwise indistinguishable from one that failed.
+   */
+  async function doSaveScore(format: ScoreExportFormat) {
+    if (!selectedKey || tabNotes.length === 0 || isExporting) return;
+    setIsExporting(true);
+    setExportError(null);
+    try {
+      const doc = buildScoreDocument(
+        singlePart(tabNotes, selectedKey, harmonicaType),
+        { bpm, beats: 4, beatType: 4, rhythmMode: scoreRhythmMode, title: recordingTitle || undefined },
+      );
+      const options = {
+        showTabs:   scoreShowTabs,
+        pageFormat: 'A4_P' as const,
+        scale:      pngScale,
+        background: '#ffffff',
+      };
+      const stage = (s: 'engraving' | 'rasterising' | 'packaging') => setStatus(
+        s === 'engraving' ? 'Engraving score…'
+          : s === 'rasterising' ? 'Rendering image…'
+            : 'Preparing print view…',
+      );
+
+      if (format === 'PDF') {
+        await printScore(doc, options, stage);
+        setOpen(false);
+        return;
+      }
+
+      const files = await exportScore(doc, format, options, stage);
+      setStatus('Downloading…');
+      for (const file of files) {
+        // Page-numbered only when there is more than one, so the common single-page score
+        // keeps the plain filename every other export uses.
+        const stem = file.page ? `${recordingTitle || 'score'}_p${file.page}` : recordingTitle;
+        triggerWebDownload(file.blob, exportFileName(stem, file.ext));
+      }
+      setOpen(false);
+    } catch (e) {
+      setExportError(e instanceof Error ? e.message : 'The score could not be exported.');
     } finally {
       setIsExporting(false);
       setStatus(null);
@@ -1394,6 +1484,10 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
     // The "not playable on this harmonica" warning is about *tab* files, which have no way to
     // write a note with no hole. Rendered audio can play any pitch, so audio skips the sheet.
     if (audioFormat) { doSaveAudio(audioFormat); return; }
+    // Sheet music writes real notation for a note with no hole, so it skips the
+    // "not playable on this harmonica" sheet exactly as audio does — the warning is about
+    // tab files, which have no way to write one.
+    if (scoreFormat) { doSaveScore(scoreFormat); return; }
     const count = tabNotes.filter((n) => n.tab === '').length;
     if (count > 0) { setPendingExport({ action: 'save', count }); return; }
     doSave();
@@ -1444,6 +1538,27 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
           />
         </>
       )}
+      {scoreFormat === 'PNG' && (
+        <>
+          <Text style={styles.exportDropdownLabel}>RESOLUTION</Text>
+          <View style={styles.exportScaleRow}>
+            {PNG_SCALES.map((scale) => (
+              <Pressable
+                key={scale}
+                onPress={() => setPngScale(scale)}
+                style={[styles.exportScaleChip, pngScale === scale && styles.exportScaleChipActive]}
+                accessibilityRole="radio"
+                accessibilityState={{ checked: pngScale === scale }}
+                accessibilityLabel={`${scale} times resolution`}
+              >
+                <Text style={[styles.exportScaleText, pngScale === scale && styles.exportScaleTextActive]}>
+                  {scale}x
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        </>
+      )}
       {exportError && <Text style={styles.exportDropdownError}>{exportError}</Text>}
       <View style={styles.exportDropdownActions}>
         <Pressable
@@ -1456,10 +1571,16 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
           accessibilityRole="button"
           accessibilityLabel="Download to device"
         >
-          <Ionicons name="download-outline" size={15} color={theme.accent} />
-          <Text style={styles.exportDropdownSaveBtnText}>{status ?? (isExporting ? '…' : 'Download')}</Text>
+          <Ionicons
+            name={scoreFormat === 'PDF' ? 'print-outline' : 'download-outline'}
+            size={15}
+            color={theme.accent}
+          />
+          <Text style={styles.exportDropdownSaveBtnText}>
+            {status ?? (isExporting ? '…' : scoreFormat === 'PDF' ? 'Print' : 'Download')}
+          </Text>
         </Pressable>
-        {canShare && !audioFormat && (
+        {canShare && !audioFormat && !scoreFormat && (
           <Pressable
             onPress={handleShare}
             disabled={isExporting}
@@ -1942,7 +2063,7 @@ function WebToolbar({
   canUndo, onUndo, canRedo, onRedo, justSaved, onSave, onInspectFrames, onNew, onAdd, theme, styles,
 }: {
   tabNotesLength: number;
-  viewMode: 'list' | 'pianoRoll';
+  viewMode: 'list' | 'pianoRoll' | 'score';
   canUndo: boolean;
   onUndo: () => void;
   canRedo: boolean;

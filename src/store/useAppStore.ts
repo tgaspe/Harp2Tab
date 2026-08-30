@@ -3,6 +3,7 @@ import { immer } from 'zustand/middleware/immer';
 import { noteToTab, tabToNote } from '@/audio/HarmonicaMapper';
 import { detectTempo } from '@/audio/detectTempo';
 import { DEFAULT_BPM } from '@/audio/tempo';
+import type { RhythmMode } from '@/notation/scoreDocument';
 import type { HarmonicaKey, HarmonicaType, RecordingSource, TabNote, TabRecording, ExportFormat } from '@/types';
 
 const MAX_HISTORY = 50; // bounded for hygiene; snapshots are cheap (array of refs) so this is generous
@@ -67,7 +68,20 @@ interface AppState {
    *  web TopBar (rendered outside the edit screen's tree, in the root layout) can show
    *  and drive the same toggle next to the app title. Not undo-tracked, same reasoning
    *  as recordingTitle. */
-  viewMode:           'list' | 'pianoRoll';
+  viewMode:           'list' | 'pianoRoll' | 'score';
+  /**
+   * How fine a rhythm grid the Score view fits the performance to, and whether it prints the
+   * tabs under the notes.
+   *
+   * In the store rather than local to the view because the score *exports* have to come out
+   * looking like what the reader was just looking at. A preview that can disagree with the
+   * file it produces is the thing this whole phase exists to prevent.
+   *
+   * Web-only in practice — the Score view is not offered on native — but kept here with the
+   * rest of the session's view state rather than in a second store.
+   */
+  scoreRhythmMode:    RhythmMode;
+  scoreShowTabs:      boolean;
   /** How the current session was created. Written into the library entry at save time so
    *  Frame Inspector can explain an empty frame buffer correctly — a MIDI import has no
    *  audio to inspect by nature, not because data was lost. */
@@ -127,7 +141,9 @@ interface AppActions {
   setBpm:              (bpm: number) => void;
   setMetronomeEnabled: (enabled: boolean) => void;
   setRecordingTitle:   (title: string) => void;
-  setViewMode:         (mode: 'list' | 'pianoRoll') => void;
+  setViewMode:         (mode: 'list' | 'pianoRoll' | 'score') => void;
+  setScoreRhythmMode:  (mode: RhythmMode) => void;
+  setScoreShowTabs:    (show: boolean) => void;
   setNoiseGate:        (value: number) => void;
   setDurationFloorMs:  (value: number) => void;
   applyDetectedTempo:  (bpm: number, offsetMs: number) => void;
@@ -155,6 +171,8 @@ const initialState: AppState = {
   metronomeEnabled:   false,
   recordingTitle:     '',
   viewMode:           'list',
+  scoreRhythmMode:    'balanced',
+  scoreShowTabs:      true,
   noiseGate:          0,
   durationFloorMs:    0,
   sessionSource:      'recording',
@@ -539,6 +557,14 @@ export const useAppStore = create<AppState & AppActions>()(
     setViewMode: (mode) =>
       set((s) => { s.viewMode = mode; }),
 
+    // Not undo-tracked, for the same reason `viewMode` isn't: they change how the session is
+    // drawn, never what it contains. Quantization is derived — see `src/notation/quantize.ts`.
+    setScoreRhythmMode: (mode) =>
+      set((s) => { s.scoreRhythmMode = mode; }),
+
+    setScoreShowTabs: (show) =>
+      set((s) => { s.scoreShowTabs = show; }),
+
     // No pushHistory: see the field's own note. Clamped rather than trusted, since this is
     // driven by a drag gesture whose pixel→value maths can overshoot at the track's ends.
     setNoiseGate: (value) =>
@@ -599,5 +625,7 @@ export const selectBpm              = (s: AppState & AppActions) => s.bpm;
 export const selectMetronomeEnabled = (s: AppState & AppActions) => s.metronomeEnabled;
 export const selectRecordingTitle   = (s: AppState & AppActions) => s.recordingTitle;
 export const selectViewMode         = (s: AppState & AppActions) => s.viewMode;
+export const selectScoreRhythmMode  = (s: AppState & AppActions) => s.scoreRhythmMode;
+export const selectScoreShowTabs    = (s: AppState & AppActions) => s.scoreShowTabs;
 export const selectNoiseGate        = (s: AppState & AppActions) => s.noiseGate;
 export const selectDurationFloorMs  = (s: AppState & AppActions) => s.durationFloorMs;
