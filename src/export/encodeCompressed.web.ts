@@ -39,8 +39,10 @@ const MIME: Record<'MP3' | 'OGG', 'audio/mpeg' | 'audio/ogg'> = {
 /** 192kbps CBR: transparent enough for solo harmonica and a size people recognise. CBR
  *  rather than VBR so the file plays in the widest range of old players. */
 const MP3_BITRATE = 192;
-/** libvorbis quality, -0.1..1.0. 0.5 is roughly 160kbps — comparable to the MP3 setting. */
-const OGG_QUALITY = 0.5;
+/** libvorbis quality on its own -1..10 scale, which is what the encoder validates against
+ *  and defaults to 3 on. 5 is roughly 160kbps — comparable to the MP3 setting. Read as a
+ *  0..1 fraction this was 0.5, i.e. q0.5: ~72kbps, and worse than passing nothing at all. */
+const OGG_QUALITY = 5;
 
 /** The slice of the UMD global this file uses. Hand-written rather than imported from the
  *  package: importing its types is harmless, but importing anything else from it is exactly
