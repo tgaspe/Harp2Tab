@@ -2,7 +2,8 @@
 
 Status as of 2026-08-19: Phases 0–6, 7a, 7b, 8a, 8b, 11, 13 and 14 are implemented on
 `web_version`. Phases 9, 10, 12 (partly), 15, 16 and 8c are still just this plan; Phase 17 is code-complete
-and awaiting browser checks.
+and awaiting browser checks. [Phase 18](phase-18-score-notation.md) — the score notation view and its
+SVG/PDF/PNG exports — is planned as of 2026-08-30 and web-only by design.
 
 **Phase 16 supersedes Phase 14** (planned 2026-08-19): the spectral engine is replaced
 wholesale by the CQT-based HSA v2 detector, plus pMPM's amplitude-envelope re-attack
