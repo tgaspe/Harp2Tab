@@ -597,7 +597,7 @@ and pass it. **[audit 6]**
 
 ---
 
-## Status — Tasks 1–7 implemented 2026-08-30
+## Status — Tasks 1–11 implemented 2026-08-30, browser checks outstanding
 
 The renderer-independent half of the phase is built and green. `npx tsx
 scripts/verify-notation.ts` is 29/29, `npx tsx scripts/verify-export.ts` is 49/49 (was 42 —
@@ -620,7 +620,25 @@ What that bought, concretely:
 is 13/13 headless under jsdom. See the Task 7 section for what it proved, the three
 assumptions it overturned, and the four questions that genuinely need a browser.
 
-**Not started: Tasks 8–11**, the renderer wrapper, the view, and the three exports.
+**Tasks 8–11 are built**: the OSMD wrapper, the Score view as a third editor view, and
+SVG/PDF/PNG behind a new SHEET MUSIC section in the export popup.
+
+- `scripts/spike-osmd.ts` is now **17/17** and exercises the production wrapper, not just the
+  library: it paginates a 120-note score into 15 A4 pages, and a highlight paints and clears
+  without re-engraving.
+- `npx expo export --platform web` succeeds, and **OSMD lands in its own 1.3 MB chunk** —
+  VexFlow appears zero times in the entry bundle, so the lazy import does what it was meant
+  to. That was Task 8's inherited check from the spike, and it passes.
+- PDF is the browser's print dialog, not a generated file. Adding a PDF library to draw an
+  SVG the browser already lays out perfectly is not worth it, and the print path gets paper
+  size and margins for free. The format's description and the button both say "Print" rather
+  than implying a download.
+
+**Never run in a browser.** The view has not been looked at and no export has been clicked.
+jsdom proves the pipeline, not the picture — it has no layout engine, so nothing here is
+evidence about how the engraving actually looks, whether OSMD behaves inside
+react-native-web's `View` tree, or whether the canvas rasterisation and the print frame work
+in a real browser. Those are the remaining gates.
 
 Two decisions were taken during implementation and are worth knowing before continuing:
 
