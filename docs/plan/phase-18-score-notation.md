@@ -55,13 +55,15 @@ folded in below and called out inline as **[audit N]** where they changed a deci
   multi-part-capable from the start even though the *view* renders one part. **[audit 3]**
 - **Quantization is derived, never applied.** No code path in this phase may write
   `TabNote.start_time` or `TabNote.duration`.
-- **Lazy-load the renderer.** `opensheetmusicdisplay` is ~1 MB with its Bravura font, on top
+- **Lazy-load the renderer.** `opensheetmusicdisplay` ships one 1.3 MB UMD bundle, on top
   of a web bundle that already carries `@spotify/basic-pitch` and a soundfont. It must be
   reached through `await import()`, the pattern in
   `src/audio/algorithms/basicPitch.web.ts:160`. **[audit 2]**
-- **Pin dependency versions when adding them.** `opensheetmusicdisplay@^1.9.0` is the only
-  new runtime dependency this phase adds. `expo-print`, `react-native-webview` and
-  `react-native-view-shot` are **not** used — see Phase 18-7 and 18-8. **[audit 2]**
+- **Pin dependency versions when adding them.** `opensheetmusicdisplay@^2.1.2` is the only
+  new *runtime* dependency this phase adds (1.9.0 in the first draft of this plan was a guess;
+  2.1.2 is what is published). `jsdom` is added as a **devDependency**, for the headless
+  renderer harness. `expo-print`, `react-native-webview` and `react-native-view-shot` are
+  **not** used — see Tasks 10 and 11. **[audit 2]**
 
 ---
 
@@ -595,7 +597,7 @@ and pass it. **[audit 6]**
 
 ---
 
-## Status — Tasks 1–6 implemented 2026-08-30
+## Status — Tasks 1–7 implemented 2026-08-30
 
 The renderer-independent half of the phase is built and green. `npx tsx
 scripts/verify-notation.ts` is 29/29, `npx tsx scripts/verify-export.ts` is 49/49 (was 42 —
@@ -614,8 +616,11 @@ What that bought, concretely:
 - Generated output was parsed as XML and read by hand end to end; a chord, a bar-crossing tie
   and an F-harp key signature all come out correct.
 
-**Not started: Tasks 7–11**, which is everything with a renderer in it. Task 7 is the OSMD
-spike and needs a browser, so it is the natural checkpoint.
+**Task 7, the OSMD spike, is done and OSMD is confirmed** — `npx tsx scripts/spike-osmd.ts`
+is 13/13 headless under jsdom. See the Task 7 section for what it proved, the three
+assumptions it overturned, and the four questions that genuinely need a browser.
+
+**Not started: Tasks 8–11**, the renderer wrapper, the view, and the three exports.
 
 Two decisions were taken during implementation and are worth knowing before continuing:
 
@@ -628,27 +633,58 @@ Two decisions were taken during implementation and are worth knowing before cont
 
 ---
 
-## Task 7: OSMD spike (web only, timeboxed)
+## Task 7: OSMD spike — **done 2026-08-30, OSMD confirmed**
 
-**Timebox: one working session.** The spike is here, not first, because Tasks 2–6 are
-renderer-independent and would survive any outcome. **[audit 11]**
+Run as `scripts/spike-osmd.ts`, headless under jsdom, **13/13**. Headless was deliberate: the
+questions that decide the phase are all answerable without a browser, and answering them in a
+harness makes them repeatable instead of something someone once saw.
 
-- [ ] Add `opensheetmusicdisplay@^1.9.0`. Confirm `npx expo export --platform web` succeeds
-      and that the OSMD chunk is *not* in the entry bundle (it is behind `await import()`).
-- [ ] Engrave a generated fixture into a `<div>` obtained from a react-native-web `View` ref —
-      RN Web renders a `View` as a real `div`, which is what makes OSMD usable without a
-      WebView.
-- [ ] Confirm Bravura loads from the bundled package with no network request.
-- [ ] Extract the rendered `<svg>` via `outerHTML`.
-- [ ] Establish the notehead → `ScoreElement.sourceIds` mapping (OSMD's
-      `GraphicalNote.sourceNote` chain), and confirm it survives a re-render.
-- [ ] Measure engrave time and memory on a 500-note fixture.
-- [ ] **Record the outcome in a Status section in this file**, including the fallback
-      decision. If OSMD fails, the fallback is **not** VexFlow-as-drop-in: VexFlow has no
-      line-breaking or page layout, so choosing it means owning engraving layout. Price
-      rendering `ScoreDocument` straight to `react-native-svg` (already a dependency at
-      15.15.3) at the same time, since that is the only option that would later give native
-      the same renderer.
+- [x] `opensheetmusicdisplay@^2.1.2` added. It ships a single 1.3 MB UMD bundle (`main`, no
+      ESM `module` field) and pulls `vexflow@1.2.93`, `jszip`, `loglevel` and
+      `typescript-collections`.
+- [x] It loads and renders the MusicXML this phase generates — chord, bar-crossing tie,
+      bend, gap — with no throw.
+- [x] The rendered score lifts out as standalone SVG via `outerHTML` (~45 KB for four notes).
+- [x] **The SVG references nothing it would have to fetch.** Notation glyphs come out as 39
+      `<path>` elements against 7 `<text>` nodes: VexFlow 1.x draws from embedded glyph
+      outlines, not from a music webfont.
+- [x] The tabs arrive as lyric text under the notes.
+- [x] A notehead maps back to `TabNote.id`s — 6/6, chords and both halves of a tie included.
+- [x] Each rendered note exposes `getSVGGElement()`, which is the handle a click target and a
+      highlight both need, so neither has to re-engrave.
+- [x] 500 notes engrave in ~250 ms under jsdom.
+- [x] Outcome recorded here.
+
+### What the spike changed
+
+- **No font embedding.** Task 10 was written to embed Bravura as base64 in every exported
+  SVG. That is not needed: the glyphs are paths already. The only font names in the output
+  are `times` / `Times New Roman`, used for the title, the tempo mark and the tab lyrics —
+  ordinary text that degrades to a serif fallback rather than to empty boxes. Setting OSMD's
+  `defaultFontFamily` to a websafe stack is the whole of the remaining font work.
+- **The editor link is a musical-position join, not an id in the file.** Our MusicXML carries
+  no source ids and should not: a private attribute in an interchange format is something
+  every other program has to ignore. Instead OSMD reports each note's absolute timestamp in
+  whole notes, and the score document knows what it wrote at every tick — both sides came
+  from the same build, so the join is exact. `tick = RealValue * 4 * TICKS_PER_QUARTER`.
+- **Tie continuations must be in that map.** A tie is one note drawn as two noteheads. The
+  first version of the map held only attacks, and left the second bar's half of every held
+  note dead to the pointer.
+- **`jszip` comes along for free** as an OSMD dependency, which is worth remembering when
+  multi-page delivery is decided in Task 10 — the "no ZIP until a user asks" default stands,
+  but the cost of changing it is now zero.
+
+### Still outstanding, and genuinely needs a browser
+
+jsdom has no layout engine, so it reports `SkyBottomLineCalculator: width not > 0` on every
+measure and lays symbols out on stub geometry. It proves the pipeline, not the picture.
+
+- Visual correctness of the engraving.
+- Behaviour inside react-native-web's `View` tree — OSMD needs a real DOM node, which a RN
+  Web `View` ref provides, but that is unproven here.
+- That the OSMD chunk stays out of the entry bundle. This cannot be measured until Task 8
+  gives Metro a real `await import()` to split on, so it moves to Task 8's checklist.
+- Release web build behaviour, and engrave time in a real browser.
 
 ---
 
@@ -656,7 +692,24 @@ renderer-independent and would survive any outcome. **[audit 11]**
 
 Wraps the spike's findings: lazy load, engrave a `ScoreDocument` (via its MusicXML) into a
 host element, expose `svgString()`, `highlight(sourceId)`, `onNoteClick(cb)`, and `dispose()`.
-Highlighting and selection must not re-engrave.
+Highlighting and selection must not re-engrave — the spike confirmed `getSVGGElement()` gives
+each note its own SVG handle, so both are DOM writes.
+
+The tick join from the spike is this module's job to own:
+
+```ts
+// Both sides came from the same build, so the position is exact.
+const tick = Math.round(sourceNote.getAbsoluteTimestamp().RealValue * 4 * TICKS_PER_QUARTER);
+```
+
+Build the tick → `sourceIds` map from **every** pitched element including tie continuations,
+or the second half of every held note is dead to the pointer.
+
+**Inherited from the spike:** confirm `npx expo export --platform web` succeeds and that the
+1.3 MB OSMD bundle lands in its own async chunk rather than the entry bundle. This could not
+be measured in Task 7 because Metro had no `await import()` to split on until this module
+exists. Set `defaultFontFamily` to a websafe stack here — it is the only font work the
+exports need.
 
 ---
 
