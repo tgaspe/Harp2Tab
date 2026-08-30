@@ -2,7 +2,7 @@
 
 *Part of the [Harp2Tab implementation plan](README.md).*
 
-> **For agentic workers:** implement task-by-task, in order. Steps use checkbox (`- [x]`)
+> **For agentic workers:** implement task-by-task, in order. Steps use checkbox (`- [ ]`)
 > syntax. Verification is `npx tsx scripts/verify-*.ts` — there is no Jest or Vitest in this
 > repo, see [`../testing.md`](../testing.md).
 
@@ -47,7 +47,7 @@ folded in below and called out inline as **[audit N]** where they changed a deci
 - **No test framework.** Verification is standalone `scripts/verify-*.ts` harnesses run with
   `npx tsx`, each printing a PASS/FAIL table and exiting non-zero on failure. There is no
   Jest, no Vitest, no snapshot runner, and no visual-diff runner. **[audit 1]**
-- **`scripts/verify-export.ts` must stay green** (42 cases) at every commit. It asserts
+- **`scripts/verify-export.ts` must stay green** (49 cases as of Task 5; 42 before it) at every commit. It asserts
   today's MusicXML part list and XML escaping, and single-track TXT byte-for-byte.
 - **`generateForFormat(parts, format)` keeps working with two arguments.** Multi-part
   MusicXML has no live UI caller today (the Studio exports MIDI+audio, `/profile` exports
