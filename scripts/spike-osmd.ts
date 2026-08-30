@@ -362,6 +362,19 @@ async function wrapper(): Promise<void> {
       painted !== before ? 'painted and restored' : 'highlight had no visible effect',
     );
 
+    // The score's title is the tab's own name. It reaches OSMD through MusicXML's
+    // <work-title>, so this is really asking whether `drawTitle` picks that up rather than
+    // some internal default — the kind of thing that silently renders as nothing.
+    const named = buildScoreDocument(
+      singlePart(MIXED, 'C', 'diatonic'), { ...BALANCED_120, title: 'Sunday Morning Blues' },
+    );
+    await renderer.render(named, { showTabs: true });
+    check(
+      "the tab's own name is engraved as the score title",
+      (renderer.svgString() ?? '').includes('Sunday Morning Blues'),
+      'title present on the page',
+    );
+
     check(
       'a score with no tabs still engraves',
       (await renderer.render(doc, { showTabs: false }), (renderer.svgString()?.length ?? 0) > 1000),

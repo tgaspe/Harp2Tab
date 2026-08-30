@@ -595,6 +595,7 @@ export default function EditScreen() {
                     harmonicaKey={harmonicaKey}
                     harmonicaType={harmonicaType}
                     bpm={bpm}
+                    title={recordingTitle}
                     selectedId={selectedId}
                     onSelect={handleSelect}
                     playingNoteId={playingNoteId}

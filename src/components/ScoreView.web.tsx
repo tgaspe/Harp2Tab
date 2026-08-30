@@ -30,6 +30,9 @@ export interface ScoreViewProps {
   harmonicaKey:   HarmonicaKey | null;
   harmonicaType:  HarmonicaType;
   bpm:            number;
+  /** The tab's own name, engraved as the score's title. Empty falls back to the generated
+   *  `Harp2Tab -- Key of C`, which is what an unnamed tab exports under too. */
+  title:          string;
   selectedId:     string | null;
   /** Only ever called with a real id — a click either lands on a notehead or on the page. */
   onSelect:       (id: string) => void;
@@ -52,7 +55,7 @@ const MODES: { id: RhythmMode; label: string; hint: string }[] = [
 ];
 
 export function ScoreView({
-  notes, harmonicaKey, harmonicaType, bpm, selectedId, onSelect, playingNoteId, onSeek,
+  notes, harmonicaKey, harmonicaType, bpm, title, selectedId, onSelect, playingNoteId, onSeek,
   theme, rhythmMode, onRhythmMode, showTabs, onShowTabs,
 }: ScoreViewProps) {
   const hostRef     = useRef<View | null>(null);
@@ -69,9 +72,9 @@ export function ScoreView({
   const doc = useMemo(() => {
     if (!harmonicaKey || notes.length === 0) return null;
     return buildScoreDocument(singlePart(notes, harmonicaKey, harmonicaType), {
-      bpm, beats: 4, beatType: 4, rhythmMode,
+      bpm, beats: 4, beatType: 4, rhythmMode, title: title.trim() || undefined,
     });
-  }, [notes, harmonicaKey, harmonicaType, bpm, rhythmMode]);
+  }, [notes, harmonicaKey, harmonicaType, bpm, rhythmMode, title]);
 
   /** How many source notes the quantizer had to move to write the score down. */
   const movedCount = useMemo(
