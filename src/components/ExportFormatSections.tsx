@@ -39,32 +39,49 @@ interface Props {
   titleStyle?: StyleProp<TextStyle>;
   /** Style for the card around each group. */
   groupStyle?: StyleProp<ViewStyle>;
+  /** Optional layout for each heading + group pair (used by wide desktop dialogs). */
+  sectionStyle?: StyleProp<ViewStyle>;
+  /** Optional layout for the collection of sections. */
+  sectionsStyle?: StyleProp<ViewStyle>;
+  optionVariant?: 'row' | 'tile';
 }
 
 export function ExportFormatSections({
-  sections, selectedId, onSelect, titleStyle, groupStyle,
+  sections, selectedId, onSelect, titleStyle, groupStyle, sectionStyle, sectionsStyle,
+  optionVariant = 'row',
 }: Props) {
+  const content = sections.map((section) => {
+    const sectionContent = (
+      <>
+        {section.title ? <Text style={titleStyle}>{section.title}</Text> : null}
+        <View style={groupStyle}>
+          {section.options.map((option, i) => (
+            <ExportOption
+              key={option.id}
+              id={option.id}
+              label={option.label}
+              description={option.description}
+              icon={option.icon}
+              isSelected={selectedId === option.id}
+              onSelect={onSelect}
+              showDivider={i < section.options.length - 1}
+              variant={optionVariant}
+            />
+          ))}
+        </View>
+      </>
+    );
+
+    return sectionStyle ? (
+      <View key={section.title ?? 'default'} style={sectionStyle}>{sectionContent}</View>
+    ) : (
+      <React.Fragment key={section.title ?? 'default'}>{sectionContent}</React.Fragment>
+    );
+  });
+
+  if (sectionsStyle) return <View style={sectionsStyle}>{content}</View>;
+
   return (
-    <>
-      {sections.map((section) => (
-        <React.Fragment key={section.title ?? 'default'}>
-          {section.title ? <Text style={titleStyle}>{section.title}</Text> : null}
-          <View style={groupStyle}>
-            {section.options.map((option, i) => (
-              <ExportOption
-                key={option.id}
-                id={option.id}
-                label={option.label}
-                description={option.description}
-                icon={option.icon}
-                isSelected={selectedId === option.id}
-                onSelect={onSelect}
-                showDivider={i < section.options.length - 1}
-              />
-            ))}
-          </View>
-        </React.Fragment>
-      ))}
-    </>
+    <>{content}</>
   );
 }

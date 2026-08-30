@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/hooks/useTheme';
 import { FONT } from '@/constants/keys';
@@ -25,20 +25,25 @@ interface ExportOptionProps {
   isSelected: boolean;
   onSelect: (id: string) => void;
   showDivider?: boolean;
+  variant?: 'row' | 'tile';
 }
 
 export function ExportOption({
-  id, label, description, icon, isSelected, onSelect, showDivider,
+  id, label, description, icon, isSelected, onSelect, showDivider, variant = 'row',
 }: ExportOptionProps) {
   const theme  = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
+  const tile = variant === 'tile';
 
   return (
     <>
       <Pressable
         onPress={() => onSelect(id)}
-        style={({ pressed }) => [
+        style={({ pressed, hovered }: any) => [
           styles.row,
+          tile && styles.tile,
+          tile && isSelected && styles.tileSelected,
+          tile && hovered && !isSelected && styles.tileHovered,
           pressed && styles.rowPressed,
         ]}
         accessibilityRole="radio"
@@ -49,7 +54,7 @@ export function ExportOption({
           name={icon as React.ComponentProps<typeof Ionicons>['name']}
           size={20}
           color={isSelected ? theme.accent : theme.textSub}
-          style={styles.icon}
+          style={[styles.icon, tile && styles.tileIcon]}
         />
 
         <View style={styles.text}>
@@ -59,13 +64,16 @@ export function ExportOption({
           <Text style={styles.description}>{description}</Text>
         </View>
 
-        {/* Radio dot */}
-        <View style={[styles.radio, isSelected && styles.radioSelected]}>
-          {isSelected && <View style={styles.radioDot} />}
-        </View>
+        {tile ? (
+          isSelected ? <Ionicons name="checkmark-circle" size={19} color={theme.accent} /> : null
+        ) : (
+          <View style={[styles.radio, isSelected && styles.radioSelected]}>
+            {isSelected && <View style={styles.radioDot} />}
+          </View>
+        )}
       </Pressable>
 
-      {showDivider && <View style={styles.separator} />}
+      {!tile && showDivider && <View style={styles.separator} />}
     </>
   );
 }
@@ -80,10 +88,27 @@ function createStyles(t: Theme) {
       gap: 12,
     },
     rowPressed: { opacity: 0.6 },
+    tile: {
+      flexGrow: 1,
+      flexBasis: 145,
+      maxWidth: 190,
+      minHeight: 104,
+      alignItems: 'flex-start',
+      paddingVertical: 12,
+      paddingHorizontal: 12,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: t.border,
+      backgroundColor: t.surface,
+      ...(Platform.OS === 'web' ? { cursor: 'pointer' } : null),
+    } as any,
+    tileSelected: { borderColor: t.accent, backgroundColor: t.accentSoft },
+    tileHovered: { borderColor: t.accentDim, backgroundColor: t.surfaceAlt },
     icon: {
       width: 28,
       textAlign: 'center',
     },
+    tileIcon: { width: 22 },
     text:  { flex: 1, gap: 2 },
     label: {
       fontSize:   FONT.base,

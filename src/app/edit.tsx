@@ -1343,6 +1343,7 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
 
   const sections = useMemo(() => tabExportSections(), []);
   const selectedId = audioFormat ?? scoreFormat ?? exportFormat;
+  const selectedFormat = sections.flatMap((section) => section.options).find((option) => option.id === selectedId);
 
   function handleSelectFormat(id: string) {
     setExportError(null);
@@ -1504,14 +1505,17 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
 
   // Shared between both variants — only the wrapper around it (anchored dropdown vs.
   // centered modal card) differs.
-  const formatAndActions = (
+  const formatAndActions = (wide = false) => (
     <>
       <ExportFormatSections
         sections={sections}
         selectedId={selectedId}
         onSelect={handleSelectFormat}
         titleStyle={styles.exportDropdownLabel}
-        groupStyle={styles.exportFormatGroup}
+        groupStyle={wide ? styles.exportModalTileGroup : styles.exportFormatGroup}
+        sectionStyle={wide ? styles.exportModalSection : undefined}
+        sectionsStyle={wide ? styles.exportModalSections : undefined}
+        optionVariant={wide ? 'tile' : 'row'}
       />
       {audioFormat && (
         <>
@@ -1561,13 +1565,34 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
         </>
       )}
       {exportError && <Text style={styles.exportDropdownError}>{exportError}</Text>}
-      <View style={styles.exportDropdownActions}>
+      <View style={wide ? styles.exportModalFooter : styles.exportDropdownActions}>
+        {wide && selectedFormat && (
+          <View style={styles.exportModalSelection}>
+            <Text style={styles.exportModalSelectionName}>{selectedFormat.label}</Text>
+            <Text style={styles.exportModalSelectionDescription}>{selectedFormat.description}</Text>
+          </View>
+        )}
+        {wide && canShare && !audioFormat && !scoreFormat && (
+          <Pressable
+            onPress={handleShare}
+            disabled={isExporting}
+            style={({ pressed, hovered }: any) => [
+              styles.exportModalShareBtn,
+              (pressed || hovered) && !isExporting && styles.webIconBtnHover,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Share file"
+          >
+            <Ionicons name="share-outline" size={15} color={theme.textSub} />
+            <Text style={styles.exportModalShareBtnText}>{isExporting ? 'Exporting…' : 'Share'}</Text>
+          </Pressable>
+        )}
         <Pressable
           onPress={handleSave}
           disabled={isExporting}
           style={({ pressed, hovered }: any) => [
-            styles.exportDropdownSaveBtn,
-            (pressed || hovered) && !isExporting && styles.webIconBtnHover,
+            wide ? styles.exportModalDownloadBtn : styles.exportDropdownSaveBtn,
+            (pressed || hovered) && !isExporting && (wide ? styles.webBtnHoverFilled : styles.webIconBtnHover),
           ]}
           accessibilityRole="button"
           accessibilityLabel="Download to device"
@@ -1575,13 +1600,13 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
           <Ionicons
             name={scoreFormat === 'PDF' ? 'print-outline' : 'download-outline'}
             size={15}
-            color={theme.accent}
+            color={wide ? '#fff' : theme.accent}
           />
-          <Text style={styles.exportDropdownSaveBtnText}>
+          <Text style={wide ? styles.exportModalDownloadBtnText : styles.exportDropdownSaveBtnText}>
             {status ?? (isExporting ? '…' : scoreFormat === 'PDF' ? 'Print' : 'Download')}
           </Text>
         </Pressable>
-        {canShare && !audioFormat && !scoreFormat && (
+        {!wide && canShare && !audioFormat && !scoreFormat && (
           <Pressable
             onPress={handleShare}
             disabled={isExporting}
@@ -1652,17 +1677,31 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
           onRequestClose={() => setOpen(false)}
         >
           <Pressable style={styles.newRecordingBackdrop} onPress={() => setOpen(false)}>
-            <Pressable style={styles.newRecordingCard} onPress={(e) => e.stopPropagation()}>
-              <Text style={styles.newRecordingTitle}>Export</Text>
-              {formatAndActions}
-              <Pressable
-                onPress={() => setOpen(false)}
-                style={({ pressed }: any) => [styles.newRecordingCancel, pressed && { opacity: 0.7 }]}
-                accessibilityRole="button"
-                accessibilityLabel="Cancel"
+            <Pressable style={styles.exportModalCard} onPress={(e) => e.stopPropagation()}>
+              <View style={styles.exportModalHeader}>
+                <View style={styles.exportModalHeading}>
+                  <Text style={styles.exportModalTitle}>Export</Text>
+                  <Text style={styles.exportModalSubtitle}>Choose a format for your chart</Text>
+                </View>
+                <Pressable
+                  onPress={() => setOpen(false)}
+                  style={({ pressed, hovered }: any) => [
+                    styles.exportModalClose,
+                    (pressed || hovered) && styles.webIconBtnHover,
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close export dialog"
+                >
+                  <Ionicons name="close" size={20} color={theme.textSub} />
+                </Pressable>
+              </View>
+              <ScrollView
+                style={styles.exportModalScroll}
+                contentContainerStyle={styles.exportModalContent}
+                showsVerticalScrollIndicator={false}
               >
-                <Text style={styles.newRecordingCancelText}>Cancel</Text>
-              </Pressable>
+                {formatAndActions(true)}
+              </ScrollView>
             </Pressable>
           </Pressable>
         </Modal>
@@ -1693,7 +1732,7 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
 
       {open && !disabled && (
         <View style={styles.exportDropdown}>
-          {formatAndActions}
+          {formatAndActions()}
         </View>
       )}
 
