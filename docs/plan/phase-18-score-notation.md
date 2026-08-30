@@ -2,7 +2,7 @@
 
 *Part of the [Harp2Tab implementation plan](README.md).*
 
-> **For agentic workers:** implement task-by-task, in order. Steps use checkbox (`- [ ]`)
+> **For agentic workers:** implement task-by-task, in order. Steps use checkbox (`- [x]`)
 > syntax. Verification is `npx tsx scripts/verify-*.ts` — there is no Jest or Vitest in this
 > repo, see [`../testing.md`](../testing.md).
 
@@ -106,16 +106,16 @@ folded in below and called out inline as **[audit N]** where they changed a deci
 **Files:** Create `docs/plan/phase-18-score-notation.md` (this file); Delete
 `docs/plan/music-notation-view-and-export.md`; Modify `docs/plan/README.md`
 
-- [ ] **Step 1:** Delete the unnumbered plan — it is untracked, so no history is lost.
+- [x] **Step 1:** Delete the unnumbered plan — it is untracked, so no history is lost.
 
 ```bash
 rm docs/plan/music-notation-view-and-export.md
 ```
 
-- [ ] **Step 2:** Add Phase 18 to the status paragraph at the top of `docs/plan/README.md`,
+- [x] **Step 2:** Add Phase 18 to the status paragraph at the top of `docs/plan/README.md`,
   alongside the existing Phase 17 sentence.
 
-- [ ] **Step 3:** Commit.
+- [x] **Step 3:** Commit.
 
 ```bash
 git add . && git commit -m "docs: add Phase 18 score notation plan"
@@ -147,14 +147,14 @@ export interface Voicing { token: string; kind: 'single' | 'chord' | 'group'; co
 export function voicingOf(group: TabNote[], harmonicaType: HarmonicaType, index: number): Voicing;
 ```
 
-- [ ] **Step 1:** Move those declarations verbatim from `src/export/generators.ts` into
+- [x] **Step 1:** Move those declarations verbatim from `src/export/generators.ts` into
   `src/notation/tabText.ts`, carrying their docblocks with them. Add a module docblock saying
   why the module exists (two consumers, one convention).
 
-- [ ] **Step 2:** In `generators.ts`, replace them with
+- [x] **Step 2:** In `generators.ts`, replace them with
   `import { ... } from '@/notation/tabText';`.
 
-- [ ] **Step 3:** Verify nothing changed.
+- [x] **Step 3:** Verify nothing changed.
 
 ```bash
 npx tsx scripts/verify-export.ts
@@ -162,7 +162,7 @@ npx tsx scripts/verify-export.ts
 
 Expected: `42/42 cases passed`.
 
-- [ ] **Step 4:** Commit.
+- [x] **Step 4:** Commit.
 
 ```bash
 git add . && git commit -m "refactor: extract tab-token layer to src/notation/tabText.ts"
@@ -260,7 +260,7 @@ cross-harp piece on an F harp prints every B♭ as A♯. **[audit 8]**
 value may only be used at a tick position that is a multiple of its undotted length. That is
 what stops a half note from starting on beat 2. Values that do not fit are tied.
 
-- [ ] **Step 1: Write the failing harness.** Create `scripts/verify-notation.ts` with the
+- [x] **Step 1: Write the failing harness.** Create `scripts/verify-notation.ts` with the
   `check()`/`results` shape copied from `scripts/verify-export.ts:18-22`, and these cases:
 
 ```ts
@@ -309,7 +309,7 @@ function spelling(): void {
 }
 ```
 
-- [ ] **Step 2: Run it and watch it fail.**
+- [x] **Step 2: Run it and watch it fail.**
 
 ```bash
 npx tsx scripts/verify-notation.ts
@@ -317,7 +317,7 @@ npx tsx scripts/verify-notation.ts
 
 Expected: fails to resolve `../src/notation/scoreDocument`.
 
-- [ ] **Step 3: Implement `src/notation/scoreDocument.ts`** — the types above plus:
+- [x] **Step 3: Implement `src/notation/scoreDocument.ts`** — the types above plus:
 
 ```ts
 const SHARP_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
@@ -398,7 +398,7 @@ export function decomposeSpan(startTick: number, ticks: number, mode: RhythmMode
 }
 ```
 
-- [ ] **Step 4: Run the harness.**
+- [x] **Step 4: Run the harness.**
 
 ```bash
 npx tsx scripts/verify-notation.ts
@@ -406,7 +406,7 @@ npx tsx scripts/verify-notation.ts
 
 Expected: all cases PASS.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add . && git commit -m "feat: score document model with key-aware pitch spelling"
@@ -457,7 +457,7 @@ export function buildScoreDocument(parts: ExportPart[], settings: ScoreSettings)
 8. A group whose quantized onset moved more than half a grid unit records an `onsetMoved`
    warning, so the view can say the score is an approximation.
 
-- [ ] **Step 1: Add the failing cases** to `scripts/verify-notation.ts`:
+- [x] **Step 1: Add the failing cases** to `scripts/verify-notation.ts`:
 
 ```ts
 import { buildScoreDocument } from '../src/notation/quantize';
@@ -525,13 +525,13 @@ function quantizerCases(): void {
 }
 ```
 
-- [ ] **Step 2:** Run it; expect failures on the unresolved import.
+- [x] **Step 2:** Run it; expect failures on the unresolved import.
 
-- [ ] **Step 3:** Implement `src/notation/quantize.ts` to the algorithm above.
+- [x] **Step 3:** Implement `src/notation/quantize.ts` to the algorithm above.
 
-- [ ] **Step 4:** `npx tsx scripts/verify-notation.ts` — all PASS.
+- [x] **Step 4:** `npx tsx scripts/verify-notation.ts` — all PASS.
 
-- [ ] **Step 5:** Commit: `feat: non-destructive rhythm quantizer for the score document`.
+- [x] **Step 5:** Commit: `feat: non-destructive rhythm quantizer for the score document`.
 
 ---
 
@@ -550,23 +550,23 @@ measured correctly, dotted values, key signature, and the tab under each note as
 `generateMusicXml(parts, options)` becomes
 `scoreToMusicXml(buildScoreDocument(parts, settingsFrom(options)))`.
 
-- [ ] **Step 1:** Extend `scripts/verify-export.ts` with a `musicXmlScoreFeatures()` case
+- [x] **Step 1:** Extend `scripts/verify-export.ts` with a `musicXmlScoreFeatures()` case
   asserting, on a fixture with a chord, a bar-crossing note and a gap: `<per-minute>` equals
   the passed BPM; a `<chord/>` element is present; `<tie type="start"/>` and
   `<tie type="stop"/>` are present; every measure's `<duration>` values sum to
   `divisions * 4`; a `<lyric>` carries the tab token. Register it in `main()`.
 
-- [ ] **Step 2:** Run `npx tsx scripts/verify-export.ts`; expect the new case to FAIL and the
+- [x] **Step 2:** Run `npx tsx scripts/verify-export.ts`; expect the new case to FAIL and the
   existing 42 to PASS.
 
-- [ ] **Step 3:** Implement `src/notation/musicXml.ts` and reduce `generateMusicXml` to the
+- [x] **Step 3:** Implement `src/notation/musicXml.ts` and reduce `generateMusicXml` to the
   adapter. Keep `xmlText()` escaping, and keep the part-name strings exactly as they are —
   `verify-export.ts` asserts `Melody (C harp)` and `<part-name>Harmonica</part-name>`.
 
-- [ ] **Step 4:** Run both harnesses. Expected: `verify-export.ts` all green including the new
+- [x] **Step 4:** Run both harnesses. Expected: `verify-export.ts` all green including the new
   case, `verify-notation.ts` unchanged.
 
-- [ ] **Step 5:** Commit: `feat: MusicXML from the score document — tempo, chords, ties, tabs`.
+- [x] **Step 5:** Commit: `feat: MusicXML from the score document — tempo, chords, ties, tabs`.
 
 ---
 
@@ -587,11 +587,44 @@ The default is `DEFAULT_BPM` (100, `src/audio/tempo.ts:14`) rather than the old 
 session actually runs at. The editor and export screen both hold `bpm` in the session store
 and pass it. **[audit 6]**
 
-- [ ] **Step 1:** Add the parameter, defaulting so every existing two-argument call compiles.
-- [ ] **Step 2:** Pass `{ bpm }` from the three call sites, reading `bpm` from
+- [x] **Step 1:** Add the parameter, defaulting so every existing two-argument call compiles.
+- [x] **Step 2:** Pass `{ bpm }` from the three call sites, reading `bpm` from
       `useAppStore((s) => s.bpm)`.
-- [ ] **Step 3:** `npx tsx scripts/verify-export.ts && npx tsc --noEmit && npx expo lint`.
-- [ ] **Step 4:** Commit: `feat: exported MusicXML uses the session tempo`.
+- [x] **Step 3:** `npx tsx scripts/verify-export.ts && npx tsc --noEmit && npx expo lint`.
+- [x] **Step 4:** Commit: `feat: exported MusicXML uses the session tempo`.
+
+---
+
+## Status — Tasks 1–6 implemented 2026-08-30
+
+The renderer-independent half of the phase is built and green. `npx tsx
+scripts/verify-notation.ts` is 29/29, `npx tsx scripts/verify-export.ts` is 49/49 (was 42 —
+seven new MusicXML cases), `npx tsc --noEmit` is clean, and lint adds no findings in any file
+this phase touched.
+
+What that bought, concretely:
+
+- **The old MusicXML was malformed.** The new measure-sum assertion caught a 20-division bar
+  in a file declaring 16 divisions per measure — the inline quantizer advanced its cursor past
+  a note it had already written. Every MusicXML file exported before this had that defect
+  whenever notes overlapped.
+- Exported scores now carry the session tempo, the harp's key signature, chords as chords,
+  ties across bar lines, measured rests, dotted values, and the tab under each note as a
+  lyric.
+- Generated output was parsed as XML and read by hand end to end; a chord, a bar-crossing tie
+  and an F-harp key signature all come out correct.
+
+**Not started: Tasks 7–11**, which is everything with a renderer in it. Task 7 is the OSMD
+spike and needs a browser, so it is the natural checkpoint.
+
+Two decisions were taken during implementation and are worth knowing before continuing:
+
+- **`decomposeSpan` takes a bar-relative position.** Both readability rules — alignment and
+  nesting — are about where a reader is in the bar, so the quantizer cuts spans at bar lines
+  before asking for note values.
+- **Warnings fire at 40% of a grid unit.** Rounding can never move an onset by more than half
+  a grid unit, so a threshold expressed in absolute milliseconds would either never fire or
+  fire on everything.
 
 ---
 
