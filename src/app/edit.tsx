@@ -1914,7 +1914,7 @@ function EditSidebar({
         <SidebarKeyBadge onPress={onToggleCollapsed} styles={styles} />
       ) : (
         <View style={styles.sidebarSection}>
-          <Text style={styles.sidebarSectionLabel}>KEY & TYPE</Text>
+          <Text style={styles.sidebarSectionLabel}>HARMONICA SETUP</Text>
           <KeyTypeControl styles={styles} />
         </View>
       )}
