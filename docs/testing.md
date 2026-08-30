@@ -18,7 +18,8 @@ written that way. Read that before changing one.
 | `verify-audio-import.ts` | 22 | Audio-upload round trip: `parseWav` → `analyzeSamples` → `framesToNotes`. WAV format matrix, take retention, key detection |
 | `verify-midi-import.ts` | 24 | MIDI-upload round trip. Fixtures are both the app's own exported SMF and hand-built bytes for what the exporter can't produce (multi-track, percussion, tempo changes, chords) |
 | `verify-midi-studio.ts` | 81 | Studio foundations: the tempo/meter map, SMF write/read, project serialization and its per-track sidecar |
-| `verify-export.ts` | 16 | Multi-track export across all five formats, asserting single-track output hardest — every file a user has ever exported looks like that |
+| `verify-export.ts` | 49 | Multi-track export across all five formats, asserting single-track output hardest — every file a user has ever exported looks like that. Also the notation MusicXML: tempo, chords, bar-crossing ties, key signature, and that every measure sums to a full bar |
+| `verify-notation.ts` | 29 | The score document (Phase 18): written note values, key-aware pitch spelling, and the quantizer — including the rule the whole phase rests on, that quantizing never edits a `TabNote` |
 | `verify-recordings-migration.ts` | 18 | Persisted-schema migrations for the recordings store, driven with hand-authored old payloads |
 | `verify-sync-merge.ts` | 58 | The sync merge (7b) — every row of its decision table, tombstone expiry either side of the boundary, two devices disagreeing about a deletion, plan idempotence — plus the wire round trip and the v4 migration. No network, no emulator |
 | `verify-entitlement.ts` | 54 | The entitlement resolver — RevenueCat event → document → access — with an injected clock, so renewals and expiries don't take a month to test |

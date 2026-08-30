@@ -254,6 +254,81 @@ function musicXmlEscapesNames(): void {
   );
 }
 
+/**
+ * Everything the old inline quantizer could not say: a real tempo, chords, ties across bar
+ * lines, measured rests, and the tab under each note.
+ *
+ * The measure-sum assertion is the one that decides whether the file opens at all — a
+ * measure whose durations do not add up to a full bar is rejected by every notation program,
+ * and nothing about the XML looks wrong when it happens.
+ */
+function musicXmlScoreFeatures(): void {
+  const notes: TabNote[] = [
+    // A chord: two attacks inside the 50ms window.
+    { id: 'c1', tab: '4', note: 'C4', start_time: 0,    duration: 500, confidence: 100 },
+    { id: 'c2', tab: '5', note: 'E4', start_time: 20,   duration: 500, confidence: 100 },
+    // A gap, then a note starting on beat 4 and running into the next bar.
+    { id: 'x',  tab: '6', note: 'G4', start_time: 1500, duration: 1000, confidence: 100 },
+  ];
+  const { content } = generateForFormat(
+    singlePart(notes, 'C', 'diatonic'), 'MusicXML', { bpm: 120 },
+  );
+
+  check(
+    'MusicXML writes the tempo it was given, not a hard-coded 120',
+    generateForFormat(singlePart(notes, 'C', 'diatonic'), 'MusicXML', { bpm: 88 })
+      .content.includes('<per-minute>88</per-minute>'),
+    'tempo threaded through',
+  );
+
+  check(
+    'simultaneous notes are written as a chord, not an arpeggio',
+    content.includes('<chord/>'),
+    `${(content.match(/<chord\/>/g) ?? []).length} chord element(s)`,
+  );
+
+  check(
+    'a note crossing the bar line is tied on both sides',
+    content.includes('<tie type="start"/>') && content.includes('<tie type="stop"/>')
+      && content.includes('<tied type="start"/>') && content.includes('<tied type="stop"/>'),
+    'ties present',
+  );
+
+  check(
+    'the Harp2Tab tab is attached under the note as a lyric',
+    content.includes('<text>45</text>') && content.includes('<text>6</text>'),
+    'lyrics present',
+  );
+
+  // divisions is per quarter note, so a 4/4 bar is four of them.
+  const divisions = Number(content.match(/<divisions>(\d+)<\/divisions>/)?.[1]);
+  const measures  = content.match(/<measure number="\d+">[\s\S]*?<\/measure>/g) ?? [];
+  // A chord's second and later notes repeat the duration rather than adding to it, which
+  // is exactly what `<chord/>` means — counting them is how a correct file looks overrun.
+  const sums = measures.map((m) =>
+    (m.match(/<note>[\s\S]*?<\/note>/g) ?? [])
+      .filter((n) => !n.includes('<chord/>'))
+      .reduce((total, n) => total + Number(n.match(/<duration>(\d+)<\/duration>/)?.[1] ?? 0), 0));
+  check(
+    'every measure sums to a full bar',
+    measures.length > 1 && sums.every((s) => s === divisions * 4),
+    `divisions ${divisions}, measures ${sums.join(' ')}`,
+  );
+
+  check(
+    'the key signature comes from the harp rather than always C',
+    generateForFormat(singlePart(notes, 'F', 'diatonic'), 'MusicXML', { bpm: 120 })
+      .content.includes('<fifths>-1</fifths>'),
+    'F harp writes one flat',
+  );
+
+  check(
+    'a rest is written for the silence between notes',
+    content.includes('<rest/>'),
+    'rest present',
+  );
+}
+
 function jsonMultiPart(): void {
   const { content } = generateForFormat(twoParts, 'JSON');
   const parsed = JSON.parse(content);
@@ -544,6 +619,7 @@ function main(): void {
   midiSkipsUnparseablePitches();
   musicXmlParts();
   musicXmlEscapesNames();
+  musicXmlScoreFeatures();
   jsonMultiPart();
   chordsConcatenate();
   chordOnsetWindow();

@@ -2,7 +2,11 @@ import { bytesToBase64 } from '@/audio/base64';
 import { noteNameToMidi } from '@/audio/HarmonicaMapper';
 import { writeSmf, type SmfTrack } from '@/audio/smf';
 import { groupIntoPhrases } from '@/export/phrasing';
+import { buildScoreDocument } from '@/notation/quantize';
+import { scoreToMusicXml } from '@/notation/musicXml';
+import type { RhythmMode } from '@/notation/scoreDocument';
 import { groupSimultaneous, tabOrFallback, voicingOf } from '@/notation/tabText';
+import { DEFAULT_BPM } from '@/audio/tempo';
 import { noteVelocity } from '@/audio/velocity';
 import type { ExportFormat, HarmonicaKey, HarmonicaType, TabNote } from '@/types';
 
@@ -31,7 +35,26 @@ export interface GeneratedFile {
   mimeType: string;
 }
 
-export function generateForFormat(parts: ExportPart[], format: ExportFormat): GeneratedFile {
+/**
+ * What a caller knows about the session that the notes themselves do not say.
+ *
+ * Only the notation formats read this. A tab carries no tempo — `TabNote` is milliseconds —
+ * so before this existed every exported score claimed 120 BPM whatever the session was
+ * actually running at, and the bar lines in the file matched nothing the user had seen in
+ * the piano roll.
+ */
+export interface ExportOptions {
+  /** The session BPM. Defaults to `DEFAULT_BPM`, which is what a fresh session runs at —
+   *  a two-argument call is a caller with no tempo to offer, not a caller asking for 120. */
+  bpm?:        number;
+  rhythmMode?: RhythmMode;
+}
+
+export function generateForFormat(
+  parts: ExportPart[],
+  format: ExportFormat,
+  options: ExportOptions = {},
+): GeneratedFile {
   switch (format) {
     case 'TXT':
       return { content: generateTxt(parts), encoding: 'utf8', ext: 'txt', mimeType: 'text/plain' };
@@ -42,7 +65,7 @@ export function generateForFormat(parts: ExportPart[], format: ExportFormat): Ge
     case 'MIDI':
       return { content: generateMidi(parts), encoding: 'base64', ext: 'mid', mimeType: 'audio/midi' };
     case 'MusicXML':
-      return { content: generateMusicXml(parts), encoding: 'utf8', ext: 'musicxml', mimeType: 'application/vnd.recordare.musicxml+xml' };
+      return { content: generateMusicXml(parts, options), encoding: 'utf8', ext: 'musicxml', mimeType: 'application/vnd.recordare.musicxml+xml' };
   }
 }
 
@@ -359,120 +382,17 @@ function generateMidi(parts: ExportPart[]): string {
 
 // ── MusicXML ──────────────────────────────────────────────────────────────────
 
-function generateMusicXml(parts: ExportPart[]): string {
-  const DIVISIONS   = 4; // per quarter note
-  const BPM         = 120;
-  const QUARTER_MS  = 60_000 / BPM; // 500ms
-  const MEASURE_DIV = 16; // 4 beats × 4 divisions
-
-  const msToDiv = (ms: number) => Math.round((ms / QUARTER_MS) * DIVISIONS);
-
-  function quantize(divs: number): { d: number; type: string } {
-    const opts = [
-      { d: 16, type: 'whole' }, { d: 8, type: 'half' }, { d: 4, type: 'quarter' },
-      { d: 2, type: 'eighth' }, { d: 1, type: '16th' },
-    ];
-    return opts.reduce((best, o) => Math.abs(o.d - divs) < Math.abs(best.d - divs) ? o : best, opts[0]);
-  }
-
-  function parsePitch(name: string) {
-    const m = name.match(/^([A-G])(#?)(\d+)$/);
-    if (!m) return { step: 'C', alter: 0, octave: 4 };
-    return { step: m[1], alter: m[2] === '#' ? 1 : 0, octave: parseInt(m[3]) };
-  }
-
-  function noteXml(n: TabNote | null, divs: number): string {
-    const { d, type } = quantize(Math.max(1, divs));
-    if (!n) return `<note><rest/><duration>${d}</duration><type>${type}</type></note>`;
-    const { step, alter, octave } = parsePitch(n.note);
-    const alt = alter ? `<alter>${alter}</alter>` : '';
-    return `<note><pitch><step>${step}</step>${alt}<octave>${octave}</octave></pitch><duration>${d}</duration><type>${type}</type></note>`;
-  }
-
-  /** Measures for one part. Was inline before multi-part; the loop was already per-part,
-   *  so it only needed lifting out to run N times. */
-  function measuresFor(notes: TabNote[]): string {
-    const measures: string[] = [];
-    let cur: string[] = [];
-    let usedDiv = 0;
-    let measNum = 1;
-
-    function flushMeasure() {
-      const rem = MEASURE_DIV - usedDiv;
-      if (rem > 0) cur.push(noteXml(null, rem));
-      const attrs = measNum === 1
-        ? `<attributes><divisions>${DIVISIONS}</divisions><key><fifths>0</fifths></key>` +
-          `<time><beats>4</beats><beat-type>4</beat-type></time>` +
-          `<clef><sign>G</sign><line>2</line></clef></attributes>` +
-          `<direction placement="above"><direction-type><metronome>` +
-          `<beat-unit>quarter</beat-unit><per-minute>${BPM}</per-minute>` +
-          `</metronome></direction-type></direction>`
-        : '';
-      measures.push(`<measure number="${measNum}">${attrs}${cur.join('')}</measure>`);
-      cur = []; usedDiv = 0; measNum++;
-    }
-
-    function addChunk(n: TabNote | null, divs: number) {
-      let rem = divs;
-      while (rem > 0) {
-        const space = MEASURE_DIV - usedDiv;
-        const chunk = Math.min(rem, space);
-        cur.push(noteXml(n, chunk));
-        usedDiv += chunk;
-        rem     -= chunk;
-        if (usedDiv >= MEASURE_DIV) flushMeasure();
-      }
-    }
-
-    let curAbsDiv = 0;
-    for (const n of notes) {
-      const startDiv = msToDiv(n.start_time);
-      const durDiv   = Math.max(1, msToDiv(n.duration));
-      const gap      = startDiv - curAbsDiv;
-      if (gap > 0) { addChunk(null, gap); curAbsDiv += gap; }
-      addChunk(n, durDiv);
-      curAbsDiv += durDiv;
-    }
-
-    if (usedDiv > 0) flushMeasure();
-
-    if (measures.length === 0) {
-      measures.push(
-        `<measure number="1">` +
-        `<attributes><divisions>${DIVISIONS}</divisions><key><fifths>0</fifths></key>` +
-        `<time><beats>4</beats><beat-type>4</beat-type></time>` +
-        `<clef><sign>G</sign><line>2</line></clef></attributes>` +
-        `<note><rest/><duration>16</duration><type>whole</type></note></measure>`,
-      );
-    }
-    return measures.join('');
-  }
-
-  function xmlText(value: string): string {
-    return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  }
-
-  const date = new Date().toISOString().slice(0, 10);
-  const title = parts.length === 1
-    ? `Harp2Tab -- Key of ${parts[0].key}`
-    : `Harp2Tab -- ${parts.length} tracks`;
-
-  const partList = parts
-    .map((p, i) => `<score-part id="P${i + 1}"><part-name>${xmlText(
-      parts.length === 1 ? 'Harmonica' : `${p.name} (${p.key} harp)`,
-    )}</part-name></score-part>`)
-    .join('');
-
-  const bodies = parts
-    .map((p, i) => `<part id="P${i + 1}">${measuresFor(p.notes)}</part>`)
-    .join('');
-
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.1 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">
-<score-partwise version="3.1">
-  <work><work-title>${xmlText(title)}</work-title></work>
-  <identification><encoding><software>Harp2Tab</software><encoding-date>${date}</encoding-date></encoding></identification>
-  <part-list>${partList}</part-list>
-  ${bodies}
-</score-partwise>`;
+/**
+ * A thin adapter now. Everything musical — rhythm, chords, ties, rests, spelling — belongs to
+ * the score document in `src/notation/`, so that the Score view and this file cannot reach
+ * different conclusions about the same performance. See `quantize.ts` for why the origin is
+ * the first onset rather than zero.
+ */
+function generateMusicXml(parts: ExportPart[], options: ExportOptions): string {
+  return scoreToMusicXml(buildScoreDocument(parts, {
+    bpm:        options.bpm ?? DEFAULT_BPM,
+    beats:      4,
+    beatType:   4,
+    rhythmMode: options.rhythmMode ?? 'balanced',
+  }));
 }
