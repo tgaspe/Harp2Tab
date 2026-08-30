@@ -38,7 +38,7 @@ export interface GeneratedFile {
 /**
  * What a caller knows about the session that the notes themselves do not say.
  *
- * Only the notation formats read this. A tab carries no tempo — `TabNote` is milliseconds —
+ * MIDI and notation formats read this. A tab carries no tempo — `TabNote` is milliseconds —
  * so before this existed every exported score claimed 120 BPM whatever the session was
  * actually running at, and the bar lines in the file matched nothing the user had seen in
  * the piano roll.
@@ -48,6 +48,9 @@ export interface ExportOptions {
    *  a two-argument call is a caller with no tempo to offer, not a caller asking for 120. */
   bpm?:        number;
   rhythmMode?: RhythmMode;
+  /** User-entered chart title. An empty/whitespace-only title is treated as untitled so
+   *  every format keeps its established fallback instead of serializing a blank name. */
+  title?:      string;
 }
 
 export function generateForFormat(
@@ -57,13 +60,13 @@ export function generateForFormat(
 ): GeneratedFile {
   switch (format) {
     case 'TXT':
-      return { content: generateTxt(parts), encoding: 'utf8', ext: 'txt', mimeType: 'text/plain' };
+      return { content: generateTxt(parts, options), encoding: 'utf8', ext: 'txt', mimeType: 'text/plain' };
     case 'CSV':
-      return { content: generateCsv(parts), encoding: 'utf8', ext: 'csv', mimeType: 'text/csv' };
+      return { content: generateCsv(parts, options), encoding: 'utf8', ext: 'csv', mimeType: 'text/csv' };
     case 'JSON':
-      return { content: generateJson(parts), encoding: 'utf8', ext: 'json', mimeType: 'application/json' };
+      return { content: generateJson(parts, options), encoding: 'utf8', ext: 'json', mimeType: 'application/json' };
     case 'MIDI':
-      return { content: generateMidi(parts), encoding: 'base64', ext: 'mid', mimeType: 'audio/midi' };
+      return { content: generateMidi(parts, options), encoding: 'base64', ext: 'mid', mimeType: 'audio/midi' };
     case 'MusicXML':
       return { content: generateMusicXml(parts, options), encoding: 'utf8', ext: 'musicxml', mimeType: 'application/vnd.recordare.musicxml+xml' };
   }
@@ -223,6 +226,10 @@ function sectionHeader(label: string, key: HarmonicaKey, count: number): string 
   return `${label} -- Key of ${key} -- ${count} note${count !== 1 ? 's' : ''}`;
 }
 
+function exportTitle(options: ExportOptions): string | undefined {
+  return options.title?.trim() || undefined;
+}
+
 /**
  * Sequential sections, one per part.
  *
@@ -232,7 +239,7 @@ function sectionHeader(label: string, key: HarmonicaKey, count: number): string 
  * a temporal grid that isn't here. MusicXML already does that properly. Sequential sections
  * also match how the artifact gets used: a player prints it and plays one part.
  */
-function generateTxt(parts: ExportPart[]): string {
+function generateTxt(parts: ExportPart[], options: ExportOptions): string {
   // Single-part output is byte-identical to what this always emitted — the one thing that
   // must not regress, since it's what every existing exported file looks like. A tab with no
   // simultaneous notes in it produces one voicing per note, so nothing about it changes.
@@ -248,7 +255,7 @@ function generateTxt(parts: ExportPart[]): string {
     const { key } = parts[0];
     const { lines, count } = rendered[0];
     return [
-      sectionHeader('Harp2Tab', key, count),
+      sectionHeader(exportTitle(options) ?? 'Harp2Tab', key, count),
       '-'.repeat(40),
       ...(legend.length > 0 ? [...legend, '-'.repeat(40)] : []),
       ...lines,
@@ -256,7 +263,7 @@ function generateTxt(parts: ExportPart[]): string {
   }
 
   const out: string[] = [
-    `Harp2Tab -- ${parts.length} tracks`,
+    `${exportTitle(options) ?? 'Harp2Tab'} -- ${parts.length} tracks`,
     '='.repeat(40),
   ];
   if (legend.length > 0) out.push(...legend, '='.repeat(40));
@@ -290,8 +297,10 @@ function csvField(value: string | number): string {
  * of "4" is a different pitch on a C harp than an A harp, so the column is what makes the
  * tab column interpretable at all.
  */
-function generateCsv(parts: ExportPart[]): string {
-  const header = 'tab,note,start_time_ms,duration_ms,track_index,track_name,key,harmonica_type';
+function generateCsv(parts: ExportPart[], options: ExportOptions): string {
+  const title = exportTitle(options);
+  const header = 'tab,note,start_time_ms,duration_ms,track_index,track_name,key,harmonica_type'
+    + (title ? ',chart_title' : '');
 
   const rows = parts
     .flatMap((part, trackIndex) => part.notes.map((n) => ({ n, part, trackIndex })))
@@ -308,6 +317,7 @@ function generateCsv(parts: ExportPart[]): string {
       csvField(part.name),
       csvField(part.key),
       csvField(part.harmonicaType),
+      ...(title ? [csvField(title)] : []),
     ].join(','));
 
   return [header, ...rows].join('\n');
@@ -315,7 +325,8 @@ function generateCsv(parts: ExportPart[]): string {
 
 // ── JSON ──────────────────────────────────────────────────────────────────────
 
-function generateJson(parts: ExportPart[]): string {
+function generateJson(parts: ExportPart[], options: ExportOptions): string {
+  const title = exportTitle(options);
   const noteJson = (n: TabNote) => ({
     tab: n.tab, note: n.note, start_time: n.start_time, duration: n.duration,
   });
@@ -325,7 +336,7 @@ function generateJson(parts: ExportPart[]): string {
   if (parts.length === 1) {
     const { key, harmonicaType, notes } = parts[0];
     return JSON.stringify(
-      { version: 1, key, harmonicaType, exportedAt: new Date().toISOString(), notes: notes.map(noteJson) },
+      { version: 1, ...(title ? { title } : {}), key, harmonicaType, exportedAt: new Date().toISOString(), notes: notes.map(noteJson) },
       null, 2,
     );
   }
@@ -333,6 +344,7 @@ function generateJson(parts: ExportPart[]): string {
   return JSON.stringify(
     {
       version: 2,
+      ...(title ? { title } : {}),
       exportedAt: new Date().toISOString(),
       tracks: parts.map((p) => ({
         name: p.name, key: p.key, harmonicaType: p.harmonicaType, notes: p.notes.map(noteJson),
@@ -344,10 +356,6 @@ function generateJson(parts: ExportPart[]): string {
 
 // ── MIDI ──────────────────────────────────────────────────────────────────────
 
-/** Tempo the exporter writes. Tabs carry a BPM but the export has always been a plain
- *  120 — kept so existing files and the round-trip harness stay stable. */
-const EXPORT_BPM = 120;
-
 /**
  * Format 1, one MTrk per part.
  *
@@ -355,9 +363,12 @@ const EXPORT_BPM = 120;
  * built for project persistence and already handles the delta encoding, event ordering and
  * sub-tick guard this needs.
  */
-function generateMidi(parts: ExportPart[]): string {
+function generateMidi(parts: ExportPart[], options: ExportOptions): string {
+  const title = exportTitle(options);
   const tracks: SmfTrack[] = parts.map((part, i) => ({
-    name:    part.name,
+    // A tab export has one part, so its track-name event is the standard place for the
+    // chart title. Multi-part callers retain their individual track names.
+    name:    parts.length === 1 && title ? title : part.name,
     channel: i % 16 === 9 ? 15 : i % 16, // never land a part on the percussion channel
     program: part.program,
     notes:   part.notes.flatMap((n) => {
@@ -375,7 +386,7 @@ function generateMidi(parts: ExportPart[]): string {
 
   return bytesToBase64(writeSmf(
     tracks,
-    [{ timeMs: 0, bpm: EXPORT_BPM }],
+    [{ timeMs: 0, bpm: options.bpm ?? DEFAULT_BPM }],
     [{ timeMs: 0, numerator: 4, denominator: 4 }],
   ));
 }
@@ -394,5 +405,6 @@ function generateMusicXml(parts: ExportPart[], options: ExportOptions): string {
     beats:      4,
     beatType:   4,
     rhythmMode: options.rhythmMode ?? 'balanced',
+    title:      exportTitle(options),
   }));
 }

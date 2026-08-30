@@ -1449,7 +1449,11 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
     if (!selectedKey || tabNotes.length === 0 || isExporting) return;
     setIsExporting(true);
     try {
-      const { content, encoding, ext, mimeType } = generateForFormat(singlePart(tabNotes, selectedKey, harmonicaType), exportFormat, { bpm });
+      const { content, encoding, ext, mimeType } = generateForFormat(
+        singlePart(tabNotes, selectedKey, harmonicaType),
+        exportFormat,
+        { bpm, rhythmMode: scoreRhythmMode, title: recordingTitle },
+      );
       // Named after the chart, which on web the user typed into the toolbar field.
       triggerWebDownload(contentToBlob(content, encoding, mimeType), exportFileName(recordingTitle, ext));
     } finally {
@@ -1462,7 +1466,11 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
     if (!selectedKey || tabNotes.length === 0 || isExporting) return;
     setIsExporting(true);
     try {
-      const { content, encoding, ext, mimeType } = generateForFormat(singlePart(tabNotes, selectedKey, harmonicaType), exportFormat, { bpm });
+      const { content, encoding, ext, mimeType } = generateForFormat(
+        singlePart(tabNotes, selectedKey, harmonicaType),
+        exportFormat,
+        { bpm, rhythmMode: scoreRhythmMode, title: recordingTitle },
+      );
       const filename = exportFileName(recordingTitle, ext);
       const blob = contentToBlob(content, encoding, mimeType);
       // No download fallback: `canShare` gates the button, so getting here means the sheet

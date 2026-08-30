@@ -13,6 +13,7 @@ import { generateForFormat, singlePart, type ExportPart } from '../src/export/ge
 import { tabToNote } from '../src/audio/HarmonicaMapper';
 import { readSmf } from '../src/audio/smf';
 import { base64ToBytes } from '../src/audio/base64';
+import { DEFAULT_BPM } from '../src/audio/tempo';
 import type { HarmonicaKey, HarmonicaType, TabNote } from '../src/types';
 
 interface CaseResult { name: string; passed: boolean; detail: string }
@@ -193,9 +194,18 @@ function midiMultiTrack(): void {
   );
 
   check(
-    'multi-track MIDI still declares the exporter\'s 120 BPM',
-    smf.tempos.length > 0 && Math.round(smf.tempos[0].bpm) === 120,
+    'MIDI defaults to the fresh session tempo when no BPM is supplied',
+    smf.tempos.length > 0 && Math.round(smf.tempos[0].bpm) === DEFAULT_BPM,
     `${Math.round(smf.tempos[0]?.bpm)} BPM`,
+  );
+
+  const changedTempo = readSmf(base64ToBytes(
+    generateForFormat(twoParts, 'MIDI', { bpm: 88 }).content,
+  ));
+  check(
+    'MIDI writes the session BPM it was given',
+    changedTempo.tempos.length > 0 && Math.round(changedTempo.tempos[0].bpm) === 88,
+    `${Math.round(changedTempo.tempos[0]?.bpm)} BPM`,
   );
 }
 
@@ -213,6 +223,50 @@ function midiSkipsUnparseablePitches(): void {
     'an unparseable pitch is dropped from MIDI, not written as middle C',
     notes.length === 1 && notes[0].midi === 72,
     `${notes.length} note(s), pitch ${notes[0]?.midi}`,
+  );
+}
+
+function titleMetadata(): void {
+  const title = 'Road & River, Take 2';
+  const options = { title };
+  const part = singlePart(melody, 'C', 'diatonic');
+
+  const txt = generateForFormat(part, 'TXT', options).content;
+  check(
+    'TXT uses the chart title in its heading',
+    txt.startsWith(`${title} -- Key of C -- 5 notes`),
+    txt.split('\n')[0],
+  );
+
+  const csvLines = generateForFormat(part, 'CSV', options).content.split('\n');
+  const csvHeader = splitCsv(csvLines[0]);
+  const csvRow = splitCsv(csvLines[1]);
+  check(
+    'CSV appends the chart title without shifting existing columns',
+    csvHeader[8] === 'chart_title' && csvRow[0] === '4' && csvRow[8] === title,
+    `${csvHeader.length} columns, title ${JSON.stringify(csvRow[8])}`,
+  );
+
+  const json = JSON.parse(generateForFormat(part, 'JSON', options).content);
+  check(
+    'JSON carries the chart title as top-level metadata',
+    json.title === title && json.version === 1 && json.notes.length === melody.length,
+    `title ${JSON.stringify(json.title)}`,
+  );
+
+  const midi = readSmf(base64ToBytes(generateForFormat(part, 'MIDI', options).content));
+  const noteTrack = midi.tracks.find((track) => track.notes.length > 0);
+  check(
+    'MIDI writes the chart title as its musical track name',
+    noteTrack?.name === title,
+    `track name ${JSON.stringify(noteTrack?.name)}`,
+  );
+
+  const xml = generateForFormat(part, 'MusicXML', options).content;
+  check(
+    'MusicXML writes and escapes the chart title',
+    xml.includes('<work-title>Road &amp; River, Take 2</work-title>'),
+    xml.match(/<work-title>.*<\/work-title>/)?.[0] ?? 'no work title',
   );
 }
 
@@ -326,6 +380,22 @@ function musicXmlScoreFeatures(): void {
     'a rest is written for the silence between notes',
     content.includes('<rest/>'),
     'rest present',
+  );
+}
+
+function musicXmlUsesScoreRhythmMode(): void {
+  const short: TabNote[] = [
+    { id: 'short', tab: '4', note: 'C4', start_time: 0, duration: 125, confidence: 100 },
+  ];
+  const part = singlePart(short, 'C', 'diatonic');
+  const readable = generateForFormat(part, 'MusicXML', { bpm: 120, rhythmMode: 'readable' }).content;
+  const precise = generateForFormat(part, 'MusicXML', { bpm: 120, rhythmMode: 'precise' }).content;
+
+  check(
+    'MusicXML uses the Score view rhythm setting',
+    readable.includes('<duration>12</duration><type>eighth</type>')
+      && precise.includes('<duration>6</duration><type>16th</type>'),
+    `readable ${readable.match(/<duration>\d+<\/duration><type>[^<]+<\/type>/)?.[0]}, precise ${precise.match(/<duration>\d+<\/duration><type>[^<]+<\/type>/)?.[0]}`,
   );
 }
 
@@ -617,9 +687,11 @@ function main(): void {
   txtSections();
   midiMultiTrack();
   midiSkipsUnparseablePitches();
+  titleMetadata();
   musicXmlParts();
   musicXmlEscapesNames();
   musicXmlScoreFeatures();
+  musicXmlUsesScoreRhythmMode();
   jsonMultiPart();
   chordsConcatenate();
   chordOnsetWindow();
