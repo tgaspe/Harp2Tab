@@ -13,9 +13,12 @@
  * Run: npx tsx scripts/verify-notation.ts
  */
 
+import { singlePart } from '../src/export/generators';
+import { buildScoreDocument } from '../src/notation/quantize';
 import {
   decomposeSpan, fifthsForKey, spellPitch,
 } from '../src/notation/scoreDocument';
+import type { TabNote } from '../src/types';
 
 interface CaseResult { name: string; passed: boolean; detail: string }
 const results: CaseResult[] = [];
@@ -129,9 +132,208 @@ function spelling(): void {
   );
 }
 
+
+// ── Quantization ──────────────────────────────────────────────────────────────
+
+/** At 120 BPM a quarter note is 500 ms and a bar is 2000 ms, which keeps the arithmetic in
+ *  these cases readable at a glance. */
+const BALANCED_120 = {
+  bpm: 120, originMs: 0, beats: 4, beatType: 4, rhythmMode: 'balanced' as const,
+};
+
+function at(id: string, tab: string, note: string, start: number, duration: number): TabNote {
+  return { id, tab, note, start_time: start, duration, confidence: 100 };
+}
+
+function quantizerRhythm(): void {
+  const four = buildScoreDocument(
+    singlePart([
+      at('a', '4', 'C4', 0, 500), at('b', '-4', 'D4', 500, 500),
+      at('c', '5', 'E4', 1000, 500), at('d', '-5', 'F4', 1500, 500),
+    ], 'C', 'diatonic'),
+    BALANCED_120,
+  );
+  const measures = four.parts[0].measures;
+  check(
+    'four quarter notes fill exactly one measure',
+    measures.length === 1 && measures[0].elements.length === 4
+      && measures[0].elements.every((e) => e.type === 'quarter' && e.dots === 0),
+    `${measures.length} measure(s), ${measures[0]?.elements.length} elements`,
+  );
+
+  const slower = buildScoreDocument(
+    singlePart([at('a', '4', 'C4', 0, 1000)], 'C', 'diatonic'), { ...BALANCED_120, bpm: 90 });
+  check(
+    'the measure carries the session tempo, not a hard-coded 120',
+    slower.parts[0].measures[0].tempoBpm === 90,
+    `${slower.parts[0].measures[0].tempoBpm} bpm`,
+  );
+
+  const gapped = buildScoreDocument(
+    singlePart([at('a', '4', 'C4', 0, 500), at('b', '5', 'E4', 1500, 500)], 'C', 'diatonic'),
+    BALANCED_120,
+  );
+  const els = gapped.parts[0].measures[0].elements;
+  const rests = els.filter((e) => e.pitches.length === 0);
+  check(
+    'a gap between notes becomes rests covering exactly the silence',
+    rests.length === 2 && rests.reduce((s, e) => s + e.durationTicks, 0) === 48,
+    els.map((e) => `${e.pitches.length ? 'note' : 'rest'}:${e.durationTicks}`).join(' '),
+  );
+
+  // Every measure must add up, or no notation program will open the file.
+  const ragged = buildScoreDocument(
+    singlePart([
+      at('a', '4', 'C4', 137, 490), at('b', '-4', 'D4', 611, 217),
+      at('c', '5', 'E4', 902, 1450), at('d', '-5', 'F4', 2410, 300),
+    ], 'C', 'diatonic'),
+    BALANCED_120,
+  );
+  const barTicks = 96;
+  const sums = ragged.parts[0].measures.map(
+    (m) => m.elements.reduce((s, e) => s + e.durationTicks, 0));
+  check(
+    'every measure sums to a full bar',
+    sums.every((s) => s === barTicks),
+    sums.join(' '),
+  );
+}
+
+function quantizerTies(): void {
+  // Starts on beat 4 and runs a full second — half in this bar, half in the next.
+  const across = buildScoreDocument(
+    singlePart([at('a', '4', 'C4', 1500, 1000)], 'C', 'diatonic'), BALANCED_120);
+  const bars = across.parts[0].measures;
+  const first = bars[0].elements.filter((e) => e.pitches.length > 0);
+  const second = bars[1].elements.filter((e) => e.pitches.length > 0);
+  check(
+    'a note crossing the bar line is split and tied',
+    bars.length === 2 && first.at(-1)?.tieStart === true && second[0]?.tieStop === true,
+    `${bars.length} bars, ${first.length}+${second.length} notes`,
+  );
+  check(
+    'a tied continuation does not repeat the tab',
+    first.at(-1)?.tab === '4' && second[0]?.tab === '',
+    `"${first.at(-1)?.tab}" then "${second[0]?.tab}"`,
+  );
+  check(
+    'both halves of a tie still point at the source note',
+    first.at(-1)?.sourceIds[0] === 'a' && second[0]?.sourceIds[0] === 'a',
+    'sourceIds preserved',
+  );
+}
+
+function quantizerChords(): void {
+  const chord = buildScoreDocument(
+    singlePart([at('a', '4', 'C4', 0, 500), at('b', '5', 'E4', 20, 500)], 'C', 'diatonic'),
+    BALANCED_120,
+  );
+  const element = chord.parts[0].measures[0].elements[0];
+  check(
+    'onsets inside the chord window become one chord element',
+    element.pitches.length === 2 && element.sourceIds.length === 2,
+    `${element.pitches.length} pitches, ${element.sourceIds.length} ids`,
+  );
+  check(
+    'a chord prints the same token the TXT export would',
+    element.tab === '45',
+    `"${element.tab}"`,
+  );
+
+  // Far enough apart to be an arpeggio, not a strum.
+  const apart = buildScoreDocument(
+    singlePart([at('a', '4', 'C4', 0, 500), at('b', '5', 'E4', 250, 500)], 'C', 'diatonic'),
+    BALANCED_120,
+  );
+  const attacks = apart.parts[0].measures[0].elements
+    .filter((e) => e.pitches.length > 0 && !e.tieStop);
+  check(
+    'onsets outside the chord window stay separate notes',
+    attacks.length === 2,
+    `${attacks.length} attack(s)`,
+  );
+}
+
+function quantizerOrigin(): void {
+  const late = buildScoreDocument(
+    singlePart([at('a', '4', 'C4', 8000, 500)], 'C', 'diatonic'),
+    { bpm: 120, beats: 4, beatType: 4, rhythmMode: 'balanced' },
+  );
+  check(
+    'leading silence is not written as four empty bars',
+    late.parts[0].measures.length === 1,
+    `${late.parts[0].measures.length} measure(s)`,
+  );
+
+  const kept = buildScoreDocument(
+    singlePart([at('a', '4', 'C4', 8000, 500)], 'C', 'diatonic'),
+    { bpm: 120, originMs: 0, beats: 4, beatType: 4, rhythmMode: 'balanced' },
+  );
+  check(
+    'an explicit origin of 0 does keep the silence',
+    kept.parts[0].measures.length === 5,
+    `${kept.parts[0].measures.length} measure(s)`,
+  );
+}
+
+function quantizerIsNonDestructive(): void {
+  const source = [at('a', '4', 'C4', 137, 490), at('b', '-4', 'D4', 611, 217)];
+  const before = JSON.stringify(source);
+  buildScoreDocument(singlePart(source, 'C', 'diatonic'), BALANCED_120);
+  check(
+    'quantizing never edits the source notes',
+    JSON.stringify(source) === before,
+    `${source[0].start_time}/${source[0].duration}`,
+  );
+}
+
+function quantizerWarnings(): void {
+  // Rounding can never move an onset by more than half a grid unit — 62ms at a sixteenth
+  // grid and 120 BPM — so that is what "moved substantially" has to mean. 562ms is exactly
+  // that case: it is written on the beat, 62ms before it was played.
+  const moved = buildScoreDocument(
+    singlePart([at('a', '4', 'C4', 0, 500), at('b', '5', 'E4', 562, 500)], 'C', 'diatonic'),
+    BALANCED_120,
+  );
+  check(
+    'a note dragged well off its onset is warned about',
+    moved.warnings.some((w) => w.sourceId === 'b' && w.kind === 'onsetMoved'),
+    moved.warnings.map((w) => `${w.sourceId}:${w.kind}:${Math.round(w.deltaMs)}`).join(' ') || 'none',
+  );
+
+  const clean = buildScoreDocument(
+    singlePart([at('a', '4', 'C4', 0, 500), at('b', '5', 'E4', 500, 500)], 'C', 'diatonic'),
+    BALANCED_120,
+  );
+  check(
+    'a performance already on the grid produces no warnings',
+    clean.warnings.length === 0,
+    `${clean.warnings.length} warning(s)`,
+  );
+}
+
+function multiPart(): void {
+  const doc = buildScoreDocument([
+    { name: 'Melody', key: 'C', harmonicaType: 'diatonic', notes: [at('a', '4', 'C4', 0, 500)] },
+    { name: 'Bass',   key: 'G', harmonicaType: 'diatonic', notes: [at('b', '2', 'G3', 0, 500)] },
+  ], BALANCED_120);
+  check(
+    'the score document holds several parts, each with its own harp',
+    doc.parts.length === 2 && doc.parts[0].key === 'C' && doc.parts[1].key === 'G',
+    `${doc.parts.length} parts`,
+  );
+}
+
 function main(): void {
   decomposition();
   spelling();
+  quantizerRhythm();
+  quantizerTies();
+  quantizerChords();
+  quantizerOrigin();
+  quantizerIsNonDestructive();
+  quantizerWarnings();
+  multiPart();
 
   for (const result of results) {
     console.log(`${result.passed ? 'PASS' : 'FAIL'}  ${result.name} — ${result.detail}`);
