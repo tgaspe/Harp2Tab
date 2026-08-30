@@ -1286,6 +1286,10 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
   const exportFormat    = useAppStore(selectExportFmt);
   const recordingTitle  = useAppStore(selectRecordingTitle);
   const setExportFormat = useAppStore((s) => s.setExportFormat);
+  // Notation formats need the session tempo. A tab is milliseconds, so without this the
+  // exported score claims a tempo the user never set and its bar lines match nothing they
+  // saw in the piano roll.
+  const bpm             = useAppStore(selectBpm);
 
   const [open, setOpen] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -1353,7 +1357,7 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
     if (!selectedKey || tabNotes.length === 0 || isExporting) return;
     setIsExporting(true);
     try {
-      const { content, encoding, ext, mimeType } = generateForFormat(singlePart(tabNotes, selectedKey, harmonicaType), exportFormat);
+      const { content, encoding, ext, mimeType } = generateForFormat(singlePart(tabNotes, selectedKey, harmonicaType), exportFormat, { bpm });
       // Named after the chart, which on web the user typed into the toolbar field.
       triggerWebDownload(contentToBlob(content, encoding, mimeType), exportFileName(recordingTitle, ext));
     } finally {
@@ -1366,7 +1370,7 @@ function ExportMenu({ theme, styles, variant = 'toolbar', collapsed = false }: {
     if (!selectedKey || tabNotes.length === 0 || isExporting) return;
     setIsExporting(true);
     try {
-      const { content, encoding, ext, mimeType } = generateForFormat(singlePart(tabNotes, selectedKey, harmonicaType), exportFormat);
+      const { content, encoding, ext, mimeType } = generateForFormat(singlePart(tabNotes, selectedKey, harmonicaType), exportFormat, { bpm });
       const filename = exportFileName(recordingTitle, ext);
       const blob = contentToBlob(content, encoding, mimeType);
       // No download fallback: `canShare` gates the button, so getting here means the sheet

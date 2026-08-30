@@ -10,7 +10,7 @@ import { NameRecordingModal } from '@/components/NameRecordingModal';
 import { RatingModal } from '@/components/RatingModal';
 import { ActionSheetModal } from '@/components/ActionSheetModal';
 import { useTheme } from '@/hooks/useTheme';
-import { useAppStore, selectKey, selectExportFmt, selectHarmonicaType, selectRecordingTitle } from '@/store/useAppStore';
+import { useAppStore, selectBpm, selectKey, selectExportFmt, selectHarmonicaType, selectRecordingTitle } from '@/store/useAppStore';
 import { useAudibleNotes } from '@/hooks/useAudibleNotes';
 import { saveCurrentSessionToLibrary, getDefaultRecordingTitle, startNewRecordingSession } from '@/store/sessionSnapshot';
 import { generateForFormat, singlePart } from '@/export/generators';
@@ -34,6 +34,8 @@ export default function ExportScreen() {
   const exportFormat    = useAppStore(selectExportFmt);
   const recordingTitle  = useAppStore(selectRecordingTitle);
   const setExportFormat = useAppStore((s) => s.setExportFormat);
+  // See the same selector in edit.tsx: the notation formats carry a tempo, and a tab does not.
+  const bpm             = useAppStore(selectBpm);
   const [isExporting, setIsExporting] = useState(false);
   const [pendingExport, setPendingExport] = useState<{ action: 'share' | 'save'; count: number } | null>(null);
   // Native always has a share sheet. On web most desktop browsers don't accept files, and
@@ -76,7 +78,7 @@ export default function ExportScreen() {
 
   async function buildFile() {
     const { content, encoding, ext, mimeType } = generateForFormat(
-      singlePart(tabNotes, selectedKey!, harmonicaType), exportFormat,
+      singlePart(tabNotes, selectedKey!, harmonicaType), exportFormat, { bpm },
     );
     // The cache filename is what the share sheet shows and what the receiving app saves as,
     // so it carries the title too rather than being an internal temp name.
@@ -91,7 +93,7 @@ export default function ExportScreen() {
     try {
       if (Platform.OS === 'web') {
         const { content, encoding, ext, mimeType } = generateForFormat(
-          singlePart(tabNotes, selectedKey, harmonicaType), exportFormat,
+          singlePart(tabNotes, selectedKey, harmonicaType), exportFormat, { bpm },
         );
         const filename = fileNameFor(ext);
         const blob = contentToBlob(content, encoding, mimeType);
@@ -119,7 +121,7 @@ export default function ExportScreen() {
     setIsExporting(true);
     try {
       const { content, encoding, ext, mimeType } = generateForFormat(
-        singlePart(tabNotes, selectedKey, harmonicaType), exportFormat,
+        singlePart(tabNotes, selectedKey, harmonicaType), exportFormat, { bpm },
       );
 
       if (Platform.OS === 'web') {
