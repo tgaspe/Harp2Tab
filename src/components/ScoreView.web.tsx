@@ -30,8 +30,9 @@ export interface ScoreViewProps {
   harmonicaKey:   HarmonicaKey | null;
   harmonicaType:  HarmonicaType;
   bpm:            number;
-  /** The tab's own name, engraved as the score's title. Empty falls back to the generated
-   *  `Harp2Tab -- Key of C`, which is what an unnamed tab exports under too. */
+  /** The tab's own name, engraved as the score's title. Empty falls back to `Harp2Tab`,
+   *  which is what an unnamed tab exports under too. The harmonica is named separately, on
+   *  the subtitle line, so titling a tab never costs it the key. */
   title:          string;
   selectedId:     string | null;
   /** Only ever called with a real id — a click either lands on a notehead or on the page. */

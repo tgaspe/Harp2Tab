@@ -63,10 +63,27 @@ function firstOnset(parts: ExportPart[]): number {
   return onsets.length > 0 ? Math.min(...onsets) : 0;
 }
 
+/**
+ * The title an untitled tab is engraved under.
+ *
+ * A single part says only `Harp2Tab`: the key used to be here because the title was the only
+ * line on the page, and it now has its own in `harpSubtitle` — printing `Key of C` twice,
+ * once above the other, is worse than either alone. A multi-part score has no subtitle, since
+ * one line cannot speak for several harps, so it keeps its count.
+ */
 function defaultTitle(parts: ExportPart[]): string {
-  return parts.length === 1
-    ? `Harp2Tab -- Key of ${parts[0].key}`
-    : `Harp2Tab -- ${parts.length} tracks`;
+  return parts.length === 1 ? 'Harp2Tab' : `Harp2Tab -- ${parts.length} tracks`;
+}
+
+/**
+ * The harp line under the title.
+ *
+ * Single-part only: a multi-part score already names each track's harp on its own part
+ * (`Melody (C harp)`), and one subtitle cannot speak for several different instruments.
+ */
+function harpSubtitle(parts: ExportPart[]): string | undefined {
+  if (parts.length !== 1) return undefined;
+  return `${parts[0].key} ${parts[0].harmonicaType} harmonica`;
 }
 
 /**
@@ -266,6 +283,7 @@ export function buildScoreDocument(parts: ExportPart[], settings: ScoreSettings)
 
   return {
     title:        settings.title ?? defaultTitle(parts),
+    subtitle:     harpSubtitle(parts),
     encodingDate: new Date().toISOString().slice(0, 10),
     parts:        scoreParts,
     warnings,

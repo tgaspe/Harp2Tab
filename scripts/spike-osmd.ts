@@ -369,10 +369,30 @@ async function wrapper(): Promise<void> {
       singlePart(MIXED, 'C', 'diatonic'), { ...BALANCED_120, title: 'Sunday Morning Blues' },
     );
     await renderer.render(named, { showTabs: true });
+    const namedSvg = renderer.svgString() ?? '';
     check(
       "the tab's own name is engraved as the score title",
-      (renderer.svgString() ?? '').includes('Sunday Morning Blues'),
+      namedSvg.includes('Sunday Morning Blues'),
       'title present on the page',
+    );
+    // Naming a tab used to cost it the key, because the generated title was the only line
+    // on the page. The harp now has its own line, so both survive.
+    check(
+      'the harmonica is still named under a titled score',
+      namedSvg.includes('C diatonic harmonica'),
+      'subtitle present on the page',
+    );
+
+    // The untitled case: no user title, so the key must not end up on the page twice.
+    await renderer.render(
+      buildScoreDocument(singlePart(MIXED, 'C', 'diatonic'), BALANCED_120),
+      { showTabs: true },
+    );
+    const untitled = renderer.svgString() ?? '';
+    check(
+      'an untitled score names the harp once, not twice',
+      untitled.includes('C diatonic harmonica') && !untitled.includes('Key of C'),
+      'no duplicate key line',
     );
 
     check(

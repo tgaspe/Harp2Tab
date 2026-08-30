@@ -122,6 +122,15 @@ export interface QuantizationWarning {
 
 export interface ScoreDocument {
   title:        string;
+  /**
+   * Which harp to pick up, engraved under the title.
+   *
+   * It is a subtitle rather than part of the title because the two answer different
+   * questions — the title says which tune this is, the subtitle says what you play it on —
+   * and because naming the tab used to cost the key: the title was the only line on the
+   * page, so a titled score silently stopped saying `Key of C` anywhere.
+   */
+  subtitle?:    string;
   encodingDate: string;
   parts:        ScorePart[];
   warnings:     QuantizationWarning[];

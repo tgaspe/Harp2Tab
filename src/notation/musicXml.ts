@@ -112,7 +112,9 @@ export function scoreToMusicXml(doc: ScoreDocument): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.1 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">
 <score-partwise version="3.1">
-  <work><work-title>${xmlText(doc.title)}</work-title></work>
+  <work><work-title>${xmlText(doc.title)}</work-title></work>${doc.subtitle
+    ? `\n  <movement-title>${xmlText(doc.subtitle)}</movement-title>`
+    : ''}
   <identification><encoding><software>Harp2Tab</software><encoding-date>${doc.encodingDate}</encoding-date></encoding></identification>
   <part-list>${partList}</part-list>
   ${bodies}
