@@ -14,7 +14,10 @@ import { WebTransportBar } from '@/components/TransportBar';
 import { createStyles as createEditStyles } from '@/app/editStyles';
 import { audibleTracks, instrumentName } from '@/audio/studioTracks';
 import { getChromaticRows } from '@/audio/HarmonicaMapper';
-import { createTrack, projectStartMs, shiftProjectTime, tempoMapOf } from '@/audio/midiProject';
+import {
+  createTrack, openingBpmOf, projectDurationMs, projectStartMs, replaceTrackNotes,
+  scaleProjectTempo, shiftProjectTime, tempoMapOf,
+} from '@/audio/midiProject';
 import { mostMelodicTrack } from '@/audio/midiToNotes';
 import {
   appendTabNote,
@@ -47,7 +50,7 @@ import { useTheme } from '@/hooks/useTheme';
 import { getPremium } from '@/hooks/usePremium';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import type { Theme } from '@/theme';
-import type { TempoEvent, TimeSignatureEvent } from '@/audio/tempo';
+import { DEFAULT_BPM, type TempoEvent, type TimeSignatureEvent } from '@/audio/tempo';
 import type { HarmonicaKey, HarmonicaType, MidiProject, MidiTrackData, TabNote } from '@/types';
 
 /**
@@ -178,7 +181,7 @@ export default function StudioScreen() {
   // Full MIDI range — the Studio has no instrument, so nothing narrows it.
   const rows = useMemo(() => getChromaticRows(), []);
   const tempoMap = useMemo(() => (project ? tempoMapOf(project) : undefined), [project]);
-  const bpm = Math.round(project?.tempos[0]?.bpm ?? 120);
+  const bpm = project ? Math.round(openingBpmOf(project)) : DEFAULT_BPM;
 
   /**
    * The selected track's notes, filtered by nothing — what the Velocity chart draws, and
@@ -300,10 +303,7 @@ export default function StudioScreen() {
   const commitNotes = useCallback((trackId: string, notes: MidiTrackData['notes']) => {
     if (!project) return;
     record();
-    mutate({
-      ...project,
-      tracks: project.tracks.map((t) => (t.id === trackId ? { ...t, notes } : t)),
-    });
+    mutate(replaceTrackNotes(project, trackId, notes));
   }, [project, mutate, record]);
 
   /** Where the first note currently sits — what the "Starts at" field displays. */
@@ -559,15 +559,29 @@ export default function StudioScreen() {
     triggerWebDownload(blob, `${safeTitle}.${ext}`);
   }, [project]);
 
-  /** Tempo lives on the project's map, so the transport's BPM stepper edits the map's
-   *  opening tempo rather than a scalar the Studio doesn't have. */
+  /**
+   * Tempo lives on the project's map, so the transport's BPM stepper edits the map's opening
+   * tempo rather than a scalar the Studio doesn't have — and stretches the arrangement to
+   * match, which is `scaleProjectTempo`'s job and where the reasoning lives. Recorded in
+   * history like any other musical edit: it moves every note.
+   */
   function setProjectBpm(next: number) {
     if (!project) return;
     const clamped = Math.max(20, Math.min(400, Math.round(next)));
-    const tempos = project.tempos.length > 0
-      ? project.tempos.map((t, i) => (i === 0 ? { ...t, bpm: clamped } : t))
-      : [{ timeMs: 0, bpm: clamped }];
-    mutate({ ...project, tempos });
+    const scaled = scaleProjectTempo(project, clamped);
+    if (scaled === project) return;
+    record();
+    mutate(scaled);
+
+    // The loop brackets mark a passage of the music, not a stretch of wall clock, so they
+    // stretch with it — exactly as `setProjectStart` slides them along with a shift.
+    if (loopRegion) {
+      const ratio = openingBpmOf(project) / clamped;
+      setLoopRegion({
+        startMs: Math.max(0, Math.round(loopRegion.startMs * ratio)),
+        endMs:   Math.max(0, Math.round(loopRegion.endMs   * ratio)),
+      });
+    }
   }
 
   const setHeaderActions   = useHeaderActionStore((s) => s.setHeaderActions);
@@ -719,7 +733,10 @@ export default function StudioScreen() {
           }}
           onDeleteTrack={(id) => {
             if (project.tracks.length <= 1) return;
-            mutate({ ...project, tracks: project.tracks.filter((t) => t.id !== id) });
+            // Recomputed, not carried over: deleting the track that held the last note
+            // shortens the piece, and a stale span leaves the transport running past its end.
+            const remaining = project.tracks.filter((t) => t.id !== id);
+            mutate({ ...project, tracks: remaining, durationMs: projectDurationMs(remaining) });
             if (selectedTrackId === id) setSelectedTrackId(null);
           }}
           collapsed={tracksCollapsed}

@@ -22,6 +22,8 @@ import {
   projectStartMs,
   projectToSmfBytes,
   serializeProject,
+  replaceTrackNotes,
+  scaleProjectTempo,
   shiftProjectTime,
   trackAudibleNotes,
 } from '../src/audio/midiProject';
@@ -1276,6 +1278,112 @@ function shiftIsReversible(): void {
   );
 }
 
+// ── Tempo change ──────────────────────────────────────────────────────────────
+
+/** Beat position of every note, which is the thing a tempo change must not disturb. */
+function noteBeats(project: ReturnType<typeof shiftFixture>): number[] {
+  const map = compileTempoMap(project.tempos, project.timeSignatures);
+  return project.tracks.flatMap((t) => t.notes.map((n) => msToBeat(map, n.timeMs)));
+}
+
+/**
+ * The bug this fixes, stated as a test.
+ *
+ * Halving the tempo has to double the arrangement's length. Editing `tempos[0].bpm` alone —
+ * what the Studio's BPM field did — left every note on its original millisecond, so the
+ * ruler stretched underneath music that hadn't moved and the piece played for exactly as
+ * long as before.
+ */
+function tempoChangeStretchesTheMusic(): void {
+  const project = shiftFixture();
+  const before  = project.durationMs;
+  const halved  = scaleProjectTempo(project, 60);
+
+  check(
+    'halving the tempo doubles the project duration',
+    near(halved.durationMs, before * 2, 1) && before > 0,
+    `${before}ms → ${halved.durationMs}ms`,
+  );
+
+  const firstBefore = project.tracks[0].notes[0];
+  const firstAfter  = halved.tracks[0].notes[0];
+  check(
+    'and doubles each note’s time and length with it',
+    near(firstAfter.timeMs, firstBefore.timeMs * 2, 1)
+      && near(firstAfter.durationMs, firstBefore.durationMs * 2, 1),
+    `${firstBefore.timeMs}/${firstBefore.durationMs} → ${firstAfter.timeMs}/${firstAfter.durationMs}`,
+  );
+}
+
+/**
+ * The invariant behind the stretch: time changes, the music doesn't. Every note has to come
+ * out on the beat it went in on, which is only true if the tempo and meter maps scale along
+ * with the notes rather than staying pinned to their old milliseconds.
+ */
+function tempoChangeKeepsNotesOnTheirBeats(): void {
+  const project = shiftFixture();
+  const scaled  = scaleProjectTempo(project, 144);
+
+  const before = noteBeats(project);
+  const after  = noteBeats(scaled);
+  const worst  = Math.max(...before.map((b, i) => Math.abs(b - after[i])));
+
+  check(
+    'every note keeps its beat position across a tempo change',
+    worst < 0.01,
+    `worst drift ${worst.toFixed(5)} beats over ${before.length} notes`,
+  );
+
+  // A ritardando has to survive as a ritardando: the map's internal ratios are musical
+  // content, so scaling the opening tempo scales every later one by the same factor.
+  check(
+    'later tempo events scale proportionally, not just the first',
+    scaled.tempos.map((t) => t.bpm).join(',') === '144,72',
+    scaled.tempos.map((t) => `${t.bpm}@${t.timeMs}`).join(' '),
+  );
+}
+
+function tempoChangeIsReversible(): void {
+  const project = shiftFixture();
+  const round   = scaleProjectTempo(scaleProjectTempo(project, 75), 120);
+
+  const before = project.tracks.flatMap((t) => t.notes.map((n) => `${n.timeMs}+${n.durationMs}`)).join(',');
+  const after  = round.tracks.flatMap((t) => t.notes.map((n) => `${n.timeMs}+${n.durationMs}`)).join(',');
+
+  check(
+    'a tempo change and its inverse restore every note exactly',
+    before === after,
+    `${before} → ${after}`,
+  );
+}
+
+/**
+ * `durationMs` is stored rather than derived, so every edit that can move the last note has
+ * to recompute it. Editing notes didn't, which left the transport unable to reach the end of
+ * a note dragged past the old finish.
+ */
+function editingNotesRecomputesDuration(): void {
+  const project = shiftFixture();
+  const track   = project.tracks[0];
+  const extended = replaceTrackNotes(project, track.id, [
+    ...track.notes,
+    { midi: 64, timeMs: 30000, durationMs: 500, velocity: 100 },
+  ]);
+
+  check(
+    'adding a note past the end extends the project duration',
+    extended.durationMs === 30500,
+    `${project.durationMs}ms → ${extended.durationMs}ms`,
+  );
+
+  const trimmed = replaceTrackNotes(extended, track.id, track.notes);
+  check(
+    'and removing it brings the duration back down',
+    trimmed.durationMs === project.durationMs,
+    `${extended.durationMs}ms → ${trimmed.durationMs}ms`,
+  );
+}
+
 function main(): void {
   constantTempoMatchesScalar();
   tempoChangeKeepsBarsAligned();
@@ -1313,6 +1421,11 @@ function main(): void {
   shiftKeepsTempoAndMeterGluedToTheMusic();
   shiftCollapsesEventsDraggedPastZero();
   shiftIsReversible();
+
+  tempoChangeStretchesTheMusic();
+  tempoChangeKeepsNotesOnTheirBeats();
+  tempoChangeIsReversible();
+  editingNotesRecomputesDuration();
 
   for (const result of results) {
     console.log(`${result.passed ? 'PASS' : 'FAIL'}  ${result.name} — ${result.detail}`);

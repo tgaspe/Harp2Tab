@@ -14,7 +14,7 @@
 
 import { base64ToBytes, bytesToBase64 } from './base64';
 import { readSmf, writeSmf, type SmfTrack } from './smf';
-import { compileTempoMap, type TempoEvent, type TimeSignatureEvent } from './tempo';
+import { compileTempoMap, DEFAULT_BPM, type TempoEvent, type TimeSignatureEvent } from './tempo';
 import { passesDurationFloor } from './duration';
 import { passesVelocityFloor } from './velocity';
 import type {
@@ -129,6 +129,76 @@ export function shiftProjectTime(project: MidiProject, deltaMs: number): MidiPro
     // playhead unable to reach the end of a right-shifted arrangement.
     durationMs:     projectDurationMs(tracks),
   };
+}
+
+/** The tempo the piece opens at — the one the Studio's BPM field shows and edits. */
+export function openingBpmOf(project: MidiProject): number {
+  return project.tempos[0]?.bpm ?? DEFAULT_BPM;
+}
+
+/**
+ * Change the arrangement's tempo, stretching the music rather than just the ruler over it.
+ *
+ * `bpm` names the *opening* tempo, and everything scales by the ratio it implies: note times
+ * and lengths, and both maps' event positions. Scaling the later tempo events too is what
+ * keeps a ritardando a ritardando — the map's internal ratios are musical content, and
+ * pinning them to their old milliseconds while the notes move would slide the tempo change
+ * off the note it belongs to.
+ *
+ * The invariant is that every note comes out on the beat it went in on: time stretches, the
+ * music doesn't. That's the opposite of `shiftProjectTime`, which moves the music through
+ * time without changing its tempo, and it's the same operation the tab editor's `setBpm`
+ * performs on a session with a single tempo.
+ *
+ * Deliberately *not* what a tempo change means to a DAW holding an imported performance,
+ * where the recorded timing is the truth and the tempo map is a reading of it. The Studio's
+ * BPM control lives on the transport bar next to play and loop, where "+5 BPM" means "play
+ * this faster"; re-notating instead left the piece exactly as long as it was.
+ */
+export function scaleProjectTempo(project: MidiProject, bpm: number): MidiProject {
+  const openingBpm = openingBpmOf(project);
+  if (!(bpm > 0) || bpm === openingBpm) return project;
+
+  // Time scales inversely with tempo: twice the BPM, half the milliseconds.
+  const ratio = openingBpm / bpm;
+
+  const tracks = project.tracks.map((track) => ({
+    ...track,
+    notes: track.notes.map((note) => ({
+      ...note,
+      timeMs:     Math.round(note.timeMs * ratio),
+      // Floor of 1ms so rounding can't collapse a very short note at a very high tempo into
+      // a zero-length one, which no longer sounds and can't be grabbed in the roll.
+      durationMs: Math.max(1, Math.round(note.durationMs * ratio)),
+    })),
+  }));
+
+  const tempos: TempoEvent[] = project.tempos.length > 0
+    ? project.tempos.map((t) => ({ ...t, timeMs: Math.round(t.timeMs * ratio), bpm: t.bpm / ratio }))
+    : [{ timeMs: 0, bpm }];
+
+  return {
+    ...project,
+    tracks,
+    tempos,
+    timeSignatures: project.timeSignatures.map((s) => ({ ...s, timeMs: Math.round(s.timeMs * ratio) })),
+    durationMs:     projectDurationMs(tracks),
+  };
+}
+
+/**
+ * Swap one track's notes, keeping the stored `durationMs` true.
+ *
+ * `durationMs` is stored rather than derived — it's what the transport reads as its total
+ * time — so every edit that can move the last sounding moment has to recompute it. Editing
+ * notes through a plain spread didn't, which left the playhead unable to reach a note
+ * dragged past the old end of the piece until the project was reloaded.
+ */
+export function replaceTrackNotes(
+  project: MidiProject, trackId: string, notes: MidiTrackData['notes'],
+): MidiProject {
+  const tracks = project.tracks.map((t) => (t.id === trackId ? { ...t, notes } : t));
+  return { ...project, tracks, durationMs: projectDurationMs(tracks) };
 }
 
 export function createTrack(index: number, init: Partial<MidiTrackData> = {}): MidiTrackData {
