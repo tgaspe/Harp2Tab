@@ -19,8 +19,10 @@ import {
   createTrack,
   deserializeProject,
   projectFromSmfBytes,
+  projectStartMs,
   projectToSmfBytes,
   serializeProject,
+  shiftProjectTime,
   trackAudibleNotes,
 } from '../src/audio/midiProject';
 import { getChromaticRows } from '../src/audio/HarmonicaMapper';
@@ -1099,6 +1101,181 @@ function velocityFloorCases(): void {
   );
 }
 
+// ── Arrangement time shift ────────────────────────────────────────────────────
+
+/** Two tracks whose earliest note is on the *second* track, plus a tempo change and a
+ *  meter change parked mid-piece, so a shift has something to get wrong in each layer. */
+function shiftFixture() {
+  return createProject({
+    title: 'Late start',
+    tracks: [
+      createTrack(0, {
+        name: 'Lead',
+        notes: [
+          { midi: 60, timeMs: 5000, durationMs: 400, velocity: 100 },
+          { midi: 62, timeMs: 9000, durationMs: 400, velocity: 100 },
+        ],
+      }),
+      createTrack(1, {
+        name: 'Bass',
+        // 4200ms is the project's true start, and it is below the track's own velocity
+        // floor — the floors are a lens, not a delete, so it still counts as the start.
+        velocityFloor: 50,
+        notes: [
+          { midi: 36, timeMs: 4200, durationMs: 400, velocity: 20 },
+          { midi: 38, timeMs: 6200, durationMs: 400, velocity: 90 },
+        ],
+      }),
+      createTrack(2, { name: 'Silent', notes: [] }),
+    ],
+    tempos: [{ timeMs: 0, bpm: 120 }, { timeMs: 9000, bpm: 60 }],
+    timeSignatures: [
+      { timeMs: 0, numerator: 4, denominator: 4 },
+      { timeMs: 9000, numerator: 3, denominator: 4 },
+    ],
+  });
+}
+
+/** The reading the whole feature is built on: where does the music actually begin? */
+function projectStartIsEarliestNoteAnywhere(): void {
+  const project = shiftFixture();
+
+  check(
+    'project start is the earliest note across every track, floors included',
+    projectStartMs(project.tracks) === 4200,
+    `start = ${projectStartMs(project.tracks)}ms, expected 4200 (a below-floor note on track 2)`,
+  );
+
+  check(
+    'a project with no notes at all starts at 0 rather than Infinity',
+    projectStartMs([createTrack(0, { notes: [] })]) === 0,
+    `start = ${projectStartMs([createTrack(0, { notes: [] })])}ms`,
+  );
+}
+
+/** "First note at exactly 3s" — the operation the Studio control performs. */
+function shiftLandsFirstNoteOnTheTarget(): void {
+  const project = shiftFixture();
+  const target  = 3000;
+  const shifted = shiftProjectTime(project, target - projectStartMs(project.tracks));
+
+  check(
+    'shifting to a 3s target puts the earliest note exactly on 3000ms',
+    projectStartMs(shifted.tracks) === target,
+    `earliest note now at ${projectStartMs(shifted.tracks)}ms`,
+  );
+
+  // Every note moved by the same −1200ms, so the gaps between them are untouched.
+  const gapsBefore = project.tracks.flatMap((t) => t.notes.map((n) => n.timeMs - 4200));
+  const gapsAfter  = shifted.tracks.flatMap((t) => t.notes.map((n) => n.timeMs - target));
+
+  check(
+    'relative timing survives the shift, across tracks as well as within them',
+    gapsBefore.join(',') === gapsAfter.join(','),
+    `offsets from the start: ${gapsBefore.join(',')} → ${gapsAfter.join(',')}`,
+  );
+
+  check(
+    'a track with no notes survives a shift',
+    shifted.tracks[2].notes.length === 0,
+    `track 3 has ${shifted.tracks[2].notes.length} notes`,
+  );
+
+  check(
+    'durationMs is recomputed rather than left at the pre-shift span',
+    shifted.durationMs === 9400 - 1200,
+    `durationMs = ${shifted.durationMs}, expected ${9400 - 1200}`,
+  );
+}
+
+/**
+ * The reason the shift touches the tempo map at all.
+ *
+ * The 60 BPM change belongs to the note at 9000ms. Move the notes and leave the map alone
+ * and the change fires 1200ms early — against different music than the one it was written
+ * for. Both maps travel with the notes, and both keep an event at 0, which
+ * `compileTempoMap` requires.
+ */
+function shiftKeepsTempoAndMeterGluedToTheMusic(): void {
+  const project = shiftFixture();
+  const shifted = shiftProjectTime(project, 3000 - projectStartMs(project.tracks));
+
+  const tempoChange = shifted.tempos.find((t) => t.bpm === 60);
+  const meterChange = shifted.timeSignatures.find((t) => t.numerator === 3);
+  const lateNote    = shifted.tracks[0].notes[1];
+
+  check(
+    'the tempo change stays on the note it was written against',
+    tempoChange?.timeMs === 7800 && lateNote.timeMs === 7800,
+    `tempo change at ${tempoChange?.timeMs}ms, its note at ${lateNote.timeMs}ms`,
+  );
+
+  check(
+    'the meter change travels with the notes too',
+    meterChange?.timeMs === 7800,
+    `meter change at ${meterChange?.timeMs}ms`,
+  );
+
+  check(
+    'both maps still open with an event at 0',
+    shifted.tempos[0]?.timeMs === 0 && shifted.timeSignatures[0]?.timeMs === 0,
+    `tempos open at ${shifted.tempos[0]?.timeMs}ms, meters at ${shifted.timeSignatures[0]?.timeMs}ms`,
+  );
+}
+
+/**
+ * Shifting far enough left drags events past the start of time.
+ *
+ * An event that lands at or before 0 is the one actually in force when the music begins, so
+ * it collapses onto 0 rather than being dropped (which would leave the wrong opening tempo)
+ * or kept negative (which `compileTempoMap` cannot read).
+ */
+function shiftCollapsesEventsDraggedPastZero(): void {
+  const project = createProject({
+    title: 'Overrun',
+    tracks: [createTrack(0, { notes: [{ midi: 60, timeMs: 5000, durationMs: 400, velocity: 100 }] })],
+    tempos: [{ timeMs: 0, bpm: 120 }, { timeMs: 1000, bpm: 90 }, { timeMs: 6000, bpm: 60 }],
+  });
+
+  // First note 5000 → 0, so everything moves −5000ms and the 90 BPM event lands at −4000.
+  const shifted = shiftProjectTime(project, -5000);
+
+  check(
+    'an event dragged past zero becomes the opening event instead of vanishing',
+    shifted.tempos.length === 2 && shifted.tempos[0].timeMs === 0 && shifted.tempos[0].bpm === 90,
+    `map = ${shifted.tempos.map((t) => `${t.bpm}@${t.timeMs}`).join(' ')}, expected 90@0 60@1000`,
+  );
+
+  check(
+    'the event still ahead of the music keeps its distance from it',
+    shifted.tempos[1]?.timeMs === 1000,
+    `later event at ${shifted.tempos[1]?.timeMs}ms`,
+  );
+}
+
+/** A shift and its opposite must be a round trip — this is what Ctrl+Z relies on. */
+function shiftIsReversible(): void {
+  const project = shiftFixture();
+  const there   = shiftProjectTime(project, 2580);
+  const back    = shiftProjectTime(there, -2580);
+
+  const before = project.tracks.flatMap((t) => t.notes.map((n) => n.timeMs)).join(',');
+  const after  = back.tracks.flatMap((t) => t.notes.map((n) => n.timeMs)).join(',');
+
+  check(
+    'shifting by +d then −d restores every note time exactly',
+    before === after,
+    `${before} → ${after}`,
+  );
+
+  check(
+    'and restores the tempo map with it',
+    back.tempos.map((t) => `${t.bpm}@${t.timeMs}`).join(' ')
+      === project.tempos.map((t) => `${t.bpm}@${t.timeMs}`).join(' '),
+    back.tempos.map((t) => `${t.bpm}@${t.timeMs}`).join(' '),
+  );
+}
+
 function main(): void {
   constantTempoMatchesScalar();
   tempoChangeKeepsBarsAligned();
@@ -1130,6 +1307,12 @@ function main(): void {
   trackIdsAreStable();
   noAccidentalPercussionChannel();
   velocityFloorCases();
+
+  projectStartIsEarliestNoteAnywhere();
+  shiftLandsFirstNoteOnTheTarget();
+  shiftKeepsTempoAndMeterGluedToTheMusic();
+  shiftCollapsesEventsDraggedPastZero();
+  shiftIsReversible();
 
   for (const result of results) {
     console.log(`${result.passed ? 'PASS' : 'FAIL'}  ${result.name} — ${result.detail}`);

@@ -50,6 +50,87 @@ export function projectDurationMs(tracks: readonly MidiTrackData[]): number {
   return end;
 }
 
+/** Where the music actually begins — the earliest note anywhere in the project.
+ *
+ * Deliberately over *stored* notes rather than `trackAudibleNotes`: the two floors are a
+ * lens, not a delete (see `trackAudibleNotes`), so a note hidden under a floor is still
+ * part of the arrangement. Reading the start from audible notes only would mean raising a
+ * floor moves the start, and lowering it again lands the newly-revealed note at a negative
+ * time.
+ *
+ * 0 for a project with no notes at all, so callers get a usable number rather than Infinity.
+ */
+export function projectStartMs(tracks: readonly MidiTrackData[]): number {
+  let start = Infinity;
+  for (const track of tracks) {
+    for (const note of track.notes) {
+      if (note.timeMs < start) start = note.timeMs;
+    }
+  }
+  return Number.isFinite(start) ? start : 0;
+}
+
+/**
+ * Slide a tempo or meter map along with the notes it describes.
+ *
+ * Two rules, both forced by `compileTempoMap`, which needs an event at 0 and cannot read a
+ * negative one:
+ *
+ *  - The opening event stays pinned at 0. A shift to the right opens a silent lead-in, and
+ *    the tempo governing that lead-in is the one the piece already opened with.
+ *  - A later event dragged to or past 0 by a leftward shift *becomes* the opening event.
+ *    It is the one in force by the time the music starts, so dropping it would leave the
+ *    wrong opening tempo standing. When several overrun, the last one wins.
+ */
+function shiftTimedEvents<T extends { timeMs: number }>(
+  events: readonly T[], deltaMs: number,
+): T[] {
+  if (events.length === 0) return [];
+
+  const later: T[] = [];
+  let overrun: T | null = null;
+
+  for (const event of events.slice(1)) {
+    const timeMs = event.timeMs + deltaMs;
+    if (timeMs > 0) later.push({ ...event, timeMs });
+    else overrun = event;
+  }
+
+  return [{ ...(overrun ?? events[0]), timeMs: 0 }, ...later];
+}
+
+/**
+ * Move the whole arrangement along the timeline — every note on every track, plus both
+ * event maps, by the same delta.
+ *
+ * This is how the Studio's "Starts at" control trims or pads the silence before the first
+ * note: `shiftProjectTime(project, target - projectStartMs(project.tracks))`. Uniformity is
+ * the point — one delta for everything means relative timing, across tracks as much as
+ * within them, comes out the far side untouched.
+ *
+ * The maps travel too, which is the part that is easy to leave out and wrong to. Tempo and
+ * meter events are `timeMs`-stamped like notes; move the notes alone and a tempo change
+ * written for one bar fires against a different one.
+ */
+export function shiftProjectTime(project: MidiProject, deltaMs: number): MidiProject {
+  if (deltaMs === 0) return project;
+
+  const tracks = project.tracks.map((track) => ({
+    ...track,
+    notes: track.notes.map((note) => ({ ...note, timeMs: note.timeMs + deltaMs })),
+  }));
+
+  return {
+    ...project,
+    tracks,
+    tempos:         shiftTimedEvents(project.tempos, deltaMs),
+    timeSignatures: shiftTimedEvents(project.timeSignatures, deltaMs),
+    // Stored, and what the transport reads as its total time — a stale span would leave the
+    // playhead unable to reach the end of a right-shifted arrangement.
+    durationMs:     projectDurationMs(tracks),
+  };
+}
+
 export function createTrack(index: number, init: Partial<MidiTrackData> = {}): MidiTrackData {
   return {
     id:      init.id      ?? newId('track'),

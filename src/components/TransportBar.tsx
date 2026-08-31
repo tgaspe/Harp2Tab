@@ -17,7 +17,7 @@ export function WebTransportBar({
   tabNotesLength, isPlaying, isPaused, onPlayToggle, onStop, onSkipBack, onSkipForward,
   currentTimeMs, totalTimeMs, formatElapsed,
   loopEnabled, onToggleLoop, playbackRate, onCycleRate,
-  bpm, setBpm, metronomeEnabled, onToggleMetronome, history, glued, containerStyle, compact, theme, styles,
+  bpm, setBpm, startControl, metronomeEnabled, onToggleMetronome, history, glued, containerStyle, compact, theme, styles,
   instrumentsLoading = false,
 }: {
   /** Sampled instruments are still arriving. Shown rather than hidden because the alternative
@@ -41,6 +41,15 @@ export function WebTransportBar({
   onCycleRate: () => void;
   bpm: number;
   setBpm: (bpm: number) => void;
+  /**
+   * Rendered immediately right of the BPM stepper, in the same pill.
+   *
+   * The Studio's "Start" field lives here: where the arrangement's first note sits is a
+   * fact about the whole project, exactly like its tempo, so the two belong in one cluster.
+   * Optional because the tab editor has no arrangement to slide — a tab is one voice that
+   * already begins where it begins.
+   */
+  startControl?: React.ReactNode;
   metronomeEnabled: boolean;
   onToggleMetronome: () => void;
   /**
@@ -111,6 +120,12 @@ export function WebTransportBar({
               <Ionicons name="add" size={12} color={disabled ? theme.textMuted : theme.textSub} />
             </Pressable>
           </View>
+          {startControl !== undefined && (
+            <>
+              <Divider styles={styles} />
+              {startControl}
+            </>
+          )}
           <IconButton
             icon="musical-notes"
             label={metronomeEnabled ? 'Disable metronome' : 'Enable metronome'}

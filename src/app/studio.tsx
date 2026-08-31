@@ -14,7 +14,7 @@ import { WebTransportBar } from '@/components/TransportBar';
 import { createStyles as createEditStyles } from '@/app/editStyles';
 import { audibleTracks, instrumentName } from '@/audio/studioTracks';
 import { getChromaticRows } from '@/audio/HarmonicaMapper';
-import { createTrack, tempoMapOf } from '@/audio/midiProject';
+import { createTrack, projectStartMs, shiftProjectTime, tempoMapOf } from '@/audio/midiProject';
 import { mostMelodicTrack } from '@/audio/midiToNotes';
 import {
   appendTabNote,
@@ -47,6 +47,7 @@ import { useTheme } from '@/hooks/useTheme';
 import { getPremium } from '@/hooks/usePremium';
 import { Poppins, SpaceGrotesk } from '@/constants/fonts';
 import type { Theme } from '@/theme';
+import type { TempoEvent, TimeSignatureEvent } from '@/audio/tempo';
 import type { HarmonicaKey, HarmonicaType, MidiProject, MidiTrackData, TabNote } from '@/types';
 
 /**
@@ -73,6 +74,14 @@ import type { HarmonicaKey, HarmonicaType, MidiProject, MidiTrackData, TabNote }
  * "try something and walk away" has to be possible. Download MIDI writes the project
  * itself — no harmonica has been chosen here, so there is no tab to export.
  */
+
+/** Everything a Studio edit can change that undo has to put back — see `readSnapshot`. */
+interface StudioSnapshot {
+  tracks:         MidiTrackData[];
+  tempos:         TempoEvent[];
+  timeSignatures: TimeSignatureEvent[];
+  durationMs:     number;
+}
 
 /** Pitch-row height in the Studio. Roughly two-thirds the editor's, which puts about five
  *  octaves on screen instead of two while still leaving a note block clickable. */
@@ -253,24 +262,37 @@ export default function StudioScreen() {
   /**
    * Undo/redo for the Studio, over the generic stack in `useEditHistory` — see there for
    * why the tab editor keeps its own history in `useAppStore` while this one is screen-
-   * local. A snapshot is the project's track array, the only thing this screen edits.
+   * local. A snapshot is everything musical about the project — see `StudioSnapshot`.
    *
-   * Only *note* edits are recorded — see `commitNotes`. Mute/solo/program and add/delete
-   * track go through `updateTrack`/`mutate` untracked, matching what the tab editor's
-   * history does and doesn't cover (musical content, not the state around it). Undo edits
-   * the draft like anything else, so it marks the project unsaved rather than reverting to
-   * what's on disk.
+   * Only *musical* edits are recorded — see `commitNotes` and `setProjectStart`. Mute/solo/
+   * program and add/delete track go through `updateTrack`/`mutate` untracked, matching what
+   * the tab editor's history does and doesn't cover (musical content, not the state around
+   * it). Undo edits the draft like anything else, so it marks the project unsaved rather
+   * than reverting to what's on disk.
+   *
+   * The snapshot is wider than the track array it started as, because shifting the
+   * arrangement in time moves the tempo and meter maps with the notes (see
+   * `shiftProjectTime`). Snapshotting tracks alone would let Ctrl+Z put the notes back
+   * while leaving both maps where the shift dropped them — half an undo, and the half that
+   * silently desyncs the bar lines from the music.
    */
-  const readTracks = useCallback(() => project?.tracks ?? null, [project]);
-  const writeTracks = useCallback((tracks: MidiTrackData[]) => {
+  const readSnapshot = useCallback((): StudioSnapshot | null => (project
+    ? {
+      tracks:         project.tracks,
+      tempos:         project.tempos,
+      timeSignatures: project.timeSignatures,
+      durationMs:     project.durationMs,
+    }
+    : null), [project]);
+  const writeSnapshot = useCallback((snapshot: StudioSnapshot) => {
     if (!project) return;
-    mutate({ ...project, tracks });
+    mutate({ ...project, ...snapshot });
   }, [project, mutate]);
   // A note's id is its index in the track's array (see `studioNotes.ts`), so it doesn't
   // survive a jump that may have added or removed notes — dropping the selection is
   // honest, where keeping it would leave it pointing at some unrelated note.
   const clearSelection = useCallback(() => setSelectedNoteId(null), []);
-  const historyState = useEditHistory(readTracks, writeTracks, clearSelection);
+  const historyState = useEditHistory(readSnapshot, writeSnapshot, clearSelection);
   const { record } = historyState;
 
   useUndoRedoShortcuts(historyState);
@@ -283,6 +305,36 @@ export default function StudioScreen() {
       tracks: project.tracks.map((t) => (t.id === trackId ? { ...t, notes } : t)),
     });
   }, [project, mutate, record]);
+
+  /** Where the first note currently sits — what the "Starts at" field displays. */
+  const startMs = useMemo(() => projectStartMs(tracks), [tracks]);
+
+  /**
+   * Move the whole arrangement so its first note lands exactly on `targetMs`.
+   *
+   * The Studio's answer to a MIDI file that opens with dead air, and to its opposite — a
+   * file that starts on the downbeat when you wanted a count-in. One delta for every note
+   * on every track, so nothing moves relative to anything else.
+   *
+   * The loop region moves with it. It is transport state rather than project state, but it
+   * was drawn around particular music, and leaving it behind would silently point it at
+   * different bars the moment the arrangement slides underneath it.
+   */
+  const setProjectStart = useCallback((targetMs: number) => {
+    if (!project) return;
+    const delta = Math.max(0, Math.round(targetMs)) - projectStartMs(project.tracks);
+    if (delta === 0) return;
+
+    record();
+    mutate(shiftProjectTime(project, delta));
+
+    if (loopRegion) {
+      setLoopRegion({
+        startMs: Math.max(0, loopRegion.startMs + delta),
+        endMs:   Math.max(0, loopRegion.endMs   + delta),
+      });
+    }
+  }, [project, mutate, record, loopRegion, setLoopRegion]);
 
   const handleCreate = useCallback((created: Omit<TabNote, 'id'>) => {
     if (!selectedTrack) return;
@@ -781,6 +833,17 @@ export default function StudioScreen() {
         onCycleRate={transport.onCycleRate}
         bpm={bpm}
         setBpm={setProjectBpm}
+        startControl={
+          <StartsAt
+            startMs={startMs}
+            onChange={setProjectStart}
+            // Nothing to move, and no meaningful reading to show.
+            disabled={tracks.every((t) => t.notes.length === 0)}
+            theme={theme}
+            styles={styles}
+            editStyles={editStyles}
+          />
+        }
         metronomeEnabled={metronomeEnabled}
         onToggleMetronome={transport.onToggleMetronome}
         history={historyState}
@@ -847,6 +910,124 @@ function ProjectTitle({
   );
 }
 
+/** Steppers move by a tenth of a second — fine enough to nudge a lead-in by ear, coarse
+ *  enough that reaching a whole second doesn't take ten presses. Exact values are typed. */
+const START_STEP_MS = 100;
+
+/** Unit included, the way the BPM readout carries its own ("120 BPM"). Keeping it in the
+ *  string rather than in a sibling <Text> is what lets the value be centred between its
+ *  steppers: two elements in a fixed-width row can only push the slack to one side. */
+function formatStartSeconds(ms: number): string {
+  return `${(ms / 1000).toFixed(2)}s`;
+}
+
+/**
+ * "Start" — where the arrangement's first note sits, as an editable number of seconds.
+ *
+ * A readout that is also the control. The field shows where the music currently begins, and
+ * typing a new value slides the whole arrangement so it begins there instead; every note on
+ * every track moves by the same delta, so nothing moves relative to anything else. That
+ * framing is deliberate: "trim the dead air off this import" and "give me a three-second
+ * count-in" are the same gesture at different values, and neither needs a command of its own.
+ *
+ * It rides in the transport bar beside BPM, borrowing that cluster's parts — `webMiniStepBtn`
+ * for the steppers and `webBpmValue`'s type for the number, though not its 46px width, which
+ * is sized for "120 BPM" and leaves "3.00" adrift between its own steppers. Both controls
+ * state one fact about the whole project, so they read as one group; a box of its own would
+ * have made it a second cluster sitting inside the first one's pill.
+ *
+ * The one place it departs from BPM is that its value is typed as well as stepped, so unlike
+ * BPM's plain text it needs to *look* editable — hence the hover box, the same hint
+ * `ProjectTitle` uses for the same reason.
+ *
+ * Committed on blur or Enter rather than per keystroke: a commit re-times every note in the
+ * project and re-renders the roll, which is not something to do per character.
+ */
+function StartsAt({
+  startMs, onChange, disabled, theme, styles, editStyles,
+}: {
+  startMs:    number;
+  onChange:   (targetMs: number) => void;
+  disabled:   boolean;
+  theme:      Theme;
+  styles:     ReturnType<typeof createStyles>;
+  editStyles: ReturnType<typeof createEditStyles>;
+}) {
+  const [value, setValue]     = useState(() => formatStartSeconds(startMs));
+  const [focused, setFocused] = useState(false);
+  const [hovered, setHovered] = useState(false);
+
+  // Re-seed whenever the project moves underneath the field — an undo, a stepper press, a
+  // switch to another project — but never mid-edit, which would fight the typing.
+  useEffect(() => {
+    if (!focused) setValue(formatStartSeconds(startMs));
+  }, [startMs, focused]);
+
+  function commit() {
+    // A comma is what half the world's keyboards put on the numeric decimal key. `parseFloat`
+    // then stops at the trailing "s" on its own, so the unit in the field costs nothing here
+    // and "3", "3s" and "3.00s" all mean the same thing.
+    const seconds = Number.parseFloat(value.replace(',', '.'));
+    // Junk and negatives are slips, not instructions: snap back rather than guess.
+    if (!Number.isFinite(seconds) || seconds < 0) { setValue(formatStartSeconds(startMs)); return; }
+    onChange(Math.round(seconds * 1000));
+  }
+
+  function step(deltaMs: number) {
+    onChange(Math.max(0, startMs + deltaMs));
+  }
+
+  // At 0 there is nothing to the left — the arrangement cannot start before time.
+  const atStart = disabled || startMs <= 0;
+
+  return (
+    <View style={styles.startControl}>
+      <Text style={[styles.startLabel, disabled && { color: theme.textMuted }]}>Start</Text>
+
+      <Pressable
+        onPress={() => step(-START_STEP_MS)}
+        disabled={atStart}
+        style={editStyles.webMiniStepBtn}
+        accessibilityRole="button"
+        accessibilityLabel="Move the arrangement earlier"
+      >
+        <Ionicons name="remove" size={12} color={atStart ? theme.textMuted : theme.textSub} />
+      </Pressable>
+
+      <View
+        style={[styles.startValueWrap, hovered && !disabled && styles.startValueHovered]}
+        {...(Platform.OS === 'web'
+          ? { onMouseEnter: () => setHovered(true), onMouseLeave: () => setHovered(false) }
+          : null)}
+      >
+        <TextInput
+          value={value}
+          onChangeText={setValue}
+          onFocus={() => setFocused(true)}
+          onBlur={() => { setFocused(false); commit(); }}
+          onSubmitEditing={commit}
+          editable={!disabled}
+          keyboardType="decimal-pad"
+          returnKeyType="done"
+          selectTextOnFocus
+          style={[styles.startValue, disabled && { color: theme.textMuted }]}
+          accessibilityLabel="Seconds before the first note"
+        />
+      </View>
+
+      <Pressable
+        onPress={() => step(START_STEP_MS)}
+        disabled={disabled}
+        style={editStyles.webMiniStepBtn}
+        accessibilityRole="button"
+        accessibilityLabel="Move the arrangement later"
+      >
+        <Ionicons name="add" size={12} color={disabled ? theme.textMuted : theme.textSub} />
+      </Pressable>
+    </View>
+  );
+}
+
 function createStyles(t: Theme) {
   return StyleSheet.create({
     screen: { flex: 1, backgroundColor: t.bg },
@@ -873,6 +1054,50 @@ function createStyles(t: Theme) {
       ...(Platform.OS === 'web' ? { outlineStyle: 'none', cursor: 'text' } as any : null),
     } as any,
     rollTitleInputHovered: { backgroundColor: t.surfaceAlt },
+    // Mirrors `webBpmControl` next door: no background or border of its own, because the
+    // transport group's pill is already the boundary around this cluster and a box inside
+    // that box reads as busier rather than more finished. The first cut was a bordered
+    // field in the roll's tool row, in surfaceAlt/separator — a lighter grey on a fainter
+    // hairline than any control beside it, which read as a mistake rather than a
+    // distinction.
+    startControl: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingHorizontal: 4 },
+    startLabel:   { fontSize: 11, fontFamily: Poppins.semiBold, color: t.textSub, marginRight: 2 },
+    // The number and its unit share one hover box, so "3.00" and the "s" read as one value
+    // rather than a field with a stray letter parked next to it.
+    startValueWrap: {
+      paddingVertical:   1,
+      paddingHorizontal: 3,
+      borderRadius:      4,
+      backgroundColor:   'transparent',
+    },
+    // `webBpmValue`'s type, but not its sizing — and the difference matters more than it
+    // looks. That control is a <Text>, which shrinks to its content, so a `minWidth` is
+    // enough. This one is a TextInput, which on web is a real <input> carrying the browser's
+    // intrinsic ~20-character width; a `minWidth` cannot pull that in, so the field stayed
+    // ~170px wide with the number right-aligned at the far end of it and the steppers
+    // stranded either side. It needs an explicit `width`.
+    //
+    // 42px holds "99.99s" at this size. Anything longer is a lead-in measured in minutes, and
+    // clipping that is the right trade against carrying dead space in the transport bar
+    // forever. Centred, not right-aligned: a fixed box puts its slack wherever the alignment
+    // says, and right-alignment banked all of it on the left, leaving the number hard against
+    // the + and adrift from the −.
+    startValue: {
+      fontSize:    11,
+      fontFamily:  Poppins.semiBold,
+      color:       t.textSub,
+      width:       42,
+      textAlign:   'center',
+      fontVariant: ['tabular-nums'],
+      paddingVertical:   0,
+      paddingHorizontal: 0,
+      backgroundColor:   'transparent',
+      ...(Platform.OS === 'web' ? { outlineStyle: 'none', cursor: 'text' } as any : null),
+    } as any,
+    // BPM beside it is a plain readout, so nothing about this cluster suggests one of its
+    // numbers can be typed into. Painting the box in on hover is the only hint — the same
+    // one `ProjectTitle` uses, for the same reason.
+    startValueHovered: { backgroundColor: t.surfaceAlt },
     rollSubtitle: { fontFamily: SpaceGrotesk.regular, fontSize: 11, color: t.textMuted },
     notice: {
       flexDirection: 'row',
