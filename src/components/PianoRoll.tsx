@@ -2687,8 +2687,10 @@ const METRIC_LABELS: Record<DataMetric, string> = {
 
 // ─── Help modal ────────────────────────────────────────────────────────────────
 // A real centered Modal (not the small anchored popover this replaced) — there's enough
-// content now (every toolbar control, not just colors/shortcuts) that a glanceable corner
-// card stopped being the right shape for it. Same Modal + backdrop-press-to-close shape
+// content now (every toolbar control and the transport bar beneath the panel, not just
+// colors/shortcuts) that a glanceable corner card stopped being the right shape for it.
+// Titled "Editor Help" rather than "Piano Roll Help" for the same reason: it outgrew the
+// roll once it started documenting the bar below it. Same Modal + backdrop-press-to-close shape
 // as ActionSheetModal elsewhere in the app, just with a scrollable content area instead
 // of a list of option rows.
 interface ToolHelpEntry {
@@ -2737,6 +2739,52 @@ function toolHelp(harmonica: boolean): ToolHelpEntry[] {
   ];
 }
 
+/**
+ * The bar pinned along the bottom of both editors.
+ *
+ * Documented from inside the roll even though the roll does not render it: `edit.tsx` and
+ * `studio.tsx` each mount `WebTransportBar` directly beneath this panel, and the `?` here is
+ * the only help button on either screen. Lifting the modal up to both hosts to keep the
+ * ownership tidy would move a lot of code to tell the reader nothing new.
+ *
+ * `harmonica` doubles as the host flag, which is exactly what the two conditional entries
+ * need: the Studio is the only caller that passes `startControl` and `history` to the bar,
+ * so it is the only one whose bar has a Start field or undo/redo buttons.
+ *
+ * Ordered as the bar itself reads, left to right, so the list can be followed against the
+ * thing it describes rather than searched.
+ */
+function transportHelp(harmonica: boolean): ToolHelpEntry[] {
+  return [
+  { icon: 'repeat', title: 'Loop',
+    desc: 'Repeats instead of stopping at the end. A loop region marked on the ruler overrides this — marking one already means “loop this”, so playback repeats between the markers whether or not this is on.' },
+  { icon: 'remove', title: 'Tempo (− BPM +)',
+    desc: harmonica
+      ? 'The tab’s tempo in beats per minute — it sets how fast playback runs and where the bar lines fall.'
+      : 'The project’s opening tempo in beats per minute. It writes the first entry of the tempo map rather than a single number, so an imported file that changes tempo partway through keeps every later change intact.' },
+  // Studio-only: the tab editor's bar is passed no `startControl`, because a tab is one
+  // voice that already begins where it begins.
+  ...(harmonica ? [] : [{ icon: 'time-outline' as const, title: 'Start',
+    desc: 'Where the arrangement’s first note sits. Type a new value and the whole project slides to begin there — every note on every track moves by the same amount, so nothing shifts relative to anything else. Use it to trim dead air off the front of an import, or to open a gap for a count-in. The tempo and meter maps travel with the notes, so bar lines stay glued to the music, and Ctrl/Cmd+Z puts it all back.' }]),
+  { icon: 'musical-notes', title: 'Metronome',
+    desc: 'A click on every beat while playing. It is a practice aid only — nothing you export contains it.' },
+  { icon: 'play', title: 'Play / Pause',
+    desc: 'The big circle. Plays from the playhead, or from the start of the loop region when one is set. It shows a … while sampled instruments are still loading; it stays pressable throughout, and playback falls back to simpler voices if the samples are slow.' },
+  { icon: 'stop', title: 'Stop',
+    desc: 'Stops and returns the playhead to the beginning.' },
+  { icon: 'play-skip-forward', title: 'Back / Forward one bar',
+    desc: 'Jumps the playhead a full bar either way. Works while stopped, paused, or mid-playback.' },
+  // Studio-only: the tab editor keeps undo/redo in its own toolbar and sidebar, so a second
+  // pair down here would be redundant rather than helpful.
+  ...(harmonica ? [] : [{ icon: 'arrow-undo' as const, title: 'Undo / Redo',
+    desc: 'Steps back and forward through edits — the same as Ctrl/Cmd+Z and Shift+Ctrl/Cmd+Z. They live in the bar here because the Studio has no toolbar of its own; the tab editor keeps its pair up in the top toolbar instead.' }]),
+  { icon: 'speedometer-outline', title: 'Playback speed',
+    desc: 'The 1x button. Cycles 0.5×, 0.75×, 1×, 1.25×, 1.5×, 2× — slows a hard passage down without moving its pitch or rewriting the tempo.' },
+  { icon: 'time-outline', title: 'Elapsed / total',
+    desc: 'Where the playhead is, and how long the whole thing runs.' },
+  ];
+}
+
 function shortcuts(harmonica: boolean): [string, string][] {
   return [
   ['1 / 2', 'Pencil / Selection tool'],
@@ -2780,7 +2828,7 @@ function HelpModal({ visible, onClose, noteColor, theme, styles }: {
       <Pressable style={styles.helpBackdrop} onPress={onClose}>
         <Pressable style={styles.helpModalCard} onPress={(e) => e.stopPropagation()}>
           <View style={styles.helpModalHeader}>
-            <Text style={styles.helpModalTitle}>Piano Roll Help</Text>
+            <Text style={styles.helpModalTitle}>Editor Help</Text>
             <Pressable
               onPress={onClose}
               style={styles.helpModalCloseBtn}
@@ -2797,6 +2845,25 @@ function HelpModal({ visible, onClose, noteColor, theme, styles }: {
               <View style={styles.helpColumn}>
                 <Text style={styles.helpSectionTitle}>Tools & controls</Text>
                 {toolHelp(harmonica).map((entry) => (
+                  <View key={entry.title} style={styles.helpToolRow}>
+                    <View style={styles.helpToolIcon}>
+                      <Ionicons name={entry.icon} size={14} color={theme.accent} />
+                    </View>
+                    <View style={styles.helpToolText}>
+                      <Text style={styles.helpToolTitle}>{entry.title}</Text>
+                      <Text style={styles.helpRowText}>{entry.desc}</Text>
+                    </View>
+                  </View>
+                ))}
+
+                {/* The bar along the bottom of the screen, which went undocumented until now
+                    — the modal covered every control in this panel and nothing below it. It
+                    shares this column rather than the one opposite because it is the same
+                    kind of entry (icon, name, prose) and reuses the same row; the right
+                    column is the reference side, holding the colour legend and key table. */}
+                <View style={styles.helpDivider} />
+                <Text style={styles.helpSectionTitle}>Playback bar</Text>
+                {transportHelp(harmonica).map((entry) => (
                   <View key={entry.title} style={styles.helpToolRow}>
                     <View style={styles.helpToolIcon}>
                       <Ionicons name={entry.icon} size={14} color={theme.accent} />
