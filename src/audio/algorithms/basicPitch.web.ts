@@ -33,6 +33,105 @@ const MODEL_SAMPLE_RATE = 22050;
  *  FFT_HOP` ≈ 86 frames per second, or ~11.6ms each. */
 const FFT_HOP = 256;
 
+/**
+ * basic-pitch's own windowing constants (`inference.ts`), mirrored here so `padPastConcatBug`
+ * can predict how many windows the library will hand to `tf.concat`. They are not ours to
+ * choose: if the library ever changes them, this file's guard silently stops matching and the
+ * bug it works around comes back. That is the price of the workaround, and the reason it is
+ * all in one place with this comment on it.
+ */
+const AUDIO_N_SAMPLES  = MODEL_SAMPLE_RATE * 2 - FFT_HOP;      // 43844 — one 2s window
+const OVERLAP_LENGTH   = 30 * FFT_HOP;                          // 7680
+const WINDOW_HOP       = AUDIO_N_SAMPLES - OVERLAP_LENGTH;      // 36164
+const ANNOTATIONS_FPS  = Math.floor(MODEL_SAMPLE_RATE / FFT_HOP);
+
+/**
+ * Plausible values of tfjs's `WEBGL_MAX_TEXTURES_IN_SHADER`, which is what decides the bug
+ * below. It is `min(16, gl.MAX_TEXTURE_IMAGE_UNITS)`, and the WebGL specs floor that
+ * parameter at 8 (WebGL1) and 16 (WebGL2) — so in practice it is one of these two.
+ *
+ * Read from a list rather than from tfjs itself on purpose: `@tensorflow/tfjs` is a
+ * transitive dependency of `@spotify/basic-pitch`, not one we declare, so importing it here
+ * would mean reaching through another package's dependency tree. Guarding both candidates
+ * costs one extra window of silence in the rare case and needs no import at all.
+ */
+const CONCAT_GROUP_SIZES = [8, 16];
+
+/**
+ * How many windows `tf.signal.frame` will cut the audio into — `BasicPitch.prepareData`
+ * prepends `OVERLAP_LENGTH / 2` zeros and then frames with `padEnd`, so this mirrors both.
+ */
+function windowCount(sampleCount: number): number {
+  const signalLength = Math.floor(OVERLAP_LENGTH / 2) + sampleCount;
+  let start = 0;
+  let count = 0;
+  while (start + AUDIO_N_SAMPLES <= signalLength) { count++; start += WINDOW_HOP; }
+  // The `padEnd` tail: one more window, zero-filled to length.
+  while (start < signalLength)                    { count++; start += WINDOW_HOP; }
+  return count;
+}
+
+/**
+ * Whether concatenating `count` tensors trips tfjs's broken single-input concat shader.
+ *
+ * `ConcatProgram` (concat_gpu.ts) builds `variableNames` from the shapes it is given but
+ * *always* appends a final `else setOutput(getT${offsets.length}(...))` branch. With one
+ * input that names `getT1` while only `T0` was declared, so the fragment shader fails to
+ * compile and the whole transcription throws.
+ *
+ * A single input reaches it because `concatImpl` batches by `WEBGL_MAX_TEXTURES_IN_SHADER`:
+ * `for (i = 0; i < inputs.length; i += g) push(concatImpl(inputs.slice(i, i + g)))`. When
+ * `count % g === 1` the last slice holds exactly one tensor. The loop below walks that
+ * recursion because it repeats on the reduced list, so a safe first level is not enough.
+ *
+ * `count <= 1` is safe: tfjs-core's `concat` op clones a lone tensor instead of running the
+ * kernel. That guard exists only at the op level, which is why the nested case still breaks.
+ */
+function breaksConcat(count: number, groupSize: number): boolean {
+  let remaining = count;
+  while (remaining > groupSize) {
+    if (remaining % groupSize === 1) return true;
+    remaining = Math.ceil(remaining / groupSize);
+  }
+  return false;
+}
+
+/**
+ * How many windows of silence we will append before giving up.
+ *
+ * One extra window is *not* always enough, which is the trap here: because `breaksConcat`
+ * walks the recursion, unsafe counts come in runs. Count 65 is the worst case inside the
+ * five-minute ceiling `MAX_DURATION_MS` imposes (~185 windows) — 65 breaks at the second
+ * level, 66-72 break with it, and 73 breaks at the first level again, so escaping takes 9.
+ * The bound is set well above that measured worst case rather than at it, so that a longer
+ * ceiling or a change to the framing constants does not walk straight off the end of it.
+ */
+const MAX_PAD_WINDOWS = 32;
+
+/**
+ * Append silence until the window count clears the bug, and report whether we did.
+ *
+ * Trailing silence is inaudible to the model — it transcribes as no notes — and `runInference`
+ * trims the extra output frames off anyway, so nothing downstream can tell this happened.
+ * The cost is one extra window of inference per window added, which at the worst case above
+ * is ~15 seconds of audio on a file that was already a minute long.
+ */
+function padPastConcatBug(samples: Float32Array): { samples: Float32Array; padded: boolean } {
+  const safeAt = (length: number) => CONCAT_GROUP_SIZES.every((g) => !breaksConcat(windowCount(length), g));
+  if (safeAt(samples.length)) return { samples, padded: false };
+
+  for (let extraWindows = 1; extraWindows <= MAX_PAD_WINDOWS; extraWindows++) {
+    const length = samples.length + extraWindows * WINDOW_HOP;
+    if (!safeAt(length)) continue;
+    const grown = new Float32Array(length);
+    grown.set(samples);
+    return { samples: grown, padded: true };
+  }
+  // Nothing found inside the bound: run unpadded rather than pad without limit. This is the
+  // pre-existing failure, reported the way it always was, not a new one.
+  return { samples, padded: false };
+}
+
 /** Served from `public/`, which Expo copies to the site root on export. Not `public/assets`
  *  — Metro reserves that path. */
 const MODEL_URL = '/models/basic-pitch/model.json';
@@ -175,7 +274,11 @@ export async function runInference(
 ): Promise<BasicPitchInference> {
   options.onProgress?.({ stage: 'loadingModel', fraction: 0 });
 
-  const samples = await resampleToModelRate(audio);
+  const resampled = await resampleToModelRate(audio);
+  // Some lengths cannot be transcribed at all without this — see `padPastConcatBug`. Roughly
+  // one duration in fifteen, which is why it is applied to every run rather than offered as
+  // a retry after the first failure.
+  const { samples, padded } = padPastConcatBug(resampled);
   if (options.shouldCancel?.()) {
     throw new AudioImportError('cancelled', 'Transcription cancelled.');
   }
@@ -216,6 +319,17 @@ export async function runInference(
       throw new AudioImportError('cancelled', 'Transcription cancelled.');
     }
     throw err;
+  }
+
+  // Drop the rows that only exist because of the padding. basic-pitch truncates its own
+  // output to the length it was handed, so without this the matrices would run past the end
+  // of the real recording — silent rows that yield no notes, but that would still stretch
+  // anything measuring the transcription by its frame count.
+  if (padded) {
+    const realFrames = Math.floor((resampled.length * ANNOTATIONS_FPS) / MODEL_SAMPLE_RATE);
+    frames.length    = Math.min(frames.length,   realFrames);
+    onsets.length    = Math.min(onsets.length,   realFrames);
+    contours.length  = Math.min(contours.length, realFrames);
   }
 
   options.onProgress?.({ stage: 'analyzing', fraction: 1 });
