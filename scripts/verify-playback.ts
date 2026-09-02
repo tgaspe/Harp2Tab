@@ -28,7 +28,12 @@ function check(name: string, passed: boolean, detail: string): void {
 const MAX_HARDWARE_CONTEXTS = 6;
 let liveContexts = 0;
 let contextsCreated = 0;
-let started: string[] = [];
+let started: { kind: string; when: number }[] = [];
+/** The one shared context, so a case can move its clock the way the audio device would. */
+let lastContext: FakeContext | null = null;
+/** Seconds added to `currentTime` on every read. Off by default; a case turns it on to catch
+ *  code that samples the clock twice and treats both reads as the same instant. */
+let autoAdvancePerRead = 0;
 
 class FakeParam {
   value = 0;
@@ -50,16 +55,24 @@ class FakeNode {
   disconnect() { /* no-op */ }
   start(when = 0) {
     if (!Number.isFinite(when) || when < 0) throw new Error(`bad start time ${when}`);
-    started.push(this.kind);
+    started.push({ kind: this.kind, when });
   }
   stop(when = 0) { if (!Number.isFinite(when)) throw new Error(`bad stop time ${when}`); }
 }
 class FakeContext {
-  currentTime = 0;
+  _currentTime = 0;
+  // A getter, so `autoAdvancePerRead` can make time pass *between* two reads — which is what
+  // separates one origin sampled once from the same origin sampled twice.
+  get currentTime() { const t = this._currentTime; this._currentTime += autoAdvancePerRead; return t; }
+  set currentTime(v: number) { this._currentTime = v; }
+  /** What the browser reports between scheduling a sample and hearing it. */
+  outputLatency = 0;
+  baseLatency = 0;
   destination = new FakeNode('destination');
   state = 'running';
   audioWorklet = { addModule: async () => undefined };
   constructor() {
+    lastContext = this;
     if (liveContexts >= MAX_HARDWARE_CONTEXTS) {
       throw new Error(`Failed to construct 'AudioContext': The number of hardware contexts provided (${liveContexts}) is greater than or equal to the maximum bound (${MAX_HARDWARE_CONTEXTS}).`);
     }
@@ -81,7 +94,9 @@ class FakeContext {
 }
 (globalThis as any).AudioContext = FakeContext;
 
-const { playNotes, stopPlayback, assignChannels, buildEvents } = require('../src/native/Playback.web');
+const {
+  playNotes, stopPlayback, assignChannels, buildEvents, playbackClockMs, playbackLatencyMs,
+} = require('../src/native/Playback.web');
 const { midiToNoteName } = require('../src/audio/HarmonicaMapper');
 
 interface TestNote {
@@ -189,6 +204,98 @@ async function restartsDoNotExhaustTheContextBudget(): Promise<void> {
   stopPlayback();
 }
 
+
+// ── The playhead clock ────────────────────────────────────────────────────────
+
+function near(actual: number | null, expected: number, tolerance = 1): boolean {
+  return actual !== null && Math.abs(actual - expected) <= tolerance;
+}
+
+/**
+ * The red line and the sound have to come off one clock.
+ *
+ * They used not to: the playhead counted `Date.now()` from the moment `play()` was called,
+ * while every note was handed to the synth at an `AudioContext.currentTime` sampled
+ * separately, and nothing ever reconciled the two. Any gap opened at the origin — a context
+ * still resuming samples a *frozen* `currentTime`, and `resume()` is not awaited — was baked
+ * in for the whole pass, and every pause/resume added more, because the wall clock ran
+ * through a suspension the audio clock sat out. The symptom is a red line ahead of the music.
+ */
+async function clockFollowsTheAudioNotTheWallClock(): Promise<void> {
+  stopPlayback();
+  check('clock: nothing to report while stopped', playbackClockMs() === null, `${playbackClockMs()}`);
+
+  const notes = [note(0, 60, 0, false, 0), note(1, 64, 0, false, 4000)];
+  await playNotes(notes, { bpm: 120, metronomeEnabled: false, rate: 1 }, 4000);
+  const ctx = lastContext!;
+  check('clock: opens at the seek point', near(playbackClockMs(), 4000), `${playbackClockMs()}`);
+
+  ctx.currentTime += 1;
+  check('clock: advances with the audio clock', near(playbackClockMs(), 5000), `${playbackClockMs()}`);
+
+  // The bug, in one assertion: an audio clock that is not moving is audio that is not
+  // playing, and the line has no business moving without it. Wall-clock time passes here
+  // and the context's does not — exactly a context part-way through `resume()`.
+  const frozen = playbackClockMs();
+  await new Promise((r) => setTimeout(r, 60));
+  check('clock: a frozen audio clock freezes the playhead', near(playbackClockMs(), frozen!),
+    `${frozen} → ${playbackClockMs()} across 60ms of wall time`);
+
+  stopPlayback();
+  check('clock: nothing to report after stop', playbackClockMs() === null, `${playbackClockMs()}`);
+}
+
+/** Nominal note-timeline units, like every other position in the transport: at 2x, one
+ *  second of audio covers two seconds of the score. */
+async function clockReportsNominalTimeAtEveryRate(): Promise<void> {
+  stopPlayback();
+  const notes = [note(0, 60, 0, false, 0), note(1, 64, 0, false, 8000)];
+  await playNotes(notes, { bpm: 120, metronomeEnabled: false, rate: 2 }, 0);
+  const ctx = lastContext!;
+  ctx.currentTime += 1;
+  check('clock: rate scales the nominal position', near(playbackClockMs(), 2000), `${playbackClockMs()}`);
+  stopPlayback();
+}
+
+/** `currentTime` is where the renderer is, not where the speaker is; the gap is
+ *  `outputLatency`, and on Bluetooth it is a quarter of a second. The line has to show the
+ *  note being *heard*, not the one being handed to the sound card. */
+async function clockShowsWhatIsBeingHeard(): Promise<void> {
+  stopPlayback();
+  const notes = [note(0, 60, 0, false, 0), note(1, 64, 0, false, 4000)];
+  const ctx = lastContext!;
+  ctx.outputLatency = 0.2;
+  await playNotes(notes, { bpm: 120, metronomeEnabled: false, rate: 1 }, 2000);
+  check('clock: output latency is taken off the playhead', near(playbackClockMs(), 1800),
+    `${playbackClockMs()} at a 200ms output latency`);
+  check('latency: reported to the transport in ms', playbackLatencyMs() === 200, `${playbackLatencyMs()}`);
+  ctx.currentTime += 0.2;
+  check('clock: reaches the seek point once the sound does', near(playbackClockMs(), 2000),
+    `${playbackClockMs()}`);
+  ctx.outputLatency = 0;
+  stopPlayback();
+}
+
+/** Notes and clicks were sampled from `ctx.currentTime` separately — the metronome from one
+ *  read, the voices from another taken after the whole event list had been built and sorted.
+ *  Two origins is a click that does not sit on its own beat. */
+async function everythingSharesOneOrigin(): Promise<void> {
+  stopPlayback();
+  started = [];
+  autoAdvancePerRead = 0.01;   // 10ms of wall time between any two reads of the clock
+  const notes = [note(0, 60, 0, false, 0), note(1, 64, 0, false, 2000)];
+  await playNotes(notes, { bpm: 120, metronomeEnabled: true, rate: 1 }, 0);
+  autoAdvancePerRead = 0;
+
+  const voices = started.filter((s) => s.kind === 'oscillator').map((s) => s.when);
+  const first = Math.min(...voices);
+  const downbeatCount = voices.filter((w) => Math.abs(w - first) < 1e-9).length;
+  // A note at 0ms and the bar-one click both land on the origin — unless there are two.
+  check('origin: the first note and the first click share it', downbeatCount >= 2,
+    `${downbeatCount} voices on the downbeat, from ${voices.length} scheduled`);
+  stopPlayback();
+}
+
 async function main(): Promise<void> {
   channelsCarryInstruments();
   percussionNeverTakesAMelodicChannel();
@@ -197,6 +304,10 @@ async function main(): Promise<void> {
   drumsRideChannelNine();
   denseTrackDoesNotThrow();
   await restartsDoNotExhaustTheContextBudget();
+  await clockFollowsTheAudioNotTheWallClock();
+  await clockReportsNominalTimeAtEveryRate();
+  await clockShowsWhatIsBeingHeard();
+  await everythingSharesOneOrigin();
 
   for (const result of results) {
     console.log(`${result.passed ? 'PASS' : 'FAIL'}  ${result.name} — ${result.detail}`);

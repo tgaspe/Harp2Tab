@@ -10,8 +10,32 @@ import type { TabNote } from '@/types';
 // WAV file once and plays that file.
 let player: AudioPlayer | null = null;
 
+/**
+ * Where the transport is *before* the player exists, so the playhead cannot run ahead of a
+ * WAV that is still being synthesized, base64'd and written to disk. Null once `play()` has
+ * been reached and `player.currentTime` can answer for itself.
+ *
+ * The transport used to time its playhead with `Date.now()` from the moment play was
+ * pressed, which on this backend meant the red line set off while the render had not
+ * started — see `playbackClockMs` in `Playback.web.ts` for the same split on the web side.
+ */
+let pendingStartMs: number | null = null;
+
+/** Where the sound actually is, in nominal note-timeline units (matching `note.start_time`),
+ *  or null when nothing is loaded. The WAV is rendered at nominal tempo and `playbackRate`
+ *  varies how fast it is traversed, so the file's own position *is* the score position. */
+export function playbackClockMs(): number | null {
+  if (pendingStartMs !== null) return pendingStartMs;
+  return player ? player.currentTime * 1000 : null;
+}
+
+/** Web reports the gap between scheduling a sample and hearing it; a file player has no
+ *  equivalent to expose, and `currentTime` already tracks what is being heard. */
+export function playbackLatencyMs(): number { return 0; }
+
 export async function playNotes(notes: TabNote[], options?: PlaybackOptions, startAtMs = 0): Promise<void> {
   stopPlayback();
+  pendingStartMs = startAtMs;
   const wavBytes = synthesizeWav(notes, undefined, options?.metronomeEnabled ? {
     bpm: options.bpm, enabled: true,
   } : undefined);
@@ -27,6 +51,7 @@ export async function playNotes(notes: TabNote[], options?: PlaybackOptions, sta
   // clip, since re-synthesizing per seek would be far more work for the same result.
   if (startAtMs > 0) await player.seekTo(startAtMs / 1000);
   player.play();
+  pendingStartMs = null;
 }
 
 // Single-tone preview (e.g. clicking a note in the piano-roll editor to hear it) — its
@@ -63,6 +88,7 @@ export function resumePlayback(): void {
 export function stopPlayback(): void {
   player?.remove();
   player = null;
+  pendingStartMs = null;
 }
 
 /** Native has no worklet and no synth — `synthesizeWav` renders its own oscillator voices.

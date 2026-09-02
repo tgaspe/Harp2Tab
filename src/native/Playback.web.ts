@@ -53,6 +53,50 @@ function playbackContext(): AudioContext {
 let activeVoices: AudioScheduledSourceNode[] = [];
 let schedulerTimer: ReturnType<typeof setInterval> | null = null;
 
+/**
+ * What the current pass was scheduled against, so the playhead can be *read back* from the
+ * audio clock rather than estimated alongside it.
+ *
+ * The transport used to time its playhead with `Date.now()` from the moment `play()` was
+ * called, while everything audible was placed on `AudioContext.currentTime` — two clocks,
+ * two origins, and nothing reconciling them once they parted. They part immediately and
+ * routinely: a suspended context (which is how `pausePlayback` works, and how a context
+ * built outside a user gesture starts) has a *frozen* `currentTime`, `resume()` is
+ * asynchronous, and the origin below gets sampled during the gap. Whatever offset that
+ * opened was then fixed for the whole pass — the red line ran that far ahead of the music
+ * until the page was reloaded and a fresh context started both clocks together again.
+ *
+ * Reading the position from the audio clock instead makes the two the same measurement:
+ * while the context is suspended `currentTime` does not move, so neither does the playhead,
+ * which is exactly right — audio that is not advancing is a line that should not advance.
+ */
+let clock: { originSec: number; startAtMs: number; rate: number } | null = null;
+
+/** Between handing the renderer a sample and hearing it. `outputLatency` is the real figure;
+ *  Safari offers only `baseLatency`, and a browser reporting neither is taken at its word
+ *  rather than guessed at. On Bluetooth this is a quarter of a second. */
+function outputLatencySec(ctx: AudioContext): number {
+  return ctx.outputLatency || ctx.baseLatency || 0;
+}
+
+/**
+ * Where the sound *currently leaving the speakers* is, in nominal note-timeline units
+ * (matching `note.start_time`), or null when nothing is scheduled.
+ *
+ * `currentTime` is where the renderer has got to, which is `outputLatency` ahead of what the
+ * listener is hearing; the playhead marks the note being heard, so that gap comes off.
+ */
+export function playbackClockMs(): number | null {
+  if (!audioContext || !clock) return null;
+  const heardSec = audioContext.currentTime - outputLatencySec(audioContext);
+  return Math.max(0, clock.startAtMs + (heardSec - clock.originSec) * 1000 * clock.rate);
+}
+
+/** The same latency in milliseconds, for callers timing against the wall clock. */
+export function playbackLatencyMs(): number {
+  return audioContext ? outputLatencySec(audioContext) * 1000 : 0;
+}
+
 function scheduleMetronome(
   ctx: AudioContext,
   now: number,
@@ -157,8 +201,8 @@ function startScheduler(
   events: MidiEvent[],
   startAtMs: number,
   rate: number,
+  originSec: number,
 ): void {
-  const originSec = ctx.currentTime;
   let index = 0;
 
   const pump = (): void => {
@@ -191,31 +235,38 @@ export async function playNotes(notes: TabNote[], options?: PlaybackOptions, sta
   if (notes.length === 0) return;
 
   const ctx = playbackContext();
-  const now = ctx.currentTime;
+  /* Sampled once and handed to everything below — the notes, the click track and the
+   * playhead all measure from this one instant. Reading `currentTime` again per scheduler is
+   * how the metronome came to sit on a different clock from the music it was counting: the
+   * clicks were placed from a read taken before the event list was built and sorted, the
+   * voices from one taken after. */
+  const originSec = ctx.currentTime;
   const rate = options?.rate ?? 1;
+  clock = { originSec, startAtMs, rate };
 
   const synth = currentSynth();
   if (synth) {
     const channels = assignChannels(notes);
     for (const [program, channel] of channels) synth.programChange(channel, program);
-    startScheduler(ctx, synth, buildEvents(notes, channels, startAtMs), startAtMs, rate);
+    startScheduler(ctx, synth, buildEvents(notes, channels, startAtMs), startAtMs, rate, originSec);
   } else {
     // The soundfont isn't up yet. Play the oscillator voices this file has always had, and
     // start the load so the next press is the real thing.
     if (!synthAttempted()) void loadSynth(ctx);
-    scheduleOscillators(ctx, notes, startAtMs, rate);
+    scheduleOscillators(ctx, notes, startAtMs, rate, originSec);
   }
 
   if (options?.metronomeEnabled) {
     const totalMs = notes.reduce((max, n) => Math.max(max, n.start_time + n.duration), 0);
-    scheduleMetronome(ctx, now, totalMs, options, rate, startAtMs);
+    scheduleMetronome(ctx, originSec, totalMs, options, rate, startAtMs);
   }
 }
 
 /** The pre-synth engine, kept whole as the fallback. Distinguishable rather than realistic —
  *  see `timbre.ts` for what these voices are for. */
-function scheduleOscillators(ctx: AudioContext, notes: TabNote[], startAtMs: number, rate: number): void {
-  const now = ctx.currentTime;
+function scheduleOscillators(
+  ctx: AudioContext, notes: TabNote[], startAtMs: number, rate: number, now: number,
+): void {
   for (const n of notes) {
     const noteEnd = n.start_time + n.duration;
     if (noteEnd <= startAtMs) continue;
@@ -309,6 +360,10 @@ export function resumePlayback(): void {
 }
 
 export function stopPlayback(): void {
+  clock = null;
+  // `pausePlayback` suspends the shared context and nothing else ever un-suspended it, so a
+  // pause followed by a stop left it frozen for the *next* press to sample its origin from.
+  if (audioContext?.state === 'suspended') void audioContext.resume();
   if (schedulerTimer) {
     clearInterval(schedulerTimer);
     schedulerTimer = null;

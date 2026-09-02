@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { pausePlayback, playNotes, resumePlayback, stopPlayback } from '@/native/Playback';
+import {
+  pausePlayback, playbackClockMs, playbackLatencyMs, playNotes, resumePlayback, stopPlayback,
+} from '@/native/Playback';
 import type { PlaybackOptions } from '@/audio/tempo';
 import type { TabNote } from '@/types';
 
@@ -9,9 +11,8 @@ import type { TabNote } from '@/types';
  * back automatically once the sequence's total duration has elapsed, since neither the
  * native (file-based) nor web (OscillatorNode) backends emit a "finished" event.
  *
- * `currentTimeMs` is a UI-side estimate (a rAF loop timed against `Date.now()`), not read
- * back from the audio engine — good enough for a transport readout/playhead, not meant
- * for sample-accurate sync.
+ * `currentTimeMs` is read back from the audio engine each animation frame — see `tick()` for
+ * why it is not the wall-clock estimate it used to be.
  *
  * `loopEnabled`/`playbackRate` take effect on the next `play()` call. Higher-level
  * transports can apply either live by restarting from the current nominal timeline
@@ -72,13 +73,33 @@ export function usePlayback() {
     }
   }, []);
 
+  /**
+   * The playhead reads the audio engine's own clock, and only estimates when it has none.
+   *
+   * Both backends report in nominal note-timeline units (matching `note.start_time`), so the
+   * piano-roll playhead stays aligned with the notes at any playback rate.
+   *
+   * It used to be the wall-clock estimate below, unconditionally — `Date.now()` counted from
+   * the moment `play()` was called, against audio placed on a clock of its own that had been
+   * sampled separately. Nothing reconciled the two after the origin, so every gap between
+   * them was permanent and they only ever accumulated: a context part-way through an
+   * asynchronous `resume()` has a frozen clock the wall runs straight through, and `resume()`
+   * below credits a pause with the wall-clock time it lasted, which is not the same as the
+   * time the audio device took to come back. What the user sees is a red line running ahead
+   * of the music, worsening across a session and cured by a page reload.
+   *
+   * The estimate survives as the fallback for a backend that cannot answer (or has not
+   * started yet), which is the only case where the two can still disagree.
+   */
   const tick = useCallback(() => {
     if (pauseStartRef.current === null) {
-      const elapsedWallMs = Date.now() - startedAtRef.current - pausedTotalRef.current;
-      // Report position in nominal note-timeline units (matching note.start_time) so the
-      // piano-roll playhead stays aligned with notes regardless of playback rate — e.g. at
-      // 2x, half as much wall-clock time passes for the same nominal position.
-      setCurrentTimeMs(elapsedWallMs * playbackRateRef.current);
+      const enginePosition = playbackClockMs();
+      if (enginePosition !== null) {
+        setCurrentTimeMs(enginePosition);
+      } else {
+        const elapsedWallMs = Date.now() - startedAtRef.current - pausedTotalRef.current;
+        setCurrentTimeMs(elapsedWallMs * playbackRateRef.current);
+      }
     }
     rafRef.current = requestAnimationFrame(tick);
   }, []);
@@ -148,7 +169,11 @@ export function usePlayback() {
     setIsPaused(false);
     rafRef.current = requestAnimationFrame(tick);
 
-    armEndTimeout(Math.max(0, (effectiveEnd - clampedStart) / rate) + 150);
+    /* The timer runs on the wall clock while the playhead now runs on the audio clock, which
+     * trails it by the output latency — so the pad has to cover that too, or the line is
+     * snapped back to the top a moment before the last note is heard. On Bluetooth the
+     * latency alone can exceed the pad. */
+    armEndTimeout(Math.max(0, (effectiveEnd - clampedStart) / rate) + 150 + playbackLatencyMs());
   }, [clearEndTimeout, clearTicker, tick, armEndTimeout]);
 
   const pause = useCallback(() => {
