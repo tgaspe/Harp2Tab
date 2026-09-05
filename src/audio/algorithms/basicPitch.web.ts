@@ -21,10 +21,13 @@
 
 import { AudioImportError, type DecodedAudio } from '../audioImport';
 import type { MidiNote } from '../midiToNotes';
+import { frequencyOfMidi, harmonicaMidiRange } from '../pitchRange';
 import type {
   ParamValues, Prepared, Segmentation, TranscribeOptions, TranscriptionAlgorithm,
   TranscriptionParam,
 } from './index';
+import { HARMONICA_KEYS } from '@/constants/keys';
+import type { HarmonicaKey } from '@/types';
 
 /** The only rate the model accepts (basic-pitch `inference.ts`: AUDIO_SAMPLE_RATE). */
 const MODEL_SAMPLE_RATE = 22050;
@@ -139,22 +142,32 @@ const MODEL_URL = '/models/basic-pitch/model.json';
 /**
  * Thresholds for turning the model's frame/onset matrices into notes.
  *
- * These match `outputToNotesPoly`'s own defaults (toMidi.ts:345-347), which are also what
- * the Python library uses — so a run here is directly comparable to a reference
- * `basic_pitch.predict()` on the same file. (Note the README's example snippet passes
- * 0.25/0.25, which are *not* the defaults.) Anything tuned away from these should move
- * because harmonica recordings demanded it and the verification harness shows it, not
- * because a code sample used different numbers.
+ * These match `outputToNotesPoly`'s own defaults (toMidi.ts:345-347). (Note the README's
+ * example snippet passes 0.25/0.25, which are *not* the defaults.) Anything tuned away from
+ * these should move because harmonica recordings demanded it and the verification harness
+ * shows it, not because a code sample used different numbers.
  *
- * `minFrequency`/`maxFrequency` stay null on purpose. The library applies them as the very
- * first step of segmentation (`constrainFrequency`, toMidi.ts:364), zeroing whole
- * posteriogram bins *before* onset inference, peak-picking and the melodia trick have run —
- * so the later stages lose the neighbouring-bin context they use to track a line and to
- * subtract energy, and notes well inside the band go missing. Measured against a reference
- * Python run on the same recording, constraining here cost substantially more real notes
- * than it removed noise. Out-of-range material is rejected after segmentation instead, by
- * pitch rather than by frequency — see `isPlayableOnAnyHarmonica`. The knobs remain so the
- * comparison can be re-run, not because they should be on.
+ * The TS port and the Python library agree on every threshold except one: `minNoteLen`
+ * defaults to 5 frames here and to 11 (`minimum_note_length=127.70` ms) there, and
+ * basicpitch.io ships the Python value. So a run here is *not* directly comparable to a
+ * reference `basic_pitch.predict()` until that is settled one way or the other — measure
+ * before changing it, since it decides how many short notes survive.
+ *
+ * `minFrequency`/`maxFrequency` default to null, and that default is load-bearing. The
+ * library applies them as the very first step of segmentation (`constrainFrequency`,
+ * toMidi.ts:364), zeroing whole posteriogram bins *before* onset inference, peak-picking and
+ * the melodia trick have run — so the later stages lose the neighbouring-bin context they
+ * use to track a line and to subtract energy, and notes well inside the band go missing.
+ * Measured against a reference Python run on the same recording, constraining here cost
+ * substantially more real notes than it removed noise. Out-of-range material is rejected
+ * after segmentation instead, by pitch rather than by frequency — see
+ * `isPlayableOnAnyHarmonica`, which is a separate filter and stays on either way.
+ *
+ * They are reachable from the tune screen all the same, as the `pitchRange` parameter: a
+ * harmonica key rather than two frequencies, since a player who knows the take was cut on a
+ * G harp knows something the model does not, and that knowledge is worth more than the
+ * measurement above. Opt-in, off by default, so the finding still holds for everyone who
+ * doesn't have it.
  */
 export interface BasicPitchSegmentationConfig {
   onsetThreshold: number;
@@ -181,6 +194,14 @@ export interface BasicPitchSegmentationConfig {
   energyTolerance: number;
 }
 
+/**
+ * No band at all, which is both the library's default and the measured-best one — see the
+ * note on the interface above. Named rather than written as a bare `null` in the parameter
+ * list so that the decision has somewhere to be argued with, and so that turning it on by
+ * default later is a one-line change with the reasoning already attached to it.
+ */
+export const DEFAULT_PITCH_RANGE_KEY: HarmonicaKey | null = null;
+
 export const DEFAULT_BASIC_PITCH_CONFIG: BasicPitchSegmentationConfig = {
   onsetThreshold:  0.5,
   frameThreshold:  0.3,
@@ -192,6 +213,28 @@ export const DEFAULT_BASIC_PITCH_CONFIG: BasicPitchSegmentationConfig = {
   inferOnsets:     true,
   energyTolerance: 11,
 };
+
+/**
+ * A harmonica key → the frequency bounds that admit exactly that harp's range, inclusive.
+ *
+ * The half-semitone offsets are not padding, they are the whole point. `constrainFrequency`
+ * turns each bound into a bin index with `hzToMidi(freq) - MIDI_OFFSET` and then fills:
+ * `fill(0, 0, minIdx)` keeps bin `minIdx`, while `fill(0, maxIdx)` clears bin `maxIdx`. So
+ * the low bound is inclusive and the high bound is *exclusive*, and handing it the top
+ * note's own frequency would silently delete that note — the harp's highest pitch, on a
+ * control whose entire promise is "this harp's range".
+ *
+ * Landing mid-bin rather than on its edge also takes the float arithmetic out of it:
+ * `hzToMidi` is a log2 round-trip, so the exact boundary can come back as 95.99999999 and
+ * truncate a bin low. Half a semitone in is never ambiguous.
+ */
+function frequencyBoundsForKey(key: HarmonicaKey): { min: number; max: number } {
+  const range = harmonicaMidiRange(key);
+  return {
+    min: frequencyOfMidi(range.min + 0.5),
+    max: frequencyOfMidi(range.max + 1.5),
+  };
+}
 
 /**
  * Milliseconds → the model frames `outputToNotesPoly` counts in. Deliberately the same
@@ -392,21 +435,31 @@ export async function segment(
 }
 
 /**
- * The knobs offered on the tune screen, in the user's language.
+ * The knobs offered on the tune screen.
  *
- * All four re-run `segment` and nothing else — no inference, no resampling — which is the
- * rule for what may appear here at all. `minFrequency`/`maxFrequency` are deliberately
- * absent even though they satisfy that rule: they measurably cost more real notes than they
- * remove noise, for the reason spelled out on the config interface above, so offering them
- * would be offering a control whose good positions are all the same position.
+ * Every one re-runs `segment` and nothing else — no inference, no resampling — which is the
+ * rule for what may appear here at all.
+ *
+ * The labels and one-line descriptions are basicpitch.io's, word for word, wherever the
+ * knob is the same knob. That is a deliberate reversal of this file's older "the user's
+ * name, not the library's" instinct: anyone tuning a transcription here has very likely
+ * been tuning one on Spotify's demo, and two names for one control is worse for them than
+ * one honest-but-technical name. Where the demo has no equivalent (the melodia trick,
+ * overtone rejection) our own wording stands, and the frequency bounds are one control
+ * here rather than the demo's two sliders — see `pitchRange`.
+ *
+ * `minLabel`/`maxLabel` carry the direction the demo's terser descriptions leave out. They
+ * are not decoration: "Model Confidence Threshold" alone does not tell anyone that dragging
+ * right yields fewer notes.
  */
 const BASIC_PITCH_PARAMS: readonly TranscriptionParam[] = [
   {
     id:     'onsetThreshold',
     kind:   'number',
-    label:  'Onset sensitivity',
-    help:   'How clearly a note has to start before it counts. Lower hears more attacks, '
-          + 'including some that were never played.',
+    label:  'Note Segmentation',
+    help:   'How easily a note should be split into two.',
+    minLabel: 'Split Notes',
+    maxLabel: 'Merge Notes',
     min:    0.05,
     max:    0.95,
     step:   0.05,
@@ -416,9 +469,10 @@ const BASIC_PITCH_PARAMS: readonly TranscriptionParam[] = [
   {
     id:     'frameThreshold',
     kind:   'number',
-    label:  'Note confidence',
-    help:   'How sure the model has to be that a note is still sounding. Lower holds notes '
-          + 'through quiet moments; higher clips their tails.',
+    label:  'Model Confidence Threshold',
+    help:   'The model confidence required to create a note.',
+    minLabel: 'More Notes',
+    maxLabel: 'Fewer Notes',
     min:    0.05,
     max:    0.95,
     step:   0.05,
@@ -426,11 +480,32 @@ const BASIC_PITCH_PARAMS: readonly TranscriptionParam[] = [
     format: (v) => v.toFixed(2),
   },
   {
+    /**
+     * The demo's Minimum and Maximum Pitch, as one control.
+     *
+     * Two Hz sliders are the wrong instrument for this audience twice over: nobody knows
+     * which end of a harmonica is 622 Hz, and the two bounds are never independent in
+     * practice — a take was played on one harp, and that harp fixes both. Naming the harp
+     * sets both bounds correctly by construction, and it is the one thing about the
+     * recording the player already knows for certain.
+     */
+    id:     'pitchRange',
+    kind:   'pitchRange',
+    label:  'Pitch Range',
+    // One line, in the same voice as the two site descriptions it stands in for. What the
+    // second sentence used to say — that Off means no bound — the switch and the "Any pitch"
+    // line under it already say, and said better.
+    help:   'The lowest and highest pitch the model may hear.',
+    offLabel: 'Any pitch',
+    default: DEFAULT_PITCH_RANGE_KEY,
+  },
+  {
     id:     'minNoteLengthMs',
     kind:   'number',
-    label:  'Shortest note',
-    help:   'Anything briefer is discarded. Raise it to clear blips; too high and fast '
-          + 'passages lose their inner notes.',
+    label:  'Minimum Note Length',
+    help:   'The minimum length required to emit a note, in milliseconds.',
+    minLabel: 'Short Notes',
+    maxLabel: 'Long Notes',
     min:    12,
     max:    300,
     step:   6,
@@ -448,7 +523,7 @@ const BASIC_PITCH_PARAMS: readonly TranscriptionParam[] = [
   {
     id:     'inferOnsets',
     kind:   'boolean',
-    label:  'Infer missed attacks',
+    label:  'Boost Onsets',
     help:   'Adds a note start wherever the sound jumps sharply but the model heard no '
           + 'attack. Helps with tongued repeats on one hole.',
     default: DEFAULT_BASIC_PITCH_CONFIG.inferOnsets,
@@ -469,10 +544,28 @@ const BASIC_PITCH_PARAMS: readonly TranscriptionParam[] = [
   },
 ];
 
-/** The declared bag → the library's config, with the two frequency bounds pinned off. */
+/**
+ * A saved `pitchRange` value → the key it names, or null.
+ *
+ * Guarded rather than cast because these values are persisted across builds: a key that
+ * stopped being a key would otherwise reach `harmonicaMidiRange`, find no layout, and hand
+ * `constrainFrequency` an Infinity-derived bound that zeroes the entire posteriogram — a
+ * transcription with no notes at all and nothing on screen to explain it.
+ */
+function pitchRangeKey(value: ParamValues[string]): HarmonicaKey | null {
+  return typeof value === 'string' && (HARMONICA_KEYS as readonly string[]).includes(value)
+    ? (value as HarmonicaKey)
+    : null;
+}
+
+/** The declared bag → the library's config, with the frequency bounds resolved from the key. */
 function configFromParams(params: ParamValues): BasicPitchSegmentationConfig {
+  const key    = pitchRangeKey(params.pitchRange);
+  const bounds = key ? frequencyBoundsForKey(key) : null;
   return {
     ...DEFAULT_BASIC_PITCH_CONFIG,
+    minFrequency:    bounds?.min ?? null,
+    maxFrequency:    bounds?.max ?? null,
     onsetThreshold:  Number(params.onsetThreshold  ?? DEFAULT_BASIC_PITCH_CONFIG.onsetThreshold),
     frameThreshold:  Number(params.frameThreshold  ?? DEFAULT_BASIC_PITCH_CONFIG.frameThreshold),
     minNoteLengthMs: Number(params.minNoteLengthMs ?? DEFAULT_BASIC_PITCH_CONFIG.minNoteLengthMs),

@@ -2,10 +2,14 @@
  * The tune step's right-hand column: whatever the chosen engine declares, as controls.
  *
  * Knows nothing about either engine. It reads `TranscriptionAlgorithm.params` and renders a
- * slider or a switch per entry, which is what lets the same screen drive the neural model
- * and the classic tracker — and lets an engine added later arrive with its own rail already
- * built. The labels and help text come from the schema too, in the user's language rather
- * than the library's, so no string here names a parameter.
+ * slider, a switch or a key grid per entry, which is what lets the same screen drive the
+ * neural model and the classic tracker — and lets an engine added later arrive with its own
+ * rail already built. Every user-facing string comes from the schema, so no label here names
+ * a parameter.
+ *
+ * The one thing it does know is the harmonica, because a pitch-range parameter is chosen as
+ * one — a fact about the instrument rather than about whichever engine happens to consume
+ * it, and the engines are free to declare it or not.
  */
 
 import React, { useMemo, useState } from 'react';
@@ -13,17 +17,45 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SliderInput } from './SliderInput';
 import { Toggle } from './Toggle';
+import { KeyGrid } from './KeyGrid';
 import { useTheme } from '@/hooks/useTheme';
 import { FONT } from '@/constants/keys';
 import { Poppins } from '@/constants/fonts';
-import type { ParamValues, TranscriptionParam } from '@/audio/algorithms';
+import { midiToNoteName } from '@/audio/HarmonicaMapper';
+import { frequencyOfMidi, harmonicaMidiRange } from '@/audio/pitchRange';
+import type { ParamValue, ParamValues, TranscriptionParam } from '@/audio/algorithms';
 import type { Theme } from '@/theme';
+import type { HarmonicaKey } from '@/types';
+
+/**
+ * A key's band, as both notes and frequencies — "C4–C#7 · 262–2218 Hz".
+ *
+ * Both units on purpose. The note names are what a player recognises as their harp's range;
+ * the frequencies are what Basic Pitch is actually given, and what makes this readout
+ * comparable to the two Hz sliders on Spotify's own demo. The Hz shown are the notes' true
+ * frequencies, not the half-semitone-offset bounds the engine sends the library — those are
+ * an implementation detail of where a bin boundary falls, and printing them here would look
+ * like an off-by-a-bit bug.
+ */
+function describeRange(key: HarmonicaKey): string {
+  const { min, max } = harmonicaMidiRange(key);
+  const hz = (midi: number) => Math.round(frequencyOfMidi(midi));
+  return `${midiToNoteName(min)}\u2013${midiToNoteName(max)}  \u00b7  ${hz(min)}\u2013${hz(max)} Hz`;
+}
 
 interface Props {
   params:   readonly TranscriptionParam[];
   values:   ParamValues;
-  onChange: (id: string, value: number | boolean) => void;
+  onChange: (id: string, value: ParamValue) => void;
   onReset:  () => void;
+  /**
+   * Which key a pitch-range parameter starts on when it is switched from off to on.
+   *
+   * A switch has to land somewhere, and landing on "on, but bounded by nothing" would be a
+   * third state that means the same as off while looking like it doesn't. The host knows
+   * the key this import is already being read against, which is the only defensible guess.
+   */
+  pitchRangeSeed?: HarmonicaKey;
   /** True while a re-segmentation is in flight. The controls stay live throughout — a rail
    *  that disabled itself mid-drag would fight the very gesture that triggered the work. */
   recomputing?: boolean;
@@ -56,6 +88,7 @@ interface Props {
 
 export function TranscriptionParamsRail({
   params, values, onChange, onReset, recomputing, pendingIds, applyAction, footer,
+  pitchRangeSeed = 'C',
 }: Props) {
   const theme  = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
@@ -100,10 +133,54 @@ export function TranscriptionParamsRail({
       );
     }
 
+    if (param.kind === 'pitchRange') {
+      const raw      = values[param.id];
+      const selected = typeof raw === 'string' ? (raw as HarmonicaKey) : null;
+      return (
+        <View key={param.id} style={styles.field}>
+          <View style={styles.switchRow}>
+            {label(param)}
+            <Toggle
+              value={selected !== null}
+              onChange={(on) => onChange(param.id, on ? pitchRangeSeed : null)}
+              accessibilityLabel={a11yLabel(param)}
+            />
+          </View>
+          {param.help && <Text style={styles.help}>{param.help}</Text>}
+          {selected === null
+            ? <Text style={styles.pitchRangeOff}>{param.offLabel}</Text>
+            : (
+              <View style={styles.pitchRange}>
+                {/* The same twelve cells the harp itself is chosen with, deliberately: the
+                    band is a fact about an instrument, and the person setting it already
+                    knows which instrument the take was played on. Picking a key here is
+                    also how the control is switched back on — the grid and the toggle are
+                    two ways into one value, not two values. */}
+                <KeyGrid selected={selected} onSelect={(key) => onChange(param.id, key)} />
+                <Text style={styles.pitchRangeSpan}>{describeRange(selected)}</Text>
+              </View>
+            )}
+        </View>
+      );
+    }
+
     const value = typeof values[param.id] === 'number' ? (values[param.id] as number) : param.default;
     return (
       <View key={param.id} style={styles.field}>
-        {label(param)}
+        {/* The value sits on the heading row, as the heading's answer — "NOTE SEGMENTATION:
+            0.40". Below the track it had to share a line with the two end captions, which
+            put the one number that changes as you drag in the middle of two words that
+            never change. Up here it is also the only thing on the row that moves. */}
+        <View style={styles.switchRow}>
+          {label(param)}
+          <Text
+            style={styles.headingValue}
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+          >
+            {param.format(value)}
+          </Text>
+        </View>
         <SliderInput
           value={value}
           min={param.min}
@@ -111,6 +188,9 @@ export function TranscriptionParamsRail({
           step={param.step}
           onChange={(v) => onChange(param.id, v)}
           formatLabel={param.format}
+          minLabel={param.minLabel}
+          maxLabel={param.maxLabel}
+          showValue={false}
           labelAlign="right"
           accessibilityLabel={a11yLabel(param)}
         />
@@ -211,6 +291,29 @@ function createStyles(t: Theme) {
       borderTopColor: t.separator,
     },
     field:       { gap: 2 },
+    headingValue: {
+      fontFamily: Poppins.semiBold,
+      fontSize:   FONT.sm,
+      color:      t.textPrimary,
+      flexShrink: 0,
+    },
+    // The grid needs air above it that a slider doesn't: twelve tappable cells directly
+    // under a line of help text read as part of the paragraph.
+    pitchRange:  { gap: 8, marginTop: 8 },
+    pitchRangeSpan: {
+      fontFamily: Poppins.semiBold,
+      fontSize:   FONT.xs,
+      color:      t.textPrimary,
+      textAlign:  'center',
+    },
+    // Where the span sits when there is no band — same slot, same weight, so switching the
+    // control on and off doesn't make the rail jump.
+    pitchRangeOff: {
+      fontFamily: Poppins.semiBold,
+      fontSize:   FONT.xs,
+      color:      t.textMuted,
+      marginTop:  8,
+    },
     switchRow: {
       flexDirection:  'row',
       alignItems:     'center',
@@ -224,11 +327,14 @@ function createStyles(t: Theme) {
       flexShrink:    1,
       minWidth:      0,
     },
+    // Tier 1, with `headingValue`: the name of the control and the number it is currently
+    // set to. These are what the eye lands on when scanning the rail for the knob it wants,
+    // so they are the darkest things in the block — everything under them explains them.
     label: {
       fontFamily:    Poppins.semiBold,
       fontSize:      FONT.xs,
       letterSpacing: 1,
-      color:         t.textMuted,
+      color:         t.textPrimary,
       textTransform: 'uppercase',
       flexShrink:    1,
     },
@@ -241,6 +347,8 @@ function createStyles(t: Theme) {
       backgroundColor: t.accent,
       flexShrink:      0,
     },
+    // Tier 3: prose, and the only thing here that is a sentence. Lightest of the three, so
+    // that a block whose help is long doesn't outweigh the control it describes.
     help: {
       fontFamily: Poppins.regular,
       fontSize:   FONT.xs,

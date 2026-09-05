@@ -35,7 +35,8 @@ import { PianoRoll } from '@/components/PianoRoll';
 import { TranscriptionParamsRail } from '@/components/TranscriptionParamsRail';
 import {
   getAlgorithm, withDefaults, TRANSCRIBE_ALGORITHM_ID,
-  type ParamValues, type Prepared, type TranscriptionAlgorithmId, type TranscriptionOutput,
+  type ParamValue, type ParamValues, type Prepared, type TranscriptionAlgorithmId,
+  type TranscriptionOutput,
 } from '@/audio/algorithms';
 import { pushFrames } from '@/audio/frameBuffer';
 import {
@@ -541,7 +542,7 @@ export default function ImportScreen() {
    * stall the drag itself is fighting. Explicit apply also makes the roll's meaning exact:
    * it is always the last thing the user asked for, never a half-finished gesture.
    */
-  function handleParamChange(id: string, value: number | boolean) {
+  function handleParamChange(id: string, value: ParamValue) {
     setParams((prev) => ({ ...prev, [id]: value }));
   }
 
@@ -1133,15 +1134,6 @@ export default function ImportScreen() {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.tuneScreen}>
-          {/* The one thing the screen can't show by itself. What it *is* is already visible
-              — a preview, a filename, a column of controls — but not that those controls
-              re-detect the notes live, nor that the Studio is where this ends up. A heading
-              here would only name what the workspace already says, at the cost of a row the
-              preview wants. */}
-          <Text style={styles.tuneInstruction}>
-            Tune what counts as a note, then take it into the Studio to edit.
-          </Text>
-
           {truncated && (
             <View style={styles.noticeRow}>
               <Ionicons name="alert-circle-outline" size={14} color={theme.warning} />
@@ -1153,6 +1145,22 @@ export default function ImportScreen() {
 
           <View style={styles.tuneBody}>
             <View style={styles.tunePreview}>
+              {/* Belongs to the picture, not to the page.
+                  Spanning the workspace made it chrome attached to neither column, and no
+                  amount of weight fixed that — a sentence about what the roll is, floating
+                  above the roll and the rail alike, reads as a leftover caption however it
+                  is set. Here it is the preview's own opening line, indented with the panel
+                  and ending where the panel ends.
+                  It says the two things the screen cannot: what this picture is, and that
+                  there are two ways on from it — the settings, or the Studio. It states
+                  neither an apology for the result nor a promise about it. A rough first
+                  result is survivable because the next step is named, not because the copy
+                  said so in advance. */}
+              <Text style={styles.previewCaption}>
+                This is what we heard. Adjust the settings to get better results, or continue
+                and edit the notes in the Studio.
+              </Text>
+
               {empty ? (
                 // Inline, never the error screen. Params this strict are one drag away from
                 // a good result, and replacing the screen would take the sliders that got
@@ -1220,6 +1228,9 @@ export default function ImportScreen() {
             </View>
 
             <TranscriptionParamsRail
+              // The key this import is already being read against, so switching the pitch
+              // range on lands on the harp the user named a step ago rather than on C.
+              pitchRangeSeed={selectedKey ?? undefined}
               params={engine.params}
               values={params}
               onChange={handleParamChange}
@@ -1596,10 +1607,17 @@ function createStyles(theme: Theme) {
       paddingVertical:   20,
       gap: 12,
     },
-    tuneInstruction: {
+    // Deliberately quiet, and deliberately not competing with the panel below it: the roll's
+    // own header carries the filename in accent bold, which is the strongest thing in this
+    // column and should stay that way. Capped at a readable measure rather than run to the
+    // panel's full width — on a wide window an uncapped line of 13px text crosses 1200px and
+    // stops being a sentence anyone finishes.
+    previewCaption: {
       fontFamily: Poppins.regular,
       fontSize:   FONT.sm,
-      color:      theme.textSub,
+      lineHeight: 19,
+      color:      theme.textMuted,
+      maxWidth:   620,
     },
     // The roll's own in-panel header, at the head of its tool row — same treatment as the
     // editor's (accent name, muted meta), so the two workspaces read as the same object.

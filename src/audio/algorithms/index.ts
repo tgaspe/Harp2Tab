@@ -20,6 +20,7 @@
 import type { DecodedAudio } from '../audioImport';
 import type { MidiNote } from '../midiToNotes';
 import type { NoteDetectorConfig } from '../NoteDetector';
+import { HARMONICA_KEYS } from '@/constants/keys';
 import type { HarmonicaKey, HarmonicaType, RawFrame } from '@/types';
 
 export type TranscriptionAlgorithmId = 'basicPitch' | 'hsa' | 'pmpm';
@@ -68,7 +69,13 @@ export interface TranscribeOptions {
 // the audio (Basic Pitch's sample rate, pMPM's analysis hop) is a settings-level decision and
 // deliberately isn't here, however tempting a slider for it looks.
 
-export type ParamValue  = number | boolean;
+/**
+ * `HarmonicaKey | null` is the pitch-range kind's value — a key, or null for "no bound".
+ * Widening this to carry a domain type rather than a bare number is deliberate: the bounds
+ * it stands for are two frequencies, but *choosing* them by frequency is a fact about the
+ * library, and the person choosing is thinking about which harp the recording was played on.
+ */
+export type ParamValue  = number | boolean | HarmonicaKey | null;
 export type ParamValues = Record<string, ParamValue>;
 
 interface ParamBase {
@@ -95,6 +102,17 @@ export interface NumberParam extends ParamBase {
   default: number;
   /** Renders the value with its unit. Slider values are bare numbers; "58 ms" is not. */
   format:  (v: number) => string;
+  /**
+   * What each end of the track means, in outcomes rather than in magnitudes — "Split Notes"
+   * / "Merge Notes" rather than "low" / "high".
+   *
+   * Optional, but the pair earns its keep wherever `help` states what the number *is*
+   * without stating which way to drag it: a threshold whose name is honest ("Model
+   * Confidence Threshold") says nothing about whether more confidence means more notes or
+   * fewer. Both or neither — one lone caption reads as a label for the whole slider.
+   */
+  minLabel?: string;
+  maxLabel?: string;
 }
 
 export interface BooleanParam extends ParamBase {
@@ -102,7 +120,22 @@ export interface BooleanParam extends ParamBase {
   default: boolean;
 }
 
-export type TranscriptionParam = NumberParam | BooleanParam;
+/**
+ * A pitch band, chosen as the harmonica it belongs to.
+ *
+ * The engine holds the frequencies; this holds the key, and `null` for "don't bound at all".
+ * Keeping the key rather than the two frequencies is what lets the control be the same grid
+ * the rest of the app picks a harp with, and what makes the value legible when it is read
+ * back out of storage a month later — "G" survives a layout change, "196.0 Hz" doesn't.
+ */
+export interface PitchRangeParam extends ParamBase {
+  kind:    'pitchRange';
+  default: HarmonicaKey | null;
+  /** The switch's label when nothing is bounded. */
+  offLabel: string;
+}
+
+export type TranscriptionParam = NumberParam | BooleanParam | PitchRangeParam;
 
 /** The engine's own defaults, as a plain bag the tune screen can reset to. */
 export function defaultParams(algorithm: TranscriptionAlgorithm): ParamValues {
@@ -127,6 +160,15 @@ export function withDefaults(algorithm: TranscriptionAlgorithm, saved?: ParamVal
       values[param.id] = Math.max(param.min, Math.min(param.max, value));
     } else if (param.kind === 'boolean' && typeof value === 'boolean') {
       values[param.id] = value;
+    } else if (param.kind === 'pitchRange') {
+      // `null` is a real saved value here, not an absent one, so it can't ride the same
+      // `if (!saved)` path a missing key takes — an explicit "no bound" has to survive a
+      // reload. Anything that isn't null and isn't one of the twelve keys (a key renamed
+      // between builds, a hand-edited store) falls through to the default rather than
+      // reaching `getPlayablePositions`, which would have no layout for it.
+      if (value === null || (typeof value === 'string' && (HARMONICA_KEYS as readonly string[]).includes(value))) {
+        values[param.id] = value as HarmonicaKey | null;
+      }
     }
   }
   return values;

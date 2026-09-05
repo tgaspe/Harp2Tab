@@ -12,6 +12,7 @@
 
 import { getPlayablePositions } from './HarmonicaMapper';
 import { HARMONICA_KEYS } from '@/constants/keys';
+import type { HarmonicaKey } from '@/types';
 
 /** Median MIDI pitch of the layouts the mapper covers (~C4–C7). Material centred far from
  *  here is in the wrong octave for every key, not badly keyed. */
@@ -40,6 +41,33 @@ export function octaveShiftForMidiRange(midis: number[]): number {
 
 export function midiOfFrequency(frequency: number): number {
   return 69 + 12 * Math.log2(frequency / 440);
+}
+
+/** The inverse. Fractional input is meaningful and used: a bound placed half a semitone
+ *  off a note sits unambiguously inside that note's bin rather than on its edge. */
+export function frequencyOfMidi(midi: number): number {
+  return 440 * Math.pow(2, (midi - 69) / 12);
+}
+
+/**
+ * The MIDI span of a harmonica in `key`, across both instrument types.
+ *
+ * Both layouts happen to cover exactly 60-97 in C-space today, so the union is a no-op and
+ * the answer depends only on the key — which is why nothing that calls this has to ask which
+ * instrument the user holds. It is written as a union anyway, for the same reason
+ * `PLAYABLE_MIDI` is: widening a layout should widen every consumer with it, not leave one
+ * call site quietly reporting the narrower of two ranges.
+ */
+export function harmonicaMidiRange(key: HarmonicaKey): { min: number; max: number } {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const type of ['diatonic', 'chromatic'] as const) {
+    for (const position of getPlayablePositions(key, type)) {
+      if (position.midi < min) min = position.midi;
+      if (position.midi > max) max = position.midi;
+    }
+  }
+  return { min, max };
 }
 
 /**

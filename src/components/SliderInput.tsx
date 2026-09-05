@@ -20,6 +20,23 @@ interface SliderInputProps {
    *  a slider given a whole row to itself. */
   labelAlign?:  'right' | 'center';
   /**
+   * Whether to draw the value under the track.
+   *
+   * Off for callers that show it themselves — the tune rail puts it on the parameter's
+   * heading row, where it reads as the heading's answer and leaves the space under the
+   * track to the end captions alone.
+   */
+  showValue?:   boolean;
+  /**
+   * What each end of the track means, drawn either side of the value.
+   *
+   * For sliders whose name says what the number is but not which way to drag it. Both or
+   * neither: one caption alone reads as a label for the whole control rather than for an
+   * end of it, so a lone one is ignored.
+   */
+  minLabel?:    string;
+  maxLabel?:    string;
+  /**
    * What this slider adjusts, spoken. Required for any new caller — without it a screen
    * reader announces a bare number with no idea what it belongs to. Optional in the type
    * only so the existing mic-sensitivity slider, whose visible heading already sits
@@ -43,6 +60,7 @@ function snap(ratio: number, min: number, max: number, step: number): number {
 
 export function SliderInput({
   value, min, max, step = 1, onChange, formatLabel, labelAlign = 'right', accessibilityLabel,
+  minLabel, maxLabel, showValue = true,
 }: SliderInputProps) {
   const theme      = useTheme();
   const trackWidth = useSharedValue(0);
@@ -99,8 +117,9 @@ export function SliderInput({
     if (next !== value) onChange(next);
   }, [value, min, max, step, onChange]);
 
-  const coarseStep = coarseStepFor(min, max, step);
-  const valueText  = formatLabel ? formatLabel(value) : String(value);
+  const coarseStep  = coarseStepFor(min, max, step);
+  const valueText   = formatLabel ? formatLabel(value) : String(value);
+  const hasCaptions = Boolean(minLabel && maxLabel);
 
   return (
     <View style={styles.wrapper}>
@@ -142,15 +161,30 @@ export function SliderInput({
           <Animated.View style={[styles.thumb, thumbShadow, { borderColor: theme.accent }, thumbStyle]} />
         </View>
       </GestureDetector>
-      {/* Already spoken as the control's own value, so reading it a second time as loose
-          text would announce every number twice. */}
-      <Text
-        style={[styles.label, { color: theme.textSub, textAlign: labelAlign }]}
-        accessibilityElementsHidden
-        importantForAccessibility="no-hide-descendants"
-      >
-        {valueText}
-      </Text>
+      {/* The value is already spoken as the control's own value, so reading it a second
+          time as loose text would announce every number twice. The end captions are the
+          opposite case: they are the only statement of which direction does what, now that
+          the help text above says what the number is rather than where to drag it — so
+          they stay readable, and a screen reader gets the same hint the eye does. */}
+      <View style={hasCaptions ? styles.captionRow : undefined}>
+        {hasCaptions && <Text style={[styles.caption, { color: theme.textSub }]}>{minLabel}</Text>}
+        {showValue && (
+          <Text
+            style={[
+              styles.label,
+              { color: theme.textSub, textAlign: hasCaptions ? 'center' : labelAlign },
+              hasCaptions && styles.labelBetweenCaptions,
+            ]}
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+          >
+            {valueText}
+          </Text>
+        )}
+        {hasCaptions && (
+          <Text style={[styles.caption, styles.captionEnd, { color: theme.textSub }]}>{maxLabel}</Text>
+        )}
+      </View>
     </View>
   );
 }
@@ -181,4 +215,44 @@ const styles = StyleSheet.create({
     elevation:    4,
   },
   label:     { fontSize: FONT.sm, fontFamily: Poppins.semiBold },
+  // Pulled up out of the hit area's built-in padding — a caption 23px under the track but
+  // 2px above the help sentence groups with the sentence, which is the wrong control. The
+  // negative margin buys back most of that padding without shrinking the touch target, and
+  // the margin below re-opens the gap where it belongs.
+  //
+  // -13 is the floor, not a taste: the hit area reserves 8px under the thumb, and the thumb
+  // reaches the far left and far right of the track at the ends of its travel — exactly
+  // where the captions sit. Any tighter and dragging to either extreme runs the thumb into
+  // its own caption.
+  captionRow: {
+    flexDirection:  'row',
+    alignItems:     'baseline',
+    justifyContent: 'space-between',
+    gap:            8,
+    marginTop:     -13,
+    marginBottom:  4,
+  },
+  // The three cells share the row evenly rather than sizing to their text, so the value
+  // stays optically centred over the track however lopsided the two captions are.
+  labelBetweenCaptions: { flex: 1 },
+  // Set as micro-caps rather than as prose. These are the ends of an axis, not a sentence:
+  // matching the help's size, weight and colour made three stacked lines of grey that the
+  // eye had to parse before it could tell which line described the control and which one
+  // *was* the control.
+  //
+  // They take the middle of the caller's three text tiers — under the control's name and
+  // its value, above the help sentence. Getting that order wrong is what made the rail read
+  // flat: captions darker than the heading they belong to invert the whole block.
+  caption: {
+    flex:          1,
+    fontSize:      10,
+    lineHeight:    14,
+    fontFamily:    Poppins.medium,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    // Wrapping is better than truncating here: a caption is two or three words, and half a
+    // word tells the reader nothing about which way the slider goes.
+    flexShrink:    1,
+  },
+  captionEnd: { textAlign: 'right' },
 });
